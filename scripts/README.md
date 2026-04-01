@@ -113,7 +113,7 @@ abc1234 release: v2.0.4
 GitHub Actions 会自动：
 1. 安装依赖
 2. 重新编译原生模块
-3. 构建美化安装包
+3. 构建标准安装包
 4. 创建 GitHub Release
 5. 上传到 Cloudflare R2
 6. 上传 `CipherTalk-2.0.4-Setup.exe`
@@ -168,7 +168,7 @@ npm run tuisong
 ### 完整构建（生产环境）
 
 ```bash
-npm run build:pro
+npm run build
 ```
 
 包含：
@@ -176,16 +176,7 @@ npm run build:pro
 - ✅ TypeScript 编译
 - ✅ Vite 构建前端
 - ✅ Electron 打包
-- ✅ 生成美化安装包
 - ✅ 更新 latest.yml
-
-### 仅构建外壳（测试用）
-
-```bash
-node scripts/build-shell-only.js
-```
-
-用于快速测试安装程序界面。
 
 ---
 
@@ -195,7 +186,7 @@ node scripts/build-shell-only.js
 
 1. 📦 安装依赖
 2. 🔨 重新编译原生模块
-3. 🏗️ 构建应用程序（`npm run build:pro`）
+3. 🏗️ 构建应用程序（`npm run build`）
 4. 📊 获取版本号（从 `package.json`）
 5. 🎉 创建 GitHub Release（标签：`v2.0.4`）
 6. ☁️ 上传到 Cloudflare R2（自动删除旧版本）
