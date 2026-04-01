@@ -192,31 +192,49 @@ npm run build:core
 
 ## MCP Server
 
-CipherTalk 现已提供基于 `stdio` 的内嵌 MCP Server，可供 Claude Desktop、Codex、Cherry Studio 等 MCP 宿主直接读取本地聊天数据。
+CipherTalk 现已提供基于 `stdio` 的独立 MCP Server，可供 Claude Desktop、Codex、Cherry Studio 等 MCP 宿主直接读取本地聊天数据。
 
-### 启动
+### 开发态启动
 
 ```bash
-npm run build:mcp
-node scripts/mcp-runner.js
+npm run mcp
 ```
 
-### 首批工具
+首次运行若缺少 `dist-electron/mcp.js`，会自动执行 `build:mcp` 后再启动。
+
+### 打包态启动
+
+安装版会附带 `ciphertalk-mcp.cmd` 伴随启动器，放在安装目录根部，可直接作为宿主的 `command` 使用。
+
+### v1 工具
 
 - `health_check`
 - `get_status`
 - `list_sessions`
 - `get_messages`
-- `list_contacts`
 
-### 宿主配置示例
+### 宿主配置示例（开发态）
 
 ```json
 {
   "mcpServers": {
     "ciphertalk": {
-      "command": "node",
-      "args": ["scripts/mcp-runner.js"],
+      "command": "npm",
+      "args": ["run", "mcp"],
+      "cwd": "E:/CipherTalk"
+    }
+  }
+}
+```
+
+### 宿主配置示例（打包态）
+
+```json
+{
+  "mcpServers": {
+    "ciphertalk": {
+      "command": "E:/CipherTalk/ciphertalk-mcp.cmd",
+      "args": [],
       "cwd": "E:/CipherTalk"
     }
   }
@@ -231,7 +249,8 @@ node scripts/mcp-runner.js
   "arguments": {
     "sessionId": "wxid_xxx",
     "limit": 20,
-    "fields": ["base", "time", "sender", "media"]
+    "order": "asc",
+    "includeMediaPaths": true
   }
 }
 ```

@@ -26,6 +26,7 @@ import { voiceTranscribeServiceWhisper } from './services/voiceTranscribeService
 import { windowsHelloService, WindowsHelloResult } from './services/windowsHelloService'
 import { shortcutService } from './services/shortcutService'
 import { httpApiService } from './services/httpApiService'
+import { getMcpLaunchConfig as getMcpLaunchConfigForUi } from './services/mcp/runtime'
 
 // 扩展 app 对象类型，添加 isQuitting 标志
 declare module 'electron' {
@@ -1283,6 +1284,16 @@ function registerIpcHandlers() {
 
   ipcMain.handle('app:getVersion', async () => {
     return app.getVersion()
+  })
+
+  ipcMain.handle('app:getMcpLaunchConfig', async () => {
+    return getMcpLaunchConfigForUi()
+  })
+
+  ipcMain.on('app:getMcpLaunchConfig:request', (event, payload: { requestId?: string } | undefined) => {
+    const requestId = payload?.requestId
+    if (!requestId) return
+    event.sender.send(`app:getMcpLaunchConfig:response:${requestId}`, getMcpLaunchConfigForUi())
   })
 
   ipcMain.handle('app:checkForUpdates', async () => {

@@ -13,6 +13,7 @@
     "build:mcp": "tsc && vite build",
     "build:pro": "node scripts/build-full.js",
     "mcp": "node scripts/mcp-runner.js",
+    "mcp:probe": "node scripts/mcp-probe.js",
     "preview": "vite preview",
     "electron:dev": "vite --mode electron",
     "electron:build": "npm run build",
@@ -139,6 +140,16 @@
       {
         "from": "public/xinnian.ico",
         "to": "xinnian.ico"
+      }
+    ],
+    "extraFiles": [
+      {
+        "from": "scripts/ciphertalk-mcp.cmd",
+        "to": "ciphertalk-mcp.cmd"
+      },
+      {
+        "from": "scripts/ciphertalk-mcp-bootstrap.cjs",
+        "to": "ciphertalk-mcp-bootstrap.cjs"
       }
     ],
     "files": [

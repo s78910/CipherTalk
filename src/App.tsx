@@ -16,6 +16,7 @@ import GroupAnalyticsPage from './pages/GroupAnalyticsPage'
 import DataManagementPage from './pages/DataManagementPage'
 import SettingsPage from './pages/SettingsPage'
 import OpenApiPage from './pages/OpenApiPage'
+import McpPage from './pages/McpPage'
 import ExportPage from './pages/ExportPage'
 import ActivationPage from './pages/ActivationPage'
 import ImageWindow from './pages/ImageWindow'
@@ -513,6 +514,7 @@ function App() {
               <Route path="/data-management" element={<DataManagementPage />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/open-api" element={<OpenApiPage />} />
+              <Route path="/mcp" element={<McpPage />} />
               <Route path="/export" element={<ExportPage />} />
               <Route path="/chat-history/:sessionId/:messageId" element={<ChatHistoryPage />} />
             </Routes>

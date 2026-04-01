@@ -75,6 +75,12 @@ export interface ElectronAPI {
   app: {
     getDownloadsPath: () => Promise<string>
     getVersion: () => Promise<string>
+    getMcpLaunchConfig: () => Promise<{
+      command: string
+      args: string[]
+      cwd: string
+      mode: 'dev' | 'packaged'
+    } | null>
     checkForUpdates: () => Promise<{ hasUpdate: boolean; version?: string; releaseNotes?: string }>
     downloadAndInstall: () => Promise<void>
     getStartupDbConnected?: () => Promise<boolean>
