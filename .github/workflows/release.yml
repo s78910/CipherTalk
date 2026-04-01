@@ -11,6 +11,7 @@ permissions:
 jobs:
   release:
     runs-on: windows-latest
+    environment: 软件发布
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       FORCE_UPDATE_MIN_VERSION: ${{ vars.FORCE_UPDATE_MIN_VERSION }}
