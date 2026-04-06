@@ -468,6 +468,18 @@ export interface ElectronAPI {
       hasMore?: boolean;
       error?: string
     }>
+    getMessagesAfter: (
+      sessionId: string,
+      cursorSortSeq: number,
+      limit?: number,
+      cursorCreateTime?: number,
+      cursorLocalId?: number
+    ) => Promise<{
+      success: boolean;
+      messages?: Message[];
+      hasMore?: boolean;
+      error?: string
+    }>
     getAllVoiceMessages: (sessionId: string) => Promise<{
       success: boolean;
       messages?: Message[];

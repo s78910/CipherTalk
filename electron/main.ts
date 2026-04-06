@@ -171,6 +171,18 @@ function getAppIconPath(): string {
   const isDev = !!process.env.VITE_DEV_SERVER_URL
   const iconName = configService?.get('appIcon') || 'default'
 
+  if (process.platform === 'darwin') {
+    if (iconName === 'xinnian') {
+      return isDev
+        ? join(__dirname, '../public/xinnian.icns')
+        : join(process.resourcesPath, 'icon.icns')
+    }
+
+    return isDev
+      ? join(__dirname, '../public/icon.icns')
+      : join(process.resourcesPath, 'icon.icns')
+  }
+
   if (iconName === 'xinnian') {
     return isDev
       ? join(__dirname, '../public/xinnian.ico')
@@ -958,10 +970,7 @@ function createImageViewerWindow(
   liveVideoPath?: string,
   options?: { sessionId?: string; imageMd5?: string; imageDatName?: string }
 ) {
-  const isDev = !!process.env.VITE_DEV_SERVER_URL
-  const iconPath = isDev
-    ? join(__dirname, '../public/icon.ico')
-    : join(process.resourcesPath, 'icon.ico')
+  const iconPath = getAppIconPath()
 
   const win = new BrowserWindow({
     width: 800,
@@ -1026,10 +1035,7 @@ function createImageViewerWindow(
  * 窗口大小会根据视频比例自动调整
  */
 function createVideoPlayerWindow(videoPath: string, videoWidth?: number, videoHeight?: number) {
-  const isDev = !!process.env.VITE_DEV_SERVER_URL
-  const iconPath = isDev
-    ? join(__dirname, '../public/icon.ico')
-    : join(process.resourcesPath, 'icon.ico')
+  const iconPath = getAppIconPath()
 
   // 获取屏幕尺寸
   const { screen } = require('electron')
@@ -1130,10 +1136,7 @@ function createVideoPlayerWindow(videoPath: string, videoWidth?: number, videoHe
  * 创建内置浏览器窗口
  */
 function createBrowserWindow(url: string, title?: string) {
-  const isDev = !!process.env.VITE_DEV_SERVER_URL
-  const iconPath = isDev
-    ? join(__dirname, '../public/icon.ico')
-    : join(process.resourcesPath, 'icon.ico')
+  const iconPath = getAppIconPath()
 
   const win = new BrowserWindow({
     width: 1200,
@@ -1203,10 +1206,7 @@ function createAISummaryWindow(sessionId: string, sessionName: string) {
     aiSummaryWindow = null
   }
 
-  const isDev = !!process.env.VITE_DEV_SERVER_URL
-  const iconPath = isDev
-    ? join(__dirname, '../public/icon.ico')
-    : join(process.resourcesPath, 'icon.ico')
+  const iconPath = getAppIconPath()
 
   const isDark = nativeTheme.shouldUseDarkColors
 
@@ -2480,6 +2480,27 @@ function registerIpcHandlers() {
     const result = await chatService.getMessagesBefore(sessionId, cursorSortSeq, limit, cursorCreateTime, cursorLocalId)
     if (!result.success) {
       logService?.warn('Chat', '按游标获取更早消息失败', {
+        sessionId,
+        cursorSortSeq,
+        cursorCreateTime,
+        cursorLocalId,
+        error: result.error
+      })
+    }
+    return result
+  })
+
+  ipcMain.handle('chat:getMessagesAfter', async (
+    _,
+    sessionId: string,
+    cursorSortSeq: number,
+    limit?: number,
+    cursorCreateTime?: number,
+    cursorLocalId?: number
+  ) => {
+    const result = await chatService.getMessagesAfter(sessionId, cursorSortSeq, limit, cursorCreateTime, cursorLocalId)
+    if (!result.success) {
+      logService?.warn('Chat', '按游标获取更新消息失败', {
         sessionId,
         cursorSortSeq,
         cursorCreateTime,
@@ -3917,10 +3938,7 @@ let startupDbConnected = false
  * 创建启动屏窗口
  */
 function createSplashWindow(): BrowserWindow {
-  const isDev = !!process.env.VITE_DEV_SERVER_URL
-  const iconPath = isDev
-    ? join(__dirname, '../public/icon.ico')
-    : join(process.resourcesPath, 'icon.ico')
+  const iconPath = getAppIconPath()
 
   const splash = new BrowserWindow({
     width: 420,
