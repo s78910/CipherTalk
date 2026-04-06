@@ -287,8 +287,6 @@ jobs:
       - build-windows
       - build-macos
       - generate-release-body
-    env:
-      GH_TOKEN: ${{ secrets.GH_TOKEN }}
     steps:
       - name: Download release metadata
         uses: actions/download-artifact@v4
@@ -398,6 +396,7 @@ jobs:
       - name: Create or update GitHub Release
         uses: softprops/action-gh-release@v2.5.0
         with:
+          token: ${{ secrets.GITHUB_TOKEN }}
           tag_name: ${{ needs.prepare-meta.outputs.tag }}
           name: CipherTalk v${{ needs.prepare-meta.outputs.version }}
           body_path: release/release-body.md

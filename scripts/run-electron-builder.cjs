@@ -14,7 +14,7 @@ const configPath = path.join(__dirname, 'electron-builder.config.cjs')
 
 const result = spawnSync(
   process.execPath,
-  [cliPath, `--${target}`, '--config', configPath],
+  [cliPath, `--${target}`, '--publish', 'never', '--config', configPath],
   {
     stdio: 'inherit',
     env: {
