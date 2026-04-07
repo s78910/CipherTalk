@@ -306,6 +306,7 @@ AI 生成说明的密钥来源：
 
 - `health_check`
 - `get_status`
+- `get_moments_timeline`
 - `list_sessions`
 - `get_messages`
 - `list_contacts`
@@ -374,6 +375,25 @@ macOS 打包态请直接指向 `.app` 内部的 `ciphertalk-mcp`，不要把 `Ci
   }
 }
 ```
+
+朋友圈时间线示例：
+
+```json
+{
+  "name": "get_moments_timeline",
+  "arguments": {
+    "limit": 20,
+    "offset": 0,
+    "usernames": ["wxid_xxx"],
+    "keyword": "旅行",
+    "startTime": 1704067200,
+    "endTime": 1735689599,
+    "includeRaw": false
+  }
+}
+```
+
+第一版返回朋友圈结构化时间线，不包含媒体下载或本地路径解析接口。
 
 ---
 
