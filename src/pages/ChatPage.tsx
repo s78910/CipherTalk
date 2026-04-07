@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { Search, MessageSquare, AlertCircle, Loader2, RefreshCw, X, ChevronDown, Info, Calendar, Database, Hash, Image as ImageIcon, Play, Video, Copy, ZoomIn, CheckSquare, Check, Edit, Link, Sparkles, FileText, FileArchive, Users, Mic, CheckCircle, XCircle, Download, Phone, Aperture, MapPin, UserRound } from 'lucide-react'
+import { Qwen } from '@lobehub/icons'
 import { useChatStore } from '../stores/chatStore'
 import { useUpdateStatusStore } from '../stores/updateStatusStore'
 import ChatBackground from '../components/ChatBackground'
@@ -36,6 +37,28 @@ interface SessionDetail {
   firstMessageTime?: number
   latestMessageTime?: number
   messageTables: { dbName: string; tableName: string; count: number }[]
+}
+
+async function checkOnlineSttConfigReady() {
+  const [apiKey, baseURL, model] = await Promise.all([
+    window.electronAPI.config.get('sttOnlineApiKey'),
+    window.electronAPI.config.get('sttOnlineBaseURL'),
+    window.electronAPI.config.get('sttOnlineModel')
+  ])
+
+  const missing: string[] = []
+    if (!String(baseURL || '').trim()) missing.push('接口 URL')
+  if (!String(apiKey || '').trim()) missing.push('API Key')
+  if (!String(model || '').trim()) missing.push('模型名称')
+
+  if (missing.length > 0) {
+    return {
+      ready: false,
+      error: `在线转写配置不完整：缺少${missing.join('、')}，请先到设置页完善在线模式配置`
+    }
+  }
+
+  return { ready: true }
 }
 
 // 头像组件 - 支持骨架屏加载和懒加载
@@ -1022,6 +1045,7 @@ function ChatPage(_props: ChatPageProps) {
     const sttMode = await window.electronAPI.config.get('sttMode') || 'cpu'
     
     let modelExists = false
+    let concurrency = 5
     if (sttMode === 'gpu') {
       const whisperModelType = (await window.electronAPI.config.get('whisperModelType') as string) || 'small'
       const modelStatus = await window.electronAPI.sttWhisper.checkModel(whisperModelType)
@@ -1033,6 +1057,16 @@ function ChatPage(_props: ChatPageProps) {
         setShowBatchProgress(false)
         return
       }
+    } else if (sttMode === 'online') {
+      const onlineReady = await checkOnlineSttConfigReady()
+      if (!onlineReady.ready) {
+        alert(onlineReady.error)
+        setIsBatchTranscribing(false)
+        setShowBatchProgress(false)
+        return
+      }
+      const savedConcurrency = Number(await window.electronAPI.config.get('sttOnlineMaxConcurrency')) || 2
+      concurrency = Math.max(1, Math.min(10, Math.floor(savedConcurrency)))
     } else {
       const modelStatus = await window.electronAPI.stt.getModelStatus()
       modelExists = !!(modelStatus.success && modelStatus.exists)
@@ -1051,8 +1085,6 @@ function ChatPage(_props: ChatPageProps) {
     let completedCount = 0
     
     // 并发数量限制（避免同时处理太多导致内存溢出）
-    const concurrency = 5
-    
     // 转写单条语音的函数
     const transcribeOne = async (msg: any) => {
       try {
@@ -1114,7 +1146,7 @@ function ChatPage(_props: ChatPageProps) {
     // 显示结果对话框
     setBatchResult({ success: successCount, fail: failCount })
     setShowBatchResult(true)
-  }, [sessions, currentSessionId, batchSelectedDates, batchVoiceMessages])
+  }, [sessions, currentSessionId, batchSelectedDates, batchVoiceMessages, checkOnlineSttConfigReady])
 
   // 批量转写：按日期的消息数量
   const batchCountByDate = useMemo(() => {
@@ -2799,6 +2831,7 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat, h
   const [sttTranscript, setSttTranscript] = useState<string | null>(null)
   const [sttLoading, setSttLoading] = useState(false)
   const [sttError, setSttError] = useState<string | null>(null)
+  const [sttProvider, setSttProvider] = useState<'aliyun-qwen-asr' | null>(null)
   const [isEditingStt, setIsEditingStt] = useState(false)
   const [editContent, setEditContent] = useState('')
   const [imageHasUpdate, setImageHasUpdate] = useState(false)
@@ -3141,6 +3174,7 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat, h
       let modelName = ''
       
       if (sttMode === 'gpu') {
+        setSttProvider(null)
         // 检查 Whisper 模型
         const whisperModelType = (await window.electronAPI.config.get('whisperModelType') as string) || 'small'
         console.log('[ChatPage] 读取到的 Whisper 模型类型:', whisperModelType)
@@ -3182,7 +3216,24 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat, h
           setSttLoading(false)
           return
         }
+      } else if (sttMode === 'online') {
+        const onlineReady = await checkOnlineSttConfigReady()
+        modelExists = onlineReady.ready
+        const onlineProvider = await window.electronAPI.config.get('sttOnlineProvider')
+        setSttProvider(onlineProvider === 'aliyun-qwen-asr' ? 'aliyun-qwen-asr' : null)
+        modelName = onlineProvider === 'aliyun-qwen-asr'
+          ? '阿里云 Qwen-ASR'
+          : onlineProvider === 'custom'
+            ? '自定义在线接口'
+            : 'OpenAI 兼容在线转写'
+
+        if (!modelExists) {
+          setSttError(onlineReady.error || '在线转写配置不完整，请先到设置页补齐')
+          setSttLoading(false)
+          return
+        }
       } else {
+        setSttProvider(null)
         // 检查 SenseVoice 模型
         const modelStatus = await window.electronAPI.stt.getModelStatus()
         modelExists = !!(modelStatus.success && modelStatus.exists)
@@ -3246,9 +3297,9 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat, h
         setVoiceDataUrl(`data:audio/wav;base64,${wavBase64}`)
       }
 
-      // 监听实时结果（仅 CPU 模式支持）
+      // 监听实时结果（CPU 模式与阿里云在线模式支持）
       let removeListener: (() => void) | undefined
-      if (sttMode === 'cpu') {
+      if (sttMode === 'cpu' || sttMode === 'online') {
         removeListener = window.electronAPI.stt.onPartialResult((text) => {
           setSttTranscript(text)
         })
@@ -3270,7 +3321,7 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat, h
     } finally {
       setSttLoading(false)
     }
-  }, [sttLoading, sttTranscript, voiceDataUrl, session.username, message.localId, message.createTime])
+  }, [sttLoading, sttTranscript, voiceDataUrl, session.username, message.localId, message.createTime, checkOnlineSttConfigReady])
 
   // 群聊中获取发送者信息
   const [isLoadingSender, setIsLoadingSender] = useState(false)
@@ -4011,7 +4062,11 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat, h
               title={sttError || '点击转文字'}
             >
               {sttLoading ? (
-                <Loader2 size={12} className="spin" />
+                sttProvider === 'aliyun-qwen-asr' ? (
+                  <Qwen.Color className="stt-provider-loading-icon" size={18} />
+                ) : (
+                  <Loader2 size={12} className="spin" />
+                )
               ) : sttError ? (
                 <AlertCircle size={12} />
               ) : (
@@ -4021,7 +4076,9 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat, h
                   <path d="M12 4v16" />
                 </svg>
               )}
-              <span>{sttLoading ? '转写中' : sttError ? '重试' : '转文字'}</span>
+              {(sttProvider !== 'aliyun-qwen-asr' || !sttLoading) && (
+                <span>{sttLoading ? '转写中' : sttError ? '重试' : '转文字'}</span>
+              )}
             </button>
           )}
           {sttError && (

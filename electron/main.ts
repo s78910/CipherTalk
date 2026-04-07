@@ -26,6 +26,7 @@ import { videoService } from './services/videoService'
 
 import { voiceTranscribeService } from './services/voiceTranscribeService'
 import { voiceTranscribeServiceWhisper } from './services/voiceTranscribeServiceWhisper'
+import { voiceTranscribeServiceOnline } from './services/voiceTranscribeServiceOnline'
 import { systemAuthService } from './services/systemAuthService'
 import { shortcutService } from './services/shortcutService'
 import { httpApiService } from './services/httpApiService'
@@ -3366,6 +3367,11 @@ function registerIpcHandlers() {
           whisperModelType as any,
           'auto' // 自动识别语言
         )
+      } else if (sttMode === 'online') {
+        console.log('[Main] 使用在线 STT 模式')
+        result = await voiceTranscribeServiceOnline.transcribeWavBuffer(wavData, (text) => {
+          win?.webContents.send('stt:partialResult', text)
+        })
       } else {
         // 使用 SenseVoice CPU 模式
         console.log('[Main] 使用 SenseVoice CPU 模式')
@@ -3401,6 +3407,21 @@ function registerIpcHandlers() {
     try {
       voiceTranscribeService.saveTranscriptCache(sessionId, createTime, transcript)
       return { success: true }
+    } catch (e) {
+      return { success: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('stt-online:test-config', async (_, overrides?: {
+    provider?: 'openai-compatible' | 'aliyun-qwen-asr' | 'custom'
+    apiKey?: string
+    baseURL?: string
+    model?: string
+    language?: string
+    timeoutMs?: number
+  }) => {
+    try {
+      return await voiceTranscribeServiceOnline.testConfig(overrides)
     } catch (e) {
       return { success: false, error: String(e) }
     }

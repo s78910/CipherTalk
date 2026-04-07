@@ -906,6 +906,17 @@ export interface ElectronAPI {
       cached?: boolean
       error?: string
     }>
+    testOnlineConfig: (overrides?: {
+      provider?: 'openai-compatible' | 'aliyun-qwen-asr' | 'custom'
+      apiKey?: string
+      baseURL?: string
+      model?: string
+      language?: string
+      timeoutMs?: number
+    }) => Promise<{
+      success: boolean
+      error?: string
+    }>
     onDownloadProgress: (callback: (progress: {
       modelName: string
       downloadedBytes: number

@@ -454,6 +454,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getModelStatus: () => ipcRenderer.invoke('stt:getModelStatus'),
     downloadModel: () => ipcRenderer.invoke('stt:downloadModel'),
     transcribe: (wavBase64: string, sessionId: string, createTime: number, force?: boolean) => ipcRenderer.invoke('stt:transcribe', wavBase64, sessionId, createTime, force),
+    testOnlineConfig: (overrides?: { provider?: 'openai-compatible' | 'aliyun-qwen-asr' | 'custom'; apiKey?: string; baseURL?: string; model?: string; language?: string; timeoutMs?: number }) =>
+      ipcRenderer.invoke('stt-online:test-config', overrides),
     onDownloadProgress: (callback: (progress: { modelName: string; downloadedBytes: number; totalBytes?: number; percent?: number }) => void) => {
       ipcRenderer.on('stt:downloadProgress', (_, progress) => callback(progress))
       return () => ipcRenderer.removeAllListeners('stt:downloadProgress')
