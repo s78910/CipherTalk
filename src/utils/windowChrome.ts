@@ -98,11 +98,18 @@ export function syncWindowControlsOverlayToDocument(
   }
 
   const normalizedPlatform = normalizeWindowPlatform(platform)
+  const fallbackMetrics = getWindowChromeMetrics(normalizedPlatform)
   const overlayPadding = WINDOW_CONTROLS_OVERLAY_PADDING[normalizedPlatform]
   const controlsRightWidth = Math.max(0, viewportWidth - titlebarAreaRect.x - titlebarAreaRect.width)
   const chromeHeight = Math.max(parsePixels(WINDOW_CHROME_HEIGHT), titlebarAreaRect.height)
-  const controlsLeftSafe = Math.max(overlayPadding.left, titlebarAreaRect.x + overlayPadding.left)
-  const controlsRightSafe = Math.max(overlayPadding.right, controlsRightWidth + overlayPadding.right)
+  const controlsLeftSafe = Math.max(
+    parsePixels(fallbackMetrics.controlsLeftSafe),
+    titlebarAreaRect.x + overlayPadding.left
+  )
+  const controlsRightSafe = Math.max(
+    parsePixels(fallbackMetrics.controlsRightSafe),
+    controlsRightWidth + overlayPadding.right
+  )
 
   root.style.setProperty('--window-chrome-height', toPixels(chromeHeight))
   root.style.setProperty('--window-controls-left-safe', toPixels(controlsLeftSafe))
