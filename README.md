@@ -13,6 +13,8 @@
 [![React](https://img.shields.io/badge/React-19-61DAFB.svg?logo=react)]()
 [![Telegram](https://img.shields.io/badge/Telegram-Join%20Group-26A5E4.svg?logo=telegram)](https://t.me/CipherTalk)
 
+[在线说明文档](https://ilovebinglu.notion.site/ciphertalk)
+
 [功能特性](#-功能特性) • [快速开始](#-快速开始) • [技术栈](#️-技术栈) • [贡献指南](#-贡献指南) • [许可证](#-许可证)
 </div>
 
