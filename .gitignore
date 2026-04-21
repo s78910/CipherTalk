@@ -30,6 +30,9 @@ out
 release
 .tmp/release-announcement.json
 
+# TypeScript 增量编译缓存
+*.tsbuildinfo
+
 # Database
 *.db
 *.db-shm
