@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { FileText, CheckCircle, XCircle, User } from 'lucide-react'
+import { FileText, CheckCircle, XCircle, User, Smile } from 'lucide-react'
 import { useAppStore, UserInfo } from '../stores/appStore'
 import WhatsNewModal from '../components/WhatsNewModal'
 import './HomePage.scss'
@@ -27,8 +27,6 @@ function HomePage() {
   // 新版本弹窗状态
   const [showWhatsNew, setShowWhatsNew] = useState(false)
   const [currentVersion, setCurrentVersion] = useState('')
-  const [releaseBody, setReleaseBody] = useState('')
-  const [releaseNotes, setReleaseNotes] = useState('')
 
   useEffect(() => {
     checkNewVersion()
@@ -68,25 +66,14 @@ function HomePage() {
 
       const [
         announcementVersion,
-        announcementBody,
-        announcementNotes,
         seenVersion
       ] = await Promise.all([
         window.electronAPI.config.get('releaseAnnouncementVersion'),
-        window.electronAPI.config.get('releaseAnnouncementBody'),
-        window.electronAPI.config.get('releaseAnnouncementNotes'),
         window.electronAPI.config.get('releaseAnnouncementSeenVersion')
       ])
 
       const normalizedAnnouncementVersion = String(announcementVersion || '').trim()
-      const normalizedBody = String(announcementBody || '').trim()
-      const normalizedNotes = String(announcementNotes || '').trim()
       const normalizedSeenVersion = String(seenVersion || '').trim()
-
-      if (normalizedAnnouncementVersion === version) {
-        setReleaseBody(normalizedBody)
-        setReleaseNotes(normalizedNotes)
-      }
 
       if (normalizedAnnouncementVersion === version && normalizedSeenVersion !== version) {
         setShowWhatsNew(true)
@@ -130,11 +117,12 @@ function HomePage() {
 
   return (
     <div className="home-page">
+      <button className="whats-new-btn" onClick={() => setShowWhatsNew(true)}>
+        <Smile size={18} />
+      </button>
       {showWhatsNew && (
         <WhatsNewModal
           version={currentVersion}
-          releaseBody={releaseBody}
-          releaseNotes={releaseNotes}
           onClose={handleCloseWhatsNew}
         />
       )}
