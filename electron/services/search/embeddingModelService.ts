@@ -1,5 +1,6 @@
 import { createHash } from 'crypto'
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'fs'
+import { cpus } from 'os'
 import { dirname, join } from 'path'
 import { ConfigService } from '../config'
 
@@ -61,6 +62,7 @@ export type EmbeddingModelProfile = {
 const MODELSCOPE_HOST = 'https://www.modelscope.cn/'
 const MODELSCOPE_PATH_TEMPLATE = 'models/{model}/resolve/master/'
 const MODELSCOPE_REVISION = 'main'
+const CPU_EMBEDDING_THREADS = Math.max(1, Math.min(2, Math.floor((cpus().length || 2) / 2)))
 
 export const DEFAULT_EMBEDDING_MODEL_PROFILE: EmbeddingModelProfileId = 'bge-large-zh-v1.5-int8'
 
@@ -515,6 +517,12 @@ export class LocalEmbeddingModelService {
       transformers.env.allowLocalModels = true
       transformers.env.allowRemoteModels = !localOnly
       transformers.env.cacheDir = this.getProfileDir(profile.id)
+      if (device === 'cpu') {
+        const wasm = (transformers.env.backends?.onnx as any)?.wasm
+        if (wasm && typeof wasm === 'object') {
+          wasm.numThreads = CPU_EMBEDDING_THREADS
+        }
+      }
       if (remoteHost) {
         transformers.env.remoteHost = remoteHost
         transformers.env.remotePathTemplate = profile.remotePathTemplate
@@ -530,7 +538,14 @@ export class LocalEmbeddingModelService {
       const model = await transformers.AutoModel.from_pretrained(profile.modelId, {
         ...commonOptions,
         device,
-        dtype: profile.dtype
+        dtype: profile.dtype,
+        session_options: device === 'cpu'
+          ? {
+            executionMode: 'sequential',
+            interOpNumThreads: 1,
+            intraOpNumThreads: CPU_EMBEDDING_THREADS
+          }
+          : undefined
       } as any)
       return { tokenizer, model }
     })()

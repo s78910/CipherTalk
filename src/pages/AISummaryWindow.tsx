@@ -12,15 +12,19 @@ import {
   Copy,
   Download,
   FileText,
+  Image as ImageIcon,
   LayoutDashboard,
   ListTodo,
   Loader2,
   LoaderPinwheel,
   MessageCircle,
+  Mic,
   RefreshCw,
   Send,
+  Smile,
   Trash2,
   User,
+  Video,
   X,
   type LucideIcon
 } from 'lucide-react'
@@ -39,6 +43,7 @@ import {
 import type { Message } from '../types/models'
 import { usePlatformInfo } from '../hooks/usePlatformInfo'
 import AIProviderLogo from '../components/ai/AIProviderLogo'
+import MessageContent from '../components/MessageContent'
 import './AISummaryWindow.scss'
 
 type ResultTabId =
@@ -193,6 +198,11 @@ function getEvidenceSender(ref: SummaryEvidenceRef) {
   return ref.senderDisplayName || ref.senderUsername || '未知发送人'
 }
 
+function getAvatarLetter(name: string) {
+  const chars = [...(name || '?')]
+  return chars[0] || '?'
+}
+
 function getEvidenceKey(ref: SummaryEvidenceRef) {
   return `${ref.sessionId}:${ref.localId}:${ref.createTime}:${ref.sortSeq}`
 }
@@ -211,6 +221,244 @@ function compareMessagesByTime(a: Message, b: Message) {
   if (a.sortSeq !== b.sortSeq) return a.sortSeq - b.sortSeq
   if (a.createTime !== b.createTime) return a.createTime - b.createTime
   return a.localId - b.localId
+}
+
+function buildEvidenceRefFromMessage(sessionId: string, message: Message, fallbackRef?: SummaryEvidenceRef): SummaryEvidenceRef {
+  return {
+    sessionId,
+    localId: message.localId,
+    createTime: message.createTime,
+    sortSeq: message.sortSeq,
+    senderUsername: message.senderUsername || undefined,
+    senderDisplayName: message.isSend === 1 ? '我' : undefined,
+    previewText: message.parsedContent || fallbackRef?.previewText || ''
+  }
+}
+
+function EvidenceAvatar({
+  refItem,
+  message,
+  sessionId,
+  sessionName,
+  sessionAvatarUrl,
+  myAvatarUrl
+}: {
+  refItem: SummaryEvidenceRef
+  message?: Message
+  sessionId: string
+  sessionName: string
+  sessionAvatarUrl: string
+  myAvatarUrl: string
+}) {
+  const [contactAvatar, setContactAvatar] = useState('')
+  const [contactName, setContactName] = useState('')
+  const isSelf = message?.isSend === 1 || refItem.senderDisplayName === '我'
+  const senderUsername = message?.senderUsername || refItem.senderUsername || ''
+  const isGroup = sessionId.includes('@chatroom')
+  const shouldLookupContact = !isSelf && Boolean(senderUsername) && (isGroup || senderUsername !== sessionId)
+
+  useEffect(() => {
+    let cancelled = false
+    setContactAvatar('')
+    setContactName('')
+
+    if (!shouldLookupContact || !senderUsername) return
+
+    window.electronAPI.chat.getContactAvatar(senderUsername).then((result) => {
+      if (cancelled) return
+      setContactAvatar(result?.avatarUrl || '')
+      setContactName(result?.displayName || '')
+    }).catch(() => {})
+
+    return () => {
+      cancelled = true
+    }
+  }, [senderUsername, shouldLookupContact])
+
+  const displayName = isSelf
+    ? '我'
+    : contactName || refItem.senderDisplayName || refItem.senderUsername || sessionName || '未知'
+  const avatarSrc = isSelf ? myAvatarUrl : (contactAvatar || (!isGroup ? sessionAvatarUrl : ''))
+
+  return (
+    <div className="qa-evidence-avatar" title={displayName}>
+      {avatarSrc ? (
+        <img src={avatarSrc} alt="" referrerPolicy="no-referrer" />
+      ) : (
+        <span>{getAvatarLetter(displayName)}</span>
+      )}
+    </div>
+  )
+}
+
+function EvidenceMediaPreview({
+  refItem,
+  message,
+  compact = false
+}: {
+  refItem: SummaryEvidenceRef
+  message?: Message
+  compact?: boolean
+}) {
+  const [src, setSrc] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(false)
+  const isImage = Boolean(message?.imageMd5 || message?.imageDatName)
+  const isEmoji = Boolean(message?.emojiMd5 || message?.emojiCdnUrl)
+
+  useEffect(() => {
+    let cancelled = false
+    setSrc('')
+    setError(false)
+
+    if (!message || (!isImage && !isEmoji)) return
+
+    setLoading(true)
+
+    const load = async () => {
+      if (isEmoji) {
+        const result = await window.electronAPI.chat.downloadEmoji(
+          message.emojiCdnUrl || '',
+          message.emojiMd5,
+          message.productId,
+          message.createTime,
+          message.emojiEncryptUrl,
+          message.emojiAesKey
+        )
+        if (!cancelled) {
+          if (result.success && result.localPath) setSrc(result.localPath)
+          else setError(true)
+        }
+        return
+      }
+
+      const cached = await window.electronAPI.image.resolveCache({
+        sessionId: refItem.sessionId,
+        imageMd5: message.imageMd5,
+        imageDatName: message.imageDatName
+      })
+      if (!cancelled && cached.success && cached.localPath) {
+        setSrc(cached.localPath)
+        return
+      }
+
+      const result = await window.electronAPI.image.decrypt({
+        sessionId: refItem.sessionId,
+        imageMd5: message.imageMd5,
+        imageDatName: message.imageDatName,
+        force: false
+      })
+      if (!cancelled) {
+        if (result.success && result.localPath) setSrc(result.localPath)
+        else setError(true)
+      }
+    }
+
+    load().catch(() => {
+      if (!cancelled) setError(true)
+    }).finally(() => {
+      if (!cancelled) setLoading(false)
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    isEmoji,
+    isImage,
+    message?.createTime,
+    message?.emojiAesKey,
+    message?.emojiCdnUrl,
+    message?.emojiEncryptUrl,
+    message?.emojiMd5,
+    message?.imageDatName,
+    message?.imageMd5,
+    message?.productId,
+    refItem.sessionId
+  ])
+
+  if (!message) return null
+
+  if (isImage || isEmoji) {
+    const label = isEmoji ? '表情包' : '图片'
+    if (loading) {
+      return (
+        <div className={`qa-evidence-media loading ${compact ? 'compact' : ''}`}>
+          <Loader2 size={15} className="spinner" />
+          <span>正在加载{label}</span>
+        </div>
+      )
+    }
+
+    if (src) {
+      return (
+        <button
+          type="button"
+          className={`qa-evidence-media image ${isEmoji ? 'emoji' : ''} ${compact ? 'compact' : ''}`}
+          onClick={() => window.electronAPI.window.openImageViewerWindow(src)}
+          aria-label={`查看${label}`}
+        >
+          <img
+            src={src}
+            alt={label}
+            onError={() => {
+              setSrc('')
+              setError(true)
+            }}
+          />
+        </button>
+      )
+    }
+
+    if (error) {
+      return (
+        <div className={`qa-evidence-media unavailable ${compact ? 'compact' : ''}`}>
+          {isEmoji ? <Smile size={15} /> : <ImageIcon size={15} />}
+          <span>{label}不可用</span>
+        </div>
+      )
+    }
+
+    return null
+  }
+
+  if (message.videoMd5) {
+    return (
+      <div className={`qa-evidence-media pill ${compact ? 'compact' : ''}`}>
+        <Video size={15} />
+        <span>{message.videoDuration ? `视频 ${message.videoDuration} 秒` : '视频'}</span>
+      </div>
+    )
+  }
+
+  if (message.voiceDuration) {
+    return (
+      <div className={`qa-evidence-media pill ${compact ? 'compact' : ''}`}>
+        <Mic size={15} />
+        <span>语音 {Math.round(message.voiceDuration)} 秒</span>
+      </div>
+    )
+  }
+
+  if (message.fileName) {
+    return (
+      <div className={`qa-evidence-media pill ${compact ? 'compact' : ''}`}>
+        <FileText size={15} />
+        <span>{message.fileName}</span>
+      </div>
+    )
+  }
+
+  if (message.chatRecordList?.length) {
+    return (
+      <div className={`qa-evidence-media pill ${compact ? 'compact' : ''}`}>
+        <MessageCircle size={15} />
+        <span>聊天记录 {message.chatRecordList.length} 条</span>
+      </div>
+    )
+  }
+
+  return null
 }
 
 function upsertQAProgressEvent(
@@ -302,6 +550,7 @@ function AISummaryWindow() {
   const [qaError, setQaError] = useState('')
   const [copiedEvidenceKey, setCopiedEvidenceKey] = useState('')
   const [evidenceContext, setEvidenceContext] = useState<EvidenceContextState | null>(null)
+  const [evidenceMessageMap, setEvidenceMessageMap] = useState<Record<string, Message>>({})
   const [error, setError] = useState<string>('')
   const [history, setHistory] = useState<SummaryResult[]>([])
   const thinkContentRef = useRef<HTMLDivElement>(null)
@@ -309,6 +558,7 @@ function AISummaryWindow() {
   const qaInputRef = useRef<HTMLTextAreaElement>(null)
   const activeQARequestIdRef = useRef<string | null>(null)
   const qaRequestMessageMapRef = useRef<Map<string, string>>(new Map())
+  const evidenceMessageLoadingRef = useRef<Set<string>>(new Set())
 
   // 对话框状态
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
@@ -465,6 +715,11 @@ function AISummaryWindow() {
         throw new Error(anchorResult.error || '未能读取证据原消息')
       }
 
+      setEvidenceMessageMap((prev) => ({
+        ...prev,
+        [getEvidenceKey(ref)]: anchorResult.message!
+      }))
+
       const contextMessages = [
         ...(beforeResult.success ? beforeResult.messages || [] : []),
         anchorResult.message,
@@ -531,15 +786,29 @@ function AISummaryWindow() {
             {visibleEvidence.map((ref, index) => {
               const key = getEvidenceKey(ref)
               const isCopied = copiedEvidenceKey === key
+              const evidenceMessage = evidenceMessageMap[key]
 
               return (
                 <article key={key} className="qa-evidence-card">
-                  <div className="qa-evidence-card-meta">
-                    <span>#{index + 1}</span>
-                    <span>{formatEvidenceTime(ref.createTime)}</span>
-                    <span>{getEvidenceSender(ref)}</span>
+                  <EvidenceAvatar
+                    refItem={ref}
+                    message={evidenceMessage}
+                    sessionId={ref.sessionId || sessionId}
+                    sessionName={sessionName}
+                    sessionAvatarUrl={avatarUrl}
+                    myAvatarUrl={myAvatarUrl}
+                  />
+                  <div className="qa-evidence-card-body">
+                    <div className="qa-evidence-card-meta">
+                      <span>#{index + 1}</span>
+                      <span>{formatEvidenceTime(ref.createTime)}</span>
+                      <span>{getEvidenceSender(ref)}</span>
+                    </div>
+                    <div className="qa-evidence-card-preview">
+                      <MessageContent content={ref.previewText} disableLinks />
+                    </div>
+                    <EvidenceMediaPreview refItem={ref} message={evidenceMessage} />
                   </div>
-                  <p className="qa-evidence-card-preview">{ref.previewText}</p>
                   <div className="qa-evidence-actions">
                     <button type="button" onClick={() => handleOpenEvidenceContext(ref)}>
                       <MessageCircle size={13} />
@@ -610,9 +879,12 @@ function AISummaryWindow() {
 
   const getQAProgressDetailLines = (event: SessionQAProgressEvent) => {
     const lines = [
-      event.detail || (event.status === 'running' ? '执行中...' : '执行完成')
+      ...(event.detail
+        ? event.detail.split('\n').map((line) => line.trim()).filter(Boolean)
+        : [event.status === 'running' ? '执行中...' : '执行完成'])
     ]
 
+    if (event.diagnostics?.length) lines.push(...event.diagnostics)
     if (event.stage) lines.push(`阶段：${event.stage}`)
     if (event.source) lines.push(`数据源：${event.source}`)
     if (event.query) lines.push(`查询：${event.query}`)
@@ -743,18 +1015,38 @@ function AISummaryWindow() {
                 <div className="qa-context-message-list">
                   {evidenceContext.messages.map((message) => {
                     const isAnchor = isSameEvidenceMessage(message, evidenceContext.ref)
+                    const contextRef = isAnchor
+                      ? evidenceContext.ref
+                      : {
+                          ...buildEvidenceRefFromMessage(evidenceContext.ref.sessionId, message, evidenceContext.ref),
+                          senderDisplayName: getContextMessageSender(message, evidenceContext.ref),
+                          previewText: getContextMessagePreview(message, evidenceContext.ref)
+                        }
 
                     return (
                       <article
                         key={getMessageKey(message)}
                         className={`qa-context-message ${isAnchor ? 'anchor' : ''}`}
                       >
-                        <div className="qa-context-message-meta">
-                          <span>{formatEvidenceTime(message.createTime)}</span>
-                          <span>{getContextMessageSender(message, evidenceContext.ref)}</span>
-                          {isAnchor && <strong>原消息</strong>}
+                        <EvidenceAvatar
+                          refItem={contextRef}
+                          message={message}
+                          sessionId={evidenceContext.ref.sessionId || sessionId}
+                          sessionName={sessionName}
+                          sessionAvatarUrl={avatarUrl}
+                          myAvatarUrl={myAvatarUrl}
+                        />
+                        <div className="qa-context-message-content">
+                          <div className="qa-context-message-meta">
+                            <span>{formatEvidenceTime(message.createTime)}</span>
+                            <span>{getContextMessageSender(message, evidenceContext.ref)}</span>
+                            {isAnchor && <strong>原消息</strong>}
+                          </div>
+                          <p>
+                            <MessageContent content={getContextMessagePreview(message, evidenceContext.ref)} disableLinks />
+                          </p>
+                          <EvidenceMediaPreview refItem={contextRef} message={message} compact />
                         </div>
-                        <p>{getContextMessagePreview(message, evidenceContext.ref)}</p>
                       </article>
                     )
                   })}
@@ -1176,6 +1468,30 @@ function AISummaryWindow() {
     // 加载自己的微信头像，用于问 AI 的用户消息气泡
     loadMyAvatarUrl()
   }, [])
+
+  useEffect(() => {
+    const refsToLoad = qaMessages
+      .filter((message) => expandedQAEvidenceIds.has(message.id))
+      .flatMap((message) => message.result?.evidenceRefs || [])
+      .slice(0, 32)
+
+    refsToLoad.forEach((ref) => {
+      const key = getEvidenceKey(ref)
+      if (evidenceMessageMap[key] || evidenceMessageLoadingRef.current.has(key)) return
+
+      evidenceMessageLoadingRef.current.add(key)
+      window.electronAPI.chat.getMessage(ref.sessionId, ref.localId).then((result) => {
+        if (result.success && result.message) {
+          setEvidenceMessageMap((prev) => ({
+            ...prev,
+            [key]: result.message!
+          }))
+        }
+      }).catch(() => {}).finally(() => {
+        evidenceMessageLoadingRef.current.delete(key)
+      })
+    })
+  }, [evidenceMessageMap, expandedQAEvidenceIds, qaMessages])
 
   // 加载联系人头像
   const loadContactAvatar = async (sid: string) => {

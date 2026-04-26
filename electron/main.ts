@@ -1,7 +1,8 @@
-import { app, BrowserWindow, ipcMain, nativeImage, nativeTheme, protocol, net, Tray, Menu } from 'electron'
+import { app, BrowserWindow, ipcMain, nativeImage, nativeTheme, protocol, net, Tray, Menu, type WebContents } from 'electron'
 import { join } from 'path'
 import { randomBytes } from 'crypto'
 import { readFileSync, existsSync, mkdirSync } from 'fs'
+import { Worker } from 'worker_threads'
 import { autoUpdater, type ProgressInfo } from 'electron-updater'
 import { DatabaseService } from './services/database'
 import { appUpdateService } from './services/appUpdateService'
@@ -96,6 +97,139 @@ let welcomeWindow: BrowserWindow | null = null
 // 聊天记录窗口实例
 let chatHistoryWindow: BrowserWindow | null = null
 const allowDevTools = !!process.env.VITE_DEV_SERVER_URL
+
+type SessionVectorIndexWorkerMessage = {
+  type?: 'progress' | 'completed' | 'error'
+  sessionId?: string
+  progress?: any
+  state?: any
+  error?: string
+}
+
+type SessionVectorIndexJob = {
+  worker: Worker
+  sender: WebContents
+  cancelRequested: boolean
+}
+
+const sessionVectorIndexJobs = new Map<string, SessionVectorIndexJob>()
+
+function findElectronWorkerPath(fileName: string): string | null {
+  const candidates = app.isPackaged
+    ? [
+        join(process.resourcesPath, 'app.asar.unpacked', 'dist-electron', fileName),
+        join(process.resourcesPath, 'dist-electron', fileName),
+        join(__dirname, '..', fileName),
+        join(__dirname, fileName)
+      ]
+    : [
+        join(__dirname, '..', fileName),
+        join(__dirname, fileName),
+        join(app.getAppPath(), 'dist-electron', fileName)
+      ]
+
+  return candidates.find((candidate) => existsSync(candidate)) || null
+}
+
+async function getSessionVectorIndexStateForUi(sessionId: string) {
+  const { chatSearchIndexService } = await import('./services/search/chatSearchIndexService')
+  const state = chatSearchIndexService.getSessionVectorIndexState(sessionId)
+  return {
+    ...state,
+    isVectorRunning: state.isVectorRunning || sessionVectorIndexJobs.has(sessionId)
+  }
+}
+
+function sendSessionVectorIndexProgress(sender: WebContents, progress: any) {
+  if (!sender || sender.isDestroyed()) return
+  sender.send('ai:sessionVectorIndexProgress', progress)
+}
+
+async function sendSessionVectorIndexFailure(sender: WebContents, sessionId: string, error: string) {
+  try {
+    const state = await getSessionVectorIndexStateForUi(sessionId)
+    sendSessionVectorIndexProgress(sender, {
+      sessionId,
+      stage: 'vectorizing_messages',
+      status: 'failed',
+      processedCount: state.vectorizedCount || 0,
+      totalCount: state.indexedCount || 0,
+      message: error,
+      vectorModel: state.vectorModel || ''
+    })
+  } catch {
+    sendSessionVectorIndexProgress(sender, {
+      sessionId,
+      stage: 'vectorizing_messages',
+      status: 'failed',
+      processedCount: 0,
+      totalCount: 0,
+      message: error,
+      vectorModel: ''
+    })
+  }
+}
+
+async function startSessionVectorIndexJob(sessionId: string, sender: WebContents) {
+  const existing = sessionVectorIndexJobs.get(sessionId)
+  if (existing) {
+    existing.sender = sender
+    return getSessionVectorIndexStateForUi(sessionId)
+  }
+
+  const workerPath = findElectronWorkerPath('sessionVectorIndexWorker.js')
+  if (!workerPath) {
+    throw new Error('未找到 sessionVectorIndexWorker.js')
+  }
+
+  const worker = new Worker(workerPath, {
+    workerData: { sessionId }
+  })
+  const job: SessionVectorIndexJob = {
+    worker,
+    sender,
+    cancelRequested: false
+  }
+  sessionVectorIndexJobs.set(sessionId, job)
+
+  worker.on('message', (message: SessionVectorIndexWorkerMessage) => {
+    const currentJob = sessionVectorIndexJobs.get(sessionId)
+    const targetSender = currentJob?.sender || sender
+
+    if (message?.type === 'progress' && message.progress) {
+      sendSessionVectorIndexProgress(targetSender, message.progress)
+      return
+    }
+
+    if (message?.type === 'completed') {
+      sessionVectorIndexJobs.delete(sessionId)
+      return
+    }
+
+    if (message?.type === 'error') {
+      sessionVectorIndexJobs.delete(sessionId)
+      void sendSessionVectorIndexFailure(targetSender, sessionId, message.error || '向量化失败')
+    }
+  })
+
+  worker.on('error', (error) => {
+    const currentJob = sessionVectorIndexJobs.get(sessionId)
+    sessionVectorIndexJobs.delete(sessionId)
+    void sendSessionVectorIndexFailure(currentJob?.sender || sender, sessionId, String(error))
+  })
+
+  worker.on('exit', (code) => {
+    const currentJob = sessionVectorIndexJobs.get(sessionId)
+    if (!currentJob) return
+    sessionVectorIndexJobs.delete(sessionId)
+
+    if (code !== 0 && !currentJob.cancelRequested) {
+      void sendSessionVectorIndexFailure(currentJob.sender, sessionId, `向量化 Worker 异常退出，代码：${code}`)
+    }
+  })
+
+  return getSessionVectorIndexStateForUi(sessionId)
+}
 
 type ImageViewerListItem = {
   imagePath: string
@@ -4140,10 +4274,9 @@ function registerIpcHandlers() {
 
   ipcMain.handle('ai:getSessionVectorIndexState', async (_, sessionId: string) => {
     try {
-      const { chatSearchIndexService } = await import('./services/search/chatSearchIndexService')
       return {
         success: true,
-        result: chatSearchIndexService.getSessionVectorIndexState(sessionId)
+        result: await getSessionVectorIndexStateForUi(sessionId)
       }
     } catch (e) {
       console.error('[AI] 获取会话向量索引状态失败:', e)
@@ -4154,10 +4287,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle('ai:prepareSessionVectorIndex', async (event, options: { sessionId: string }) => {
     try {
-      const { chatSearchIndexService } = await import('./services/search/chatSearchIndexService')
-      const result = await chatSearchIndexService.prepareSessionVectorIndex(options.sessionId, (progress) => {
-        event.sender.send('ai:sessionVectorIndexProgress', progress)
-      })
+      const result = await startSessionVectorIndexJob(options.sessionId, event.sender)
       return { success: true, result }
     } catch (e) {
       console.error('[AI] 准备会话向量索引失败:', e)
@@ -4168,6 +4298,16 @@ function registerIpcHandlers() {
 
   ipcMain.handle('ai:cancelSessionVectorIndex', async (_, sessionId: string) => {
     try {
+      const job = sessionVectorIndexJobs.get(sessionId)
+      if (job) {
+        job.cancelRequested = true
+        job.worker.postMessage({ type: 'cancel' })
+        return {
+          success: true,
+          result: await getSessionVectorIndexStateForUi(sessionId)
+        }
+      }
+
       const { chatSearchIndexService } = await import('./services/search/chatSearchIndexService')
       return {
         success: true,

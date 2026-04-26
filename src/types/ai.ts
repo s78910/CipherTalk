@@ -154,6 +154,8 @@ export interface SessionQAToolCall {
     | 'search_messages'
     | 'read_context'
     | 'aggregate_messages'
+    | 'get_session_statistics'
+    | 'get_keyword_statistics'
     | 'answer'
     | 'get_session_context'
     | 'prepare_vector_index'
@@ -181,6 +183,7 @@ export interface SessionQAProgressEvent {
   requestId?: SessionQARequestId
   source?: SessionQAProgressSource
   elapsedMs?: number
+  diagnostics?: string[]
 }
 
 export type SessionQAJobEventKind = 'progress' | 'chunk' | 'final' | 'error' | 'cancelled'

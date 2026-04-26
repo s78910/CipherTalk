@@ -145,7 +145,8 @@ const INDEX_BATCH_SIZE = 800
 const MAX_INDEX_TEXT_CHARS = 8000
 const MAX_EXCERPT_RADIUS = 48
 const MAX_INDEX_SEARCH_CANDIDATES = 240
-const VECTOR_BATCH_SIZE = 32
+const VECTOR_BATCH_SIZE = 8
+const VECTOR_BATCH_IDLE_MS = 60
 const VECTOR_SEARCH_OVERFETCH = 8
 const VECTOR_MIN_SCORE = 0.45
 // Vector hits are recall supplements, so keep them below high-confidence keyword hits.
@@ -753,6 +754,10 @@ export class ChatSearchIndexService {
     await new Promise<void>((resolve) => setTimeout(resolve, 0))
   }
 
+  private async idleBetweenVectorBatches(): Promise<void> {
+    await new Promise<void>((resolve) => setTimeout(resolve, VECTOR_BATCH_IDLE_MS))
+  }
+
   private async reportVectorProgress(
     progress: Omit<ChatVectorIndexProgress, 'vectorModel'>,
     onProgress?: (progress: ChatVectorIndexProgress) => void | Promise<void>
@@ -928,7 +933,12 @@ export class ChatSearchIndexService {
     run(messages)
     if (vectorRows.length > 0) {
       try {
-        await this.upsertVectorRows(db, vectorRows)
+        for (let index = 0; index < vectorRows.length; index += VECTOR_BATCH_SIZE) {
+          await this.upsertVectorRows(db, vectorRows.slice(index, index + VECTOR_BATCH_SIZE))
+          if (index + VECTOR_BATCH_SIZE < vectorRows.length) {
+            await this.idleBetweenVectorBatches()
+          }
+        }
       } catch (error) {
         this.setSessionVectorState(db, {
           sessionId,
@@ -1350,7 +1360,7 @@ export class ChatSearchIndexService {
           totalCount: currentState.indexedCount,
           message: `已向量化 ${currentState.vectorizedCount}/${currentState.indexedCount} 条消息`
         }, onProgress)
-        await this.yieldToEventLoop()
+        await this.idleBetweenVectorBatches()
       }
 
       this.setSessionVectorState(db, {

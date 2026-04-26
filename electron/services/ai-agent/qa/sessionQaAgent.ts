@@ -4,10 +4,12 @@ import { executeMcpTool } from '../../mcp/dispatcher'
 import type {
   McpContactsPayload,
   McpCursor,
+  McpKeywordStatisticsPayload,
   McpMessageItem,
   McpMessagesPayload,
   McpSearchMessagesPayload,
-  McpSessionContextPayload
+  McpSessionContextPayload,
+  McpSessionStatisticsPayload
 } from '../../mcp/types'
 import { chatSearchIndexService } from '../../search/chatSearchIndexService'
 import type { StructuredAnalysis, SummaryEvidenceRef } from '../types/analysis'
@@ -34,6 +36,8 @@ export type SessionQAToolName =
   | 'search_messages'
   | 'read_context'
   | 'aggregate_messages'
+  | 'get_session_statistics'
+  | 'get_keyword_statistics'
   | 'answer'
   | 'get_session_context'
   | 'prepare_vector_index'
@@ -55,6 +59,7 @@ export interface SessionQAProgressEvent {
   requestId?: string
   source?: SessionQAProgressSource
   elapsedMs?: number
+  diagnostics?: string[]
 }
 
 export interface SessionQAAgentOptions {
@@ -84,7 +89,7 @@ const MAX_SEARCH_HITS = 8
 const MAX_CONTEXT_WINDOWS = 4
 const SEARCH_CONTEXT_BEFORE = 6
 const SEARCH_CONTEXT_AFTER = 6
-const MAX_TOOL_CALLS = 6
+const MAX_TOOL_CALLS = 8
 const MAX_TOOL_DECISION_ATTEMPTS = 10
 const MAX_HISTORY_MESSAGES = 8
 const MAX_SUMMARY_CHARS = 3000
@@ -145,6 +150,8 @@ type ToolLoopAction =
   | { action: 'read_by_time_range'; startTime?: number; endTime?: number; label?: string; limit?: number; keyword?: string; senderUsername?: string; participantName?: string; reason?: string }
   | { action: 'resolve_participant'; name?: string; reason?: string }
   | { action: 'aggregate_messages'; metric?: 'speaker_count' | 'message_count' | 'kind_count' | 'timeline' | 'summary'; reason?: string }
+  | { action: 'get_session_statistics'; startTime?: number; endTime?: number; label?: string; participantLimit?: number; includeSamples?: boolean; reason?: string }
+  | { action: 'get_keyword_statistics'; keywords: string[]; startTime?: number; endTime?: number; label?: string; matchMode?: 'substring' | 'exact'; participantLimit?: number; reason?: string }
   | { action: 'answer'; reason?: string }
 
 function compactText(value?: string, limit = MAX_MESSAGE_TEXT): string {
@@ -177,6 +184,8 @@ function inferProgressSource(event: Omit<SessionQAProgressEvent, 'createdAt'>): 
     case 'prepare_vector_index':
       return 'vector'
     case 'aggregate_messages':
+    case 'get_session_statistics':
+    case 'get_keyword_statistics':
       return 'aggregate'
     default:
       return 'chat'
@@ -606,7 +615,7 @@ function buildDefaultPreferredPlan(intent: SessionQAIntentType): ToolLoopAction[
     case 'broad_summary':
       return ['read_summary_facts', 'read_latest', 'answer']
     case 'stats_or_count':
-      return ['read_by_time_range', 'aggregate_messages', 'answer']
+      return ['get_session_statistics', 'answer']
     default:
       return ['read_summary_facts', 'read_latest', 'answer']
   }
@@ -695,7 +704,10 @@ summary_answerable, recent_status, time_range, participant_focus, exact_evidence
   "searchQueries":["关键词"],
   "needsSearch":false,
   "preferredPlan":["read_latest","answer"]
-}`
+}
+
+preferredPlan 可选动作：read_summary_facts, read_latest, read_by_time_range, resolve_participant, search_messages, read_context, aggregate_messages, get_session_statistics, get_keyword_statistics, answer
+统计计数类问题优先 get_session_statistics；询问某个词/短语出现次数时优先 get_keyword_statistics。`
       }
     ], {
       model,
@@ -707,7 +719,7 @@ summary_answerable, recent_status, time_range, participant_focus, exact_evidence
     const parsed = JSON.parse(stripJsonFence(stripThinkBlocks(response))) as Record<string, unknown>
     const intent = normalizeIntentType(parsed.intent)
     const timeRange = normalizeTimeRangeHint(parsed.timeRange, fallback.timeRange)
-    const preferredPlan = normalizeStringArray(parsed.preferredPlan, 6)
+    const preferredPlan = normalizeStringArray(parsed.preferredPlan, 8)
       .map((item) => item as ToolLoopAction['action'])
       .filter((item) => [
         'read_summary_facts',
@@ -717,6 +729,8 @@ summary_answerable, recent_status, time_range, participant_focus, exact_evidence
         'search_messages',
         'read_context',
         'aggregate_messages',
+        'get_session_statistics',
+        'get_keyword_statistics',
         'answer'
       ].includes(item))
 
@@ -823,6 +837,40 @@ function normalizeToolAction(raw: unknown): ToolLoopAction | null {
     }
   }
 
+  if (actionName === 'get_session_statistics') {
+    const startTime = Number(raw.startTime ?? raw.start_time)
+    const endTime = Number(raw.endTime ?? raw.end_time)
+    return {
+      action: 'get_session_statistics',
+      startTime: Number.isFinite(startTime) && startTime > 0 ? Math.floor(startTime) : undefined,
+      endTime: Number.isFinite(endTime) && endTime > 0 ? Math.floor(endTime) : undefined,
+      label: compactText(String(raw.label || ''), 40) || undefined,
+      participantLimit: clampToolLimit(raw.participantLimit ?? raw.participant_limit, 20, 50),
+      includeSamples: Boolean(raw.includeSamples ?? raw.include_samples),
+      reason
+    }
+  }
+
+  if (actionName === 'get_keyword_statistics') {
+    const startTime = Number(raw.startTime ?? raw.start_time)
+    const endTime = Number(raw.endTime ?? raw.end_time)
+    const keywords = normalizeStringArray(raw.keywords || raw.queries || raw.query ? raw.keywords || raw.queries || [raw.query] : [], 6)
+      .map((item) => normalizeSearchQuery(item, 48))
+      .filter(Boolean)
+    const matchMode = String(raw.matchMode || raw.match_mode || '').trim()
+    if (keywords.length === 0) return null
+    return {
+      action: 'get_keyword_statistics',
+      keywords,
+      startTime: Number.isFinite(startTime) && startTime > 0 ? Math.floor(startTime) : undefined,
+      endTime: Number.isFinite(endTime) && endTime > 0 ? Math.floor(endTime) : undefined,
+      label: compactText(String(raw.label || ''), 40) || undefined,
+      matchMode: matchMode === 'exact' ? 'exact' : 'substring',
+      participantLimit: clampToolLimit(raw.participantLimit ?? raw.participant_limit, 20, 50),
+      reason
+    }
+  }
+
   if (actionName === 'answer') {
     return { action: 'answer', reason }
   }
@@ -844,7 +892,8 @@ function formatCursor(cursor: McpCursor): string {
 }
 
 function formatKnownHit(hit: KnownSearchHit): string {
-  return `${hit.hitId} | ${formatMessageLine(hit.message)} | score=${Math.round(hit.score)} | cursor=${formatCursor(hit.message.cursor)}`
+  const source = hit.retrievalSource ? ` | source=${hit.retrievalSource}` : ''
+  return `${hit.hitId} | ${formatMessageLine(hit.message)} | score=${Math.round(hit.score)}${source} | cursor=${formatCursor(hit.message.cursor)}`
 }
 
 function buildObservationText(observations: ToolObservation[]): string {
@@ -921,7 +970,9 @@ ${buildObservationText(input.observations)}
 5. {"action":"search_messages","query":"关键词或短语","reason":"只在需要精确证据时搜索"}
 6. {"action":"read_context","hitId":"h1","reason":"读取命中前后文"}
 7. {"action":"aggregate_messages","metric":"speaker_count|message_count|kind_count|timeline|summary","reason":"整理统计/趋势"}
-8. {"action":"answer","reason":"证据足够或预算即将耗尽"}
+8. {"action":"get_session_statistics","startTime":秒级时间戳,"endTime":秒级时间戳,"participantLimit":20,"reason":"全量统计当前会话"}
+9. {"action":"get_keyword_statistics","keywords":["关键词"],"matchMode":"substring","startTime":秒级时间戳,"endTime":秒级时间戳,"reason":"统计关键词出现次数"}
+10. {"action":"answer","reason":"证据足够或预算即将耗尽"}
 
 决策规则：
 - 摘要可答时优先 read_summary_facts，然后 answer，不要搜索。
@@ -930,7 +981,9 @@ ${buildObservationText(input.observations)}
 - 人物类问题先 resolve_participant，再按 sender 或时间读取。
 - 只有原话、具体事项、媒体/文件/链接、是否提到某词时才 search_messages。
 - 搜索命中后再 read_context；搜索 0 命中时才改写关键词继续搜。
-- 统计类问题需要 aggregate_messages 后再 answer。
+- 当前会话总数、谁说话最多、消息类型、活跃时间等统计类问题优先 get_session_statistics。
+- 某个词/短语出现次数、谁最常提某词的问题优先 get_keyword_statistics。
+- aggregate_messages 只用于整理已读取消息的轻量兜底。
 - 没有任何摘要事实、上下文、聚合结果或搜索命中前，不要 answer。
 - 只输出一个 JSON 对象，不要 Markdown，不要解释。`
 }
@@ -996,15 +1049,69 @@ function findKnownHitForAction(action: Extract<ToolLoopAction, { action: 'read_c
   return knownHits[0] || null
 }
 
+function describeVectorSkipReason(reason?: string): string {
+  if (!reason) return '原因未知'
+
+  const labels: Record<string, string> = {
+    exact_match_mode: '精确匹配模式',
+    empty_semantic_query: '语义查询为空',
+    vector_provider_unavailable: '向量能力不可用',
+    vector_index_incomplete: '向量索引未完成',
+    indexed_search_unavailable: '本地索引不可用，已回退扫描',
+    search_index_not_ready: '搜索索引未就绪，已回退扫描'
+  }
+
+  return reason
+    .split(',')
+    .map((item) => labels[item] || item)
+    .join('、')
+}
+
+function formatVectorSearchLine(payload?: McpSearchMessagesPayload): string {
+  const vector = payload?.vectorSearch
+  if (!vector) return '向量索引：无诊断信息'
+
+  const progress = vector.indexedMessages > 0
+    ? `，向量化 ${vector.vectorizedMessages}/${vector.indexedMessages} 条`
+    : ''
+  const model = vector.model ? `，模型 ${vector.model}` : ''
+  if (vector.attempted) {
+    const error = vector.error ? `，错误：${compactText(vector.error, 80)}` : ''
+    return `向量索引：已调用，语义命中 ${vector.hitCount} 条${progress}${model}${error}`
+  }
+
+  if (vector.requested) {
+    return `向量索引：未调用，${describeVectorSkipReason(vector.skippedReason)}${progress}${model}`
+  }
+
+  return '向量索引：未请求'
+}
+
+function getSearchDiagnostics(payload?: McpSearchMessagesPayload): string[] {
+  if (!payload) return []
+
+  const lines = [
+    `检索来源：${payload.source || 'unknown'}`,
+    formatVectorSearchLine(payload)
+  ]
+
+  if (payload.indexStatus) {
+    lines.push(`关键词索引：${payload.indexStatus.ready ? '已使用' : '未使用'}，已索引 ${payload.indexStatus.indexedMessages} 条`)
+  }
+
+  return lines
+}
+
 function summarizeSearchObservation(query: string, payload?: McpSearchMessagesPayload, knownHits: KnownSearchHit[] = []): string {
   const hits = payload?.hits || []
+  const diagnostics = getSearchDiagnostics(payload)
   if (hits.length === 0) {
-    return `关键词：${query}，命中 0 条。`
+    return `关键词：${query}，命中 0 条。${diagnostics.length ? `\n${diagnostics.join('\n')}` : ''}`
   }
 
   const latestKnown = knownHits.slice(-Math.min(hits.length, MAX_SEARCH_HITS))
   const lines = latestKnown.map(formatKnownHit).join('\n')
-  return `关键词：${query}，命中 ${hits.length} 条。\n${lines}`
+  return `关键词：${query}，命中 ${hits.length} 条。${diagnostics.length ? `\n${diagnostics.join('\n')}` : ''}\n${lines}`
 }
 
 async function loadLatestContext(sessionId: string, limit = MAX_CONTEXT_MESSAGES): Promise<{
@@ -1069,6 +1176,7 @@ async function searchSessionMessages(sessionId: string, query: string, filters: 
       displayName: filters.sessionName || sessionId,
       kind: sessionId.includes('@chatroom') ? 'group' : 'friend'
     } as const
+    const vectorState = chatSearchIndexService.getSessionVectorIndexState(sessionId)
     const hits = (messagesPayload.items || [])
       .filter((message) => !filters.senderUsername || message.sender.username === filters.senderUsername)
       .slice(0, filters.limit || MAX_SEARCH_HITS)
@@ -1077,7 +1185,8 @@ async function searchSessionMessages(sessionId: string, query: string, filters: 
         message,
         excerpt: compactText(message.text, 180) || `[${message.kind}]`,
         matchedField: 'text' as const,
-        score: 520 - index
+        score: 520 - index,
+        retrievalSource: 'scan' as const
       }))
     const payload: McpSearchMessagesPayload = {
       hits,
@@ -1090,6 +1199,17 @@ async function searchSessionMessages(sessionId: string, query: string, filters: 
         ready: false,
         indexedSessions: 0,
         indexedMessages: indexState?.indexedCount || 0
+      },
+      vectorSearch: {
+        requested: Boolean(filters.semanticQuery),
+        attempted: false,
+        providerAvailable: Boolean(vectorState.vectorProviderAvailable),
+        indexComplete: vectorState.isVectorComplete,
+        hitCount: 0,
+        indexedMessages: vectorState.indexedCount || indexState?.indexedCount || 0,
+        vectorizedMessages: vectorState.vectorizedCount || 0,
+        model: vectorState.vectorModelName || vectorState.vectorModel,
+        skippedReason: 'search_index_not_ready'
       },
       sessionSummaries: [{
         session,
@@ -1106,7 +1226,7 @@ async function searchSessionMessages(sessionId: string, query: string, filters: 
           ...args,
           mode: 'quick_scan_background_index'
         },
-        summary: `搜索索引未就绪，已使用快速扫描命中 ${hits.length} 条，并在后台准备索引。`,
+        summary: `搜索索引未就绪，已使用快速扫描命中 ${hits.length} 条，并在后台准备索引。\n${formatVectorSearchLine(payload)}`,
         status: 'completed',
         evidenceCount: hits.length
       }
@@ -1150,6 +1270,119 @@ async function loadContextAroundMessage(
       toolName: 'read_context',
       args,
       summary: result.summary
+    }
+  }
+}
+
+function formatParticipantStatsLines(items: McpSessionStatisticsPayload['participantRankings']): string {
+  if (!items.length) return '无参与者统计。'
+  return items.slice(0, 12).map((item, index) =>
+    `${index + 1}. ${item.displayName || item.senderUsername || item.role}：${item.messageCount} 条（发出 ${item.sentCount}，收到 ${item.receivedCount}）`
+  ).join('\n')
+}
+
+function formatSessionStatisticsText(payload: McpSessionStatisticsPayload): string {
+  const kindCounts = Object.entries(payload.kindCounts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([kind, count]) => `${kind}=${count}`)
+    .join('，') || '无'
+  const activeHours = Object.entries(payload.hourlyDistribution)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([hour, count]) => `${hour}时=${count}`)
+    .join('，') || '无'
+
+  return [
+    `会话统计：${payload.session.displayName}`,
+    `总消息 ${payload.totalMessages} 条，发出 ${payload.sentMessages} 条，收到 ${payload.receivedMessages} 条，活跃 ${payload.activeDays} 天。`,
+    `首条：${payload.firstMessageTime ? formatTime(payload.firstMessageTime * 1000) : '无'}；末条：${payload.lastMessageTime ? formatTime(payload.lastMessageTime * 1000) : '无'}。`,
+    `消息类型：${kindCounts}。`,
+    `最活跃小时：${activeHours}。`,
+    `发言排行：\n${formatParticipantStatsLines(payload.participantRankings)}`,
+    `扫描 ${payload.scannedMessages} 条，范围内匹配 ${payload.matchedMessages} 条${payload.truncated ? '，结果因扫描上限被截断' : ''}。`
+  ].join('\n')
+}
+
+function formatKeywordStatisticsText(payload: McpKeywordStatisticsPayload): string {
+  const lines = payload.keywords.map((item) => {
+    const topParticipants = item.participantRankings.slice(0, 5)
+      .map((participant) => `${participant.displayName || participant.senderUsername || participant.role}=${participant.messageCount}`)
+      .join('，') || '无'
+    const activeHours = Object.entries(item.hourlyDistribution)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([hour, count]) => `${hour}时=${count}`)
+      .join('，') || '无'
+    return [
+      `关键词“${item.keyword}”：命中 ${item.hitCount} 条消息，出现 ${item.occurrenceCount} 次。`,
+      `首次：${item.firstHitTime ? formatTime(item.firstHitTime * 1000) : '无'}；末次：${item.lastHitTime ? formatTime(item.lastHitTime * 1000) : '无'}。`,
+      `发送者分布：${topParticipants}。`,
+      `高频小时：${activeHours}。`
+    ].join('\n')
+  })
+
+  return [
+    `关键词统计：${payload.session.displayName}`,
+    ...lines,
+    `扫描 ${payload.scannedMessages} 条，命中 ${payload.matchedMessages} 条${payload.truncated ? '，结果因扫描上限被截断' : ''}。`
+  ].join('\n\n')
+}
+
+async function loadSessionStatistics(
+  sessionId: string,
+  action: Extract<ToolLoopAction, { action: 'get_session_statistics' }>,
+  fallbackRange?: TimeRangeHint
+): Promise<{
+  payload?: McpSessionStatisticsPayload
+  toolCall?: SessionQAToolCall
+}> {
+  const args = {
+    sessionId,
+    startTime: action.startTime || fallbackRange?.startTime,
+    endTime: action.endTime || fallbackRange?.endTime,
+    includeSamples: action.includeSamples || false,
+    participantLimit: action.participantLimit || 20
+  }
+  const result = await executeMcpTool('get_session_statistics', args)
+  const payload = result.payload as McpSessionStatisticsPayload
+  return {
+    payload,
+    toolCall: {
+      toolName: 'get_session_statistics',
+      args,
+      summary: formatSessionStatisticsText(payload),
+      status: payload.totalMessages > 0 ? 'completed' : 'failed',
+      evidenceCount: payload.totalMessages
+    }
+  }
+}
+
+async function loadKeywordStatistics(
+  sessionId: string,
+  action: Extract<ToolLoopAction, { action: 'get_keyword_statistics' }>,
+  fallbackRange?: TimeRangeHint
+): Promise<{
+  payload?: McpKeywordStatisticsPayload
+  toolCall?: SessionQAToolCall
+}> {
+  const args = {
+    sessionId,
+    keywords: action.keywords,
+    startTime: action.startTime || fallbackRange?.startTime,
+    endTime: action.endTime || fallbackRange?.endTime,
+    matchMode: action.matchMode || 'substring',
+    participantLimit: action.participantLimit || 20
+  }
+  const result = await executeMcpTool('get_keyword_statistics', args)
+  const payload = result.payload as McpKeywordStatisticsPayload
+  return {
+    payload,
+    toolCall: {
+      toolName: 'get_keyword_statistics',
+      args,
+      summary: formatKeywordStatisticsText(payload),
+      status: payload.matchedMessages > 0 ? 'completed' : 'failed',
+      evidenceCount: payload.matchedMessages
     }
   }
 }
@@ -1292,12 +1525,20 @@ function getRouteLabel(intent: SessionQAIntentType): string {
   return labels[intent]
 }
 
+function shouldUseKeywordStatistics(question: string, firstQuery: string): boolean {
+  if (!firstQuery) return false
+  if (!/(关键词|这个词|这个短语|出现|提到|提及|说过|包含|几次|次数|频率)/.test(question)) return false
+  if (/(图片|照片|语音|视频|表情|文件|链接|红包|转账|说话最多|发言最多|谁.*最多|谁.*最少|活跃|几点|什么时候|多少条|总共|总量|类型)/.test(question)) return false
+  return true
+}
+
 function buildInitialActionQueue(route: IntentRoute, question: string): ToolLoopAction[] {
   const firstQuery = route.searchQueries.find((query) => !isGenericSearchQuery(query))
     || expandSearchQueries(question, [])[0]
     || ''
   const participantName = route.participantHints[0]
   const range = route.timeRange
+  const useKeywordStatistics = route.intent === 'stats_or_count' && shouldUseKeywordStatistics(question, firstQuery)
   const actions: ToolLoopAction[] = []
 
   for (const actionName of route.preferredPlan) {
@@ -1326,6 +1567,26 @@ function buildInitialActionQueue(route: IntentRoute, question: string): ToolLoop
         action: 'aggregate_messages',
         metric: route.intent === 'stats_or_count' ? 'speaker_count' : 'summary',
         reason: '对已读取消息做统计或趋势整理'
+      })
+    } else if (actionName === 'get_session_statistics') {
+      actions.push({
+        action: 'get_session_statistics',
+        startTime: range?.startTime,
+        endTime: range?.endTime,
+        label: range?.label,
+        participantLimit: 20,
+        reason: range ? `统计${formatTimeRangeLabel(range)}内的当前会话` : '全量统计当前会话'
+      })
+    } else if (actionName === 'get_keyword_statistics' && firstQuery) {
+      actions.push({
+        action: 'get_keyword_statistics',
+        keywords: [firstQuery],
+        startTime: range?.startTime,
+        endTime: range?.endTime,
+        label: range?.label,
+        matchMode: 'substring',
+        participantLimit: 20,
+        reason: '统计关键词出现次数和发送者分布'
       })
     } else if (actionName === 'answer') {
       actions.push({ action: 'answer', reason: '按路线尝试生成回答' })
@@ -1362,18 +1623,28 @@ function buildInitialActionQueue(route: IntentRoute, question: string): ToolLoop
   }
 
   if (route.intent === 'stats_or_count') {
-    if (!actions.some((item) => item.action === 'read_by_time_range')) {
+    if (useKeywordStatistics) {
+      if (!actions.some((item) => item.action === 'get_keyword_statistics')) {
+        insertBeforeAnswer({
+          action: 'get_keyword_statistics',
+          keywords: [firstQuery],
+          startTime: range?.startTime,
+          endTime: range?.endTime,
+          label: range?.label,
+          matchMode: 'substring',
+          participantLimit: 20,
+          reason: '统计关键词出现次数和发送者分布'
+        })
+      }
+    } else if (!actions.some((item) => item.action === 'get_session_statistics')) {
       insertBeforeAnswer({
-        action: 'read_by_time_range',
+        action: 'get_session_statistics',
         startTime: range?.startTime,
         endTime: range?.endTime,
         label: range?.label,
-        limit: 100,
-        reason: '统计问题需要先读取待统计消息'
+        participantLimit: 20,
+        reason: range ? `统计${formatTimeRangeLabel(range)}内的当前会话` : '统计问题需要全量统计当前会话'
       })
-    }
-    if (!actions.some((item) => item.action === 'aggregate_messages')) {
-      insertBeforeAnswer({ action: 'aggregate_messages', metric: 'speaker_count', reason: '统计问题需要聚合已读取消息' })
     }
   }
 
@@ -1995,6 +2266,145 @@ export async function answerSessionQuestionWithAgent(
       continue
     }
 
+    if (action.action === 'get_session_statistics') {
+      toolCallsUsed += 1
+      const progressId = `tool-loop-${toolCallsUsed}-session-stats`
+      const inferredRange = route.timeRange || inferTimeRangeFromQuestion(options.question)
+      const label = action.label || inferredRange?.label || '全部消息'
+
+      emitProgress(options, {
+        id: progressId,
+        stage: 'tool',
+        status: 'running',
+        title: '统计当前会话',
+        detail: action.reason ? `${label}；${action.reason}` : label,
+        toolName: 'get_session_statistics'
+      })
+
+      try {
+        const stats = await loadSessionStatistics(options.sessionId, action, inferredRange)
+        if (stats.toolCall) toolCalls.push(stats.toolCall)
+        const payload = stats.payload
+        const statsText = payload ? formatSessionStatisticsText(payload) : '未读取到会话统计。'
+        aggregateText = aggregateText ? `${aggregateText}\n\n${statsText}` : statsText
+
+        if (payload?.samples?.length) {
+          for (const message of payload.samples) {
+            const ref = toEvidenceRef(options.sessionId, message)
+            if (ref) evidenceCandidates.push(ref)
+          }
+        }
+
+        emitProgress(options, {
+          id: progressId,
+          stage: 'tool',
+          status: payload && payload.totalMessages > 0 ? 'completed' : 'failed',
+          title: '统计当前会话',
+          detail: payload
+            ? `统计 ${payload.totalMessages} 条消息，扫描 ${payload.scannedMessages} 条${payload.truncated ? '，已截断' : ''}`
+            : '没有统计结果',
+          toolName: 'get_session_statistics',
+          count: payload?.totalMessages || 0
+        })
+
+        observations.push({
+          title: '统计当前会话',
+          detail: statsText
+        })
+      } catch (error) {
+        emitProgress(options, {
+          id: progressId,
+          stage: 'tool',
+          status: 'failed',
+          title: '统计当前会话失败',
+          detail: compactText(String(error), 120),
+          toolName: 'get_session_statistics'
+        })
+        observations.push({
+          title: '统计当前会话失败',
+          detail: `失败原因：${compactText(String(error), 160)}。`
+        })
+      }
+
+      continue
+    }
+
+    if (action.action === 'get_keyword_statistics') {
+      toolCallsUsed += 1
+      const progressId = `tool-loop-${toolCallsUsed}-keyword-stats`
+      const inferredRange = route.timeRange || inferTimeRangeFromQuestion(options.question)
+      const keywords = action.keywords.filter((keyword) => !isGenericSearchQuery(keyword)).slice(0, 6)
+
+      if (keywords.length === 0) {
+        observations.push({
+          title: '跳过关键词统计',
+          detail: '没有可用关键词，改用会话统计或其它工具。'
+        })
+        continue
+      }
+
+      emitProgress(options, {
+        id: progressId,
+        stage: 'tool',
+        status: 'running',
+        title: '统计关键词',
+        detail: action.reason ? `关键词：${keywords.join('、')}；${action.reason}` : `关键词：${keywords.join('、')}`,
+        toolName: 'get_keyword_statistics',
+        query: keywords.join(' ')
+      })
+
+      try {
+        const stats = await loadKeywordStatistics(options.sessionId, { ...action, keywords }, inferredRange)
+        if (stats.toolCall) toolCalls.push(stats.toolCall)
+        const payload = stats.payload
+        const statsText = payload ? formatKeywordStatisticsText(payload) : '未读取到关键词统计。'
+        aggregateText = aggregateText ? `${aggregateText}\n\n${statsText}` : statsText
+
+        if (payload) {
+          for (const keywordStat of payload.keywords) {
+            for (const sample of keywordStat.samples) {
+              const ref = toEvidenceRef(options.sessionId, sample.message, sample.excerpt)
+              if (ref) evidenceCandidates.push(ref)
+            }
+          }
+        }
+
+        emitProgress(options, {
+          id: progressId,
+          stage: 'tool',
+          status: payload && payload.matchedMessages > 0 ? 'completed' : 'failed',
+          title: '统计关键词',
+          detail: payload
+            ? `命中 ${payload.matchedMessages} 条消息，扫描 ${payload.scannedMessages} 条${payload.truncated ? '，已截断' : ''}`
+            : '没有统计结果',
+          toolName: 'get_keyword_statistics',
+          query: keywords.join(' '),
+          count: payload?.matchedMessages || 0
+        })
+
+        observations.push({
+          title: '统计关键词',
+          detail: statsText
+        })
+      } catch (error) {
+        emitProgress(options, {
+          id: progressId,
+          stage: 'tool',
+          status: 'failed',
+          title: '统计关键词失败',
+          detail: compactText(String(error), 120),
+          toolName: 'get_keyword_statistics',
+          query: keywords.join(' ')
+        })
+        observations.push({
+          title: '统计关键词失败',
+          detail: `失败原因：${compactText(String(error), 160)}。`
+        })
+      }
+
+      continue
+    }
+
     if (action.action === 'aggregate_messages') {
       toolCallsUsed += 1
       const progressId = `tool-loop-${toolCallsUsed}-aggregate`
@@ -2109,7 +2519,8 @@ export async function answerSessionQuestionWithAgent(
           detail: `关键词：${query}，命中 ${search.payload?.hits.length || 0} 条`,
           toolName: 'search_messages',
           query,
-          count: search.payload?.hits.length || 0
+          count: search.payload?.hits.length || 0,
+          diagnostics: getSearchDiagnostics(search.payload)
         })
 
         observations.push({

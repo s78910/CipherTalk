@@ -7,6 +7,12 @@ type VectorWorkerData = {
 
 const data = workerData as VectorWorkerData
 
+parentPort?.on('message', (message: { type?: string }) => {
+  if (message?.type === 'cancel') {
+    chatSearchIndexService.cancelSessionVectorIndex(data.sessionId)
+  }
+})
+
 async function run() {
   try {
     const state = await chatSearchIndexService.prepareSessionVectorIndex(data.sessionId, (progress) => {

@@ -35,16 +35,23 @@ import {
   type McpMessageMatchField,
   type McpSearchMatchMode,
   type McpMessagesPayload,
+  type McpKeywordStatisticsItem,
+  type McpKeywordStatisticsPayload,
+  type McpKeywordStatisticsSample,
+  type McpParticipantStatisticsItem,
   type McpStreamPartialPayloadMap,
   type McpStreamProgressPayload,
   type McpSearchHit,
   type McpSearchMessagesPayload,
+  type McpSearchRetrievalSource,
+  type McpSearchVectorStatus,
   type McpResolveSessionPayload,
   type McpResolvedSessionCandidate,
   type McpSessionContextPayload,
   type McpSessionItem,
   type McpSessionKind,
   type McpSessionRef,
+  type McpSessionStatisticsPayload,
   type McpSessionsPayload
 } from './types'
 
@@ -57,6 +64,9 @@ const MAX_SCAN_PER_SESSION = 1000
 const MAX_SCAN_GLOBAL = 10000
 const MAX_TARGETED_SCAN_PER_SESSION = 200000
 const MAX_TARGETED_SCAN_GLOBAL = 200000
+const MAX_STATISTICS_SCAN_MESSAGES = 200000
+const STATISTICS_SCAN_BATCH_SIZE = 1000
+const MAX_STATISTICS_SAMPLES = 5
 
 const listSessionsArgsSchema = z.object({
   q: z.string().optional(),
@@ -175,6 +185,23 @@ const getSessionContextArgsSchema = z.object({
   }
 })
 
+const getSessionStatisticsArgsSchema = z.object({
+  sessionId: z.string().trim().min(1),
+  startTime: z.number().int().positive().optional(),
+  endTime: z.number().int().positive().optional(),
+  includeSamples: z.boolean().optional(),
+  participantLimit: z.number().int().positive().optional()
+})
+
+const getKeywordStatisticsArgsSchema = z.object({
+  sessionId: z.string().trim().min(1),
+  keywords: z.array(z.string().trim().min(1)).min(1).max(20),
+  startTime: z.number().int().positive().optional(),
+  endTime: z.number().int().positive().optional(),
+  matchMode: z.enum(['substring', 'exact']).optional(),
+  participantLimit: z.number().int().positive().optional()
+})
+
 type ListSessionsArgs = z.infer<typeof listSessionsArgsSchema>
 type ResolveSessionArgs = z.infer<typeof resolveSessionArgsSchema>
 type ExportChatArgs = z.infer<typeof exportChatArgsSchema>
@@ -183,6 +210,8 @@ type ListContactsArgs = z.infer<typeof listContactsArgsSchema>
 type SearchMessagesArgs = z.infer<typeof searchMessagesArgsSchema>
 type GetMomentsTimelineArgs = z.infer<typeof getMomentsTimelineArgsSchema>
 type GetSessionContextArgs = z.infer<typeof getSessionContextArgsSchema>
+type GetSessionStatisticsArgs = z.infer<typeof getSessionStatisticsArgsSchema>
+type GetKeywordStatisticsArgs = z.infer<typeof getKeywordStatisticsArgsSchema>
 type ContactWithLastContact = ContactInfo & { lastContactTime?: number }
 type MessageNormalizeOptions = {
   includeMediaPaths: boolean
@@ -207,6 +236,18 @@ type SearchRawHit = {
   matchedField: McpMessageMatchField
   excerpt: string
   score: number
+  retrievalSource?: McpSearchRetrievalSource
+}
+type ParticipantStatsAccumulator = {
+  senderUsername: string | null
+  role: McpParticipantStatisticsItem['role']
+  messageCount: number
+  sentCount: number
+  receivedCount: number
+  firstMessageTime: number | null
+  lastMessageTime: number | null
+  kindCounts: Map<McpMessageKind, number>
+  sampleMessage?: Message
 }
 type SenderDisplayNameCacheEntry = {
   expiresAt: number
@@ -345,6 +386,12 @@ function createExcerpt(source: string, matchedIndex: number, queryLength: number
   const prefix = start > 0 ? '...' : ''
   const suffix = end < source.length ? '...' : ''
   return `${prefix}${source.slice(start, end)}${suffix}`
+}
+
+function compactText(value: string, limit: number): string {
+  const normalized = String(value || '').replace(/\s+/g, ' ').trim()
+  if (!normalized) return ''
+  return normalized.length > limit ? `${normalized.slice(0, limit - 1)}…` : normalized
 }
 
 function buildTimeRange(startTime?: number, endTime?: number) {
@@ -1328,6 +1375,262 @@ async function normalizeMessages(
   return Promise.all(messages.map((message) => normalizeMessage(sessionId, message, options)))
 }
 
+function toUnixSeconds(value?: number): number | undefined {
+  if (!value || !Number.isFinite(value) || value <= 0) return undefined
+  return value >= 1_000_000_000_000 ? Math.floor(value / 1000) : Math.floor(value)
+}
+
+function normalizeStatsRange(startTime?: number, endTime?: number): { startTime?: number; endTime?: number } {
+  const start = toUnixSeconds(startTime)
+  const end = toUnixSeconds(endTime)
+  if (start && end && start > end) {
+    return { startTime: end, endTime: start }
+  }
+  return { startTime: start, endTime: end }
+}
+
+function formatLocalDateKey(timestamp: number): string {
+  const date = new Date(timestamp * 1000)
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function formatLocalMonthKey(timestamp: number): string {
+  const date = new Date(timestamp * 1000)
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  return `${year}-${month}`
+}
+
+function getLocalHour(timestamp: number): number {
+  return new Date(timestamp * 1000).getHours()
+}
+
+function getLocalWeekday(timestamp: number): number {
+  const day = new Date(timestamp * 1000).getDay()
+  return day === 0 ? 7 : day
+}
+
+function incrementRecord(record: Record<string, number>, key: string | number, amount = 1): void {
+  const normalizedKey = String(key)
+  record[normalizedKey] = (record[normalizedKey] || 0) + amount
+}
+
+function createEmptyHourlyDistribution(): Record<number, number> {
+  const result: Record<number, number> = {}
+  for (let hour = 0; hour < 24; hour += 1) {
+    result[hour] = 0
+  }
+  return result
+}
+
+function createEmptyWeekdayDistribution(): Record<number, number> {
+  const result: Record<number, number> = {}
+  for (let day = 1; day <= 7; day += 1) {
+    result[day] = 0
+  }
+  return result
+}
+
+function isWithinStatsRange(message: Message, range: { startTime?: number; endTime?: number }): boolean {
+  const timestamp = Number(message.createTime || 0)
+  if (!timestamp) return false
+  if (range.startTime && timestamp < range.startTime) return false
+  if (range.endTime && timestamp > range.endTime) return false
+  return true
+}
+
+function getParticipantKey(session: McpSessionRef, message: Message): string {
+  const isSelf = Number(message.isSend) === 1
+  if (!session.sessionId.includes('@chatroom')) {
+    return isSelf ? 'self' : 'other'
+  }
+  return isSelf ? 'self' : normalizeDisplayName(message.senderUsername) || 'unknown'
+}
+
+function getParticipantRole(session: McpSessionRef, message: Message): McpParticipantStatisticsItem['role'] {
+  const isSelf = Number(message.isSend) === 1
+  if (isSelf) return 'self'
+  if (!session.sessionId.includes('@chatroom')) return 'other'
+  return normalizeDisplayName(message.senderUsername) ? 'member' : 'unknown'
+}
+
+function updateParticipantAccumulator(
+  map: Map<string, ParticipantStatsAccumulator>,
+  session: McpSessionRef,
+  message: Message,
+  kind: McpMessageKind
+): void {
+  const key = getParticipantKey(session, message)
+  const role = getParticipantRole(session, message)
+  let item = map.get(key)
+  if (!item) {
+    item = {
+      senderUsername: role === 'self'
+        ? normalizeDisplayName(message.senderUsername)
+        : role === 'other'
+          ? session.sessionId
+          : normalizeDisplayName(message.senderUsername),
+      role,
+      messageCount: 0,
+      sentCount: 0,
+      receivedCount: 0,
+      firstMessageTime: null,
+      lastMessageTime: null,
+      kindCounts: new Map(),
+      sampleMessage: message
+    }
+    map.set(key, item)
+  }
+
+  const timestamp = Number(message.createTime || 0)
+  item.messageCount += 1
+  if (Number(message.isSend) === 1) item.sentCount += 1
+  else item.receivedCount += 1
+  item.kindCounts.set(kind, (item.kindCounts.get(kind) || 0) + 1)
+  if (timestamp && (!item.firstMessageTime || timestamp < item.firstMessageTime)) item.firstMessageTime = timestamp
+  if (timestamp && (!item.lastMessageTime || timestamp > item.lastMessageTime)) item.lastMessageTime = timestamp
+}
+
+async function buildParticipantRanking(
+  session: McpSessionRef,
+  participantMap: Map<string, ParticipantStatsAccumulator>,
+  limit: number
+): Promise<McpParticipantStatisticsItem[]> {
+  const groupMemberMap = session.sessionId.includes('@chatroom')
+    ? await getCachedGroupMemberDisplayMap(session.sessionId)
+    : new Map<string, string>()
+
+  const items = await Promise.all(Array.from(participantMap.entries()).map(async ([key, item]) => {
+    let displayName = '未知发送者'
+    if (item.role === 'self') {
+      displayName = '我'
+    } else if (item.role === 'other') {
+      displayName = '对方'
+    } else if (item.senderUsername) {
+      displayName = groupMemberMap.get(item.senderUsername)
+        || await resolveContactDisplayName(item.senderUsername)
+        || item.senderUsername
+    } else {
+      displayName = key
+    }
+
+    return {
+      senderUsername: item.senderUsername,
+      displayName,
+      role: item.role,
+      messageCount: item.messageCount,
+      sentCount: item.sentCount,
+      receivedCount: item.receivedCount,
+      firstMessageTime: item.firstMessageTime,
+      firstMessageTimeMs: item.firstMessageTime ? toTimestampMs(item.firstMessageTime) : null,
+      lastMessageTime: item.lastMessageTime,
+      lastMessageTimeMs: item.lastMessageTime ? toTimestampMs(item.lastMessageTime) : null,
+      kindCounts: Object.fromEntries(item.kindCounts.entries()) as Partial<Record<McpMessageKind, number>>
+    } satisfies McpParticipantStatisticsItem
+  }))
+
+  return items
+    .sort((a, b) => b.messageCount - a.messageCount || String(a.displayName).localeCompare(String(b.displayName), 'zh-CN'))
+    .slice(0, limit)
+}
+
+async function scanSessionMessages(
+  sessionId: string,
+  range: { startTime?: number; endTime?: number },
+  onMessage: (message: Message) => void | Promise<void>
+): Promise<{ scannedMessages: number; matchedMessages: number; truncated: boolean }> {
+  let cursor: Message | null = null
+  let scannedMessages = 0
+  let matchedMessages = 0
+  let truncated = false
+  const seen = new Set<string>()
+
+  while (scannedMessages < MAX_STATISTICS_SCAN_MESSAGES) {
+    const result = cursor
+      ? await chatService.getMessagesBefore(
+        sessionId,
+        cursor.sortSeq,
+        STATISTICS_SCAN_BATCH_SIZE,
+        cursor.createTime,
+        cursor.localId
+      )
+      : await chatService.getMessages(sessionId, 0, STATISTICS_SCAN_BATCH_SIZE)
+
+    if (!result.success) {
+      mapChatError(result.error)
+    }
+
+    const messages = result.messages || []
+    if (messages.length === 0) break
+
+    for (const message of messages) {
+      const key = `${message.serverId}-${message.localId}-${message.createTime}-${message.sortSeq}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      scannedMessages += 1
+
+      if (isWithinStatsRange(message, range)) {
+        matchedMessages += 1
+        await onMessage(message)
+      }
+
+      if (scannedMessages >= MAX_STATISTICS_SCAN_MESSAGES) {
+        truncated = true
+        break
+      }
+    }
+
+    const oldestMessage = messages[0]
+    if (!oldestMessage || !result.hasMore) break
+
+    if (range.startTime) {
+      const newestInPage = messages[messages.length - 1]
+      if (Number(newestInPage?.createTime || 0) < range.startTime) {
+        break
+      }
+    }
+
+    if (cursor && sameCursor(cursor, oldestMessage)) break
+    cursor = oldestMessage
+  }
+
+  return { scannedMessages, matchedMessages, truncated }
+}
+
+function normalizeKeyword(value: string): string {
+  return String(value || '').trim().toLowerCase()
+}
+
+function countKeywordOccurrences(text: string, keyword: string, matchMode: McpSearchMatchMode): number {
+  const source = normalizeKeyword(text)
+  const target = normalizeKeyword(keyword)
+  if (!source || !target) return 0
+
+  if (matchMode === 'exact') {
+    return source === target ? 1 : 0
+  }
+
+  let count = 0
+  let index = source.indexOf(target)
+  while (index >= 0) {
+    count += 1
+    index = source.indexOf(target, index + Math.max(1, target.length))
+  }
+  return count
+}
+
+function createKeywordExcerpt(text: string, keyword: string): string {
+  const source = String(text || '')
+  const lowerSource = source.toLowerCase()
+  const lowerKeyword = keyword.toLowerCase()
+  const matchIndex = lowerSource.indexOf(lowerKeyword)
+  if (matchIndex < 0) return compactText(source, 180) || `[${keyword}]`
+  return createExcerpt(source, matchIndex, keyword.length)
+}
+
 async function getSessionCatalog(): Promise<{ items: McpSessionItem[]; map: Map<string, McpSessionRef> }> {
   const result = await chatService.getSessions()
   if (!result.success) {
@@ -1724,6 +2027,208 @@ export class McpReadService {
     }
   }
 
+  async getSessionStatistics(rawArgs: GetSessionStatisticsArgs, reporter?: McpStreamReporter): Promise<McpSessionStatisticsPayload> {
+    const args = getSessionStatisticsArgsSchema.safeParse(rawArgs)
+    if (!args.success) {
+      throw new McpToolError('BAD_REQUEST', 'Invalid get_session_statistics arguments.', args.error.message)
+    }
+
+    const [{ items: sessions, map: sessionMap }, { items: contacts, map: contactMap }] = await Promise.all([
+      getSessionCatalog(),
+      getContactCatalog()
+    ])
+    const session = await resolveSessionRefStrictWithProgress(args.data.sessionId, sessions, sessionMap, contacts, contactMap, reporter)
+    const range = normalizeStatsRange(args.data.startTime, args.data.endTime)
+    const participantLimit = Math.min(args.data.participantLimit ?? 20, MAX_SEARCH_LIMIT)
+    const includeSamples = Boolean(args.data.includeSamples)
+    const kindCounts: Partial<Record<McpMessageKind, number>> = {}
+    const messageTypeCounts: Record<number, number> = {}
+    const hourlyDistribution = createEmptyHourlyDistribution()
+    const weekdayDistribution = createEmptyWeekdayDistribution()
+    const monthlyDistribution: Record<string, number> = {}
+    const activeDaySet = new Set<string>()
+    const participantMap = new Map<string, ParticipantStatsAccumulator>()
+    const sampleMessages: Message[] = []
+    let totalMessages = 0
+    let sentMessages = 0
+    let receivedMessages = 0
+    let firstMessageTime: number | null = null
+    let lastMessageTime: number | null = null
+
+    await reportProgress(reporter, {
+      stage: 'scanning_messages',
+      message: `Scanning messages for statistics in ${session.displayName}.`,
+      sessionsScanned: 1
+    })
+
+    const scanResult = await scanSessionMessages(session.sessionId, range, (message) => {
+      const timestamp = Number(message.createTime || 0)
+      const kind = detectMessageKind(message)
+      totalMessages += 1
+      if (Number(message.isSend) === 1) sentMessages += 1
+      else receivedMessages += 1
+      if (timestamp && (!firstMessageTime || timestamp < firstMessageTime)) firstMessageTime = timestamp
+      if (timestamp && (!lastMessageTime || timestamp > lastMessageTime)) lastMessageTime = timestamp
+      incrementRecord(kindCounts as Record<string, number>, kind)
+      incrementRecord(messageTypeCounts as unknown as Record<string, number>, Number(message.localType || 0))
+      incrementRecord(hourlyDistribution as unknown as Record<string, number>, getLocalHour(timestamp))
+      incrementRecord(weekdayDistribution as unknown as Record<string, number>, getLocalWeekday(timestamp))
+      incrementRecord(monthlyDistribution, formatLocalMonthKey(timestamp))
+      activeDaySet.add(formatLocalDateKey(timestamp))
+      updateParticipantAccumulator(participantMap, session, message, kind)
+      if (includeSamples && sampleMessages.length < MAX_STATISTICS_SAMPLES) {
+        sampleMessages.push(message)
+      }
+    })
+
+    const participantRankings = await buildParticipantRanking(session, participantMap, participantLimit)
+    const samples = includeSamples
+      ? await normalizeMessages(session.sessionId, sampleMessages, { includeMediaPaths: false, includeRaw: false })
+      : undefined
+
+    const payload: McpSessionStatisticsPayload = {
+      session,
+      totalMessages,
+      sentMessages,
+      receivedMessages,
+      firstMessageTime,
+      firstMessageTimeMs: firstMessageTime ? toTimestampMs(firstMessageTime) : null,
+      lastMessageTime,
+      lastMessageTimeMs: lastMessageTime ? toTimestampMs(lastMessageTime) : null,
+      activeDays: activeDaySet.size,
+      kindCounts,
+      messageTypeCounts,
+      hourlyDistribution,
+      weekdayDistribution,
+      monthlyDistribution,
+      participantRankings,
+      samples,
+      scannedMessages: scanResult.scannedMessages,
+      matchedMessages: scanResult.matchedMessages,
+      truncated: scanResult.truncated,
+      timeRange: buildTimeRange(range.startTime, range.endTime)
+    }
+
+    await reportPartial(reporter, 'get_session_statistics', payload)
+    return payload
+  }
+
+  async getKeywordStatistics(rawArgs: GetKeywordStatisticsArgs, reporter?: McpStreamReporter): Promise<McpKeywordStatisticsPayload> {
+    const args = getKeywordStatisticsArgsSchema.safeParse(rawArgs)
+    if (!args.success) {
+      throw new McpToolError('BAD_REQUEST', 'Invalid get_keyword_statistics arguments.', args.error.message)
+    }
+
+    const [{ items: sessions, map: sessionMap }, { items: contacts, map: contactMap }] = await Promise.all([
+      getSessionCatalog(),
+      getContactCatalog()
+    ])
+    const session = await resolveSessionRefStrictWithProgress(args.data.sessionId, sessions, sessionMap, contacts, contactMap, reporter)
+    const range = normalizeStatsRange(args.data.startTime, args.data.endTime)
+    const participantLimit = Math.min(args.data.participantLimit ?? 20, MAX_SEARCH_LIMIT)
+    const matchMode = args.data.matchMode ?? 'substring'
+    const normalizedKeywords = Array.from(new Set(args.data.keywords.map((keyword) => keyword.trim()).filter(Boolean)))
+    const keywordState = new Map<string, {
+      hitCount: number
+      occurrenceCount: number
+      firstHitTime: number | null
+      lastHitTime: number | null
+      participantMap: Map<string, ParticipantStatsAccumulator>
+      hourlyDistribution: Record<number, number>
+      monthlyDistribution: Record<string, number>
+      samples: Array<{ keyword: string; excerpt: string; message: Message }>
+    }>()
+    const matchedMessageKeys = new Set<string>()
+
+    for (const keyword of normalizedKeywords) {
+      keywordState.set(keyword, {
+        hitCount: 0,
+        occurrenceCount: 0,
+        firstHitTime: null,
+        lastHitTime: null,
+        participantMap: new Map(),
+        hourlyDistribution: createEmptyHourlyDistribution(),
+        monthlyDistribution: {},
+        samples: []
+      })
+    }
+
+    await reportProgress(reporter, {
+      stage: 'scanning_messages',
+      message: `Scanning messages for ${normalizedKeywords.length} keyword statistics in ${session.displayName}.`,
+      sessionsScanned: 1
+    })
+
+    const scanResult = await scanSessionMessages(session.sessionId, range, (message) => {
+      const text = String(message.parsedContent || message.rawContent || '')
+      const timestamp = Number(message.createTime || 0)
+      const messageKey = `${message.serverId}-${message.localId}-${message.createTime}-${message.sortSeq}`
+      const kind = detectMessageKind(message)
+
+      for (const keyword of normalizedKeywords) {
+        const occurrences = countKeywordOccurrences(text, keyword, matchMode)
+        if (occurrences <= 0) continue
+
+        const state = keywordState.get(keyword)
+        if (!state) continue
+
+        state.hitCount += 1
+        state.occurrenceCount += occurrences
+        if (timestamp && (!state.firstHitTime || timestamp < state.firstHitTime)) state.firstHitTime = timestamp
+        if (timestamp && (!state.lastHitTime || timestamp > state.lastHitTime)) state.lastHitTime = timestamp
+        incrementRecord(state.hourlyDistribution as unknown as Record<string, number>, getLocalHour(timestamp))
+        incrementRecord(state.monthlyDistribution, formatLocalMonthKey(timestamp))
+        updateParticipantAccumulator(state.participantMap, session, message, kind)
+        matchedMessageKeys.add(messageKey)
+
+        if (state.samples.length < MAX_STATISTICS_SAMPLES) {
+          state.samples.push({
+            keyword,
+            excerpt: createKeywordExcerpt(text, keyword),
+            message
+          })
+        }
+      }
+    })
+
+    const keywords: McpKeywordStatisticsItem[] = []
+    for (const [keyword, state] of keywordState.entries()) {
+      const participantRankings = await buildParticipantRanking(session, state.participantMap, participantLimit)
+      const samples: McpKeywordStatisticsSample[] = await Promise.all(state.samples.map(async (sample) => ({
+        keyword: sample.keyword,
+        excerpt: sample.excerpt,
+        message: await normalizeMessage(session.sessionId, sample.message, { includeMediaPaths: false, includeRaw: false })
+      })))
+
+      keywords.push({
+        keyword,
+        matchMode,
+        hitCount: state.hitCount,
+        occurrenceCount: state.occurrenceCount,
+        firstHitTime: state.firstHitTime,
+        firstHitTimeMs: state.firstHitTime ? toTimestampMs(state.firstHitTime) : null,
+        lastHitTime: state.lastHitTime,
+        lastHitTimeMs: state.lastHitTime ? toTimestampMs(state.lastHitTime) : null,
+        participantRankings,
+        hourlyDistribution: state.hourlyDistribution,
+        monthlyDistribution: state.monthlyDistribution,
+        samples
+      })
+    }
+
+    const payload: McpKeywordStatisticsPayload = {
+      session,
+      keywords,
+      scannedMessages: scanResult.scannedMessages,
+      matchedMessages: matchedMessageKeys.size,
+      truncated: scanResult.truncated,
+      timeRange: buildTimeRange(range.startTime, range.endTime)
+    }
+
+    await reportPartial(reporter, 'get_keyword_statistics', payload)
+    return payload
+  }
+
   async getGlobalStatistics(rawArgs: z.infer<typeof analyticsTimeRangeArgsSchema>): Promise<McpGlobalStatisticsPayload> {
     const args = analyticsTimeRangeArgsSchema.safeParse(rawArgs)
     if (!args.success) {
@@ -1962,6 +2467,17 @@ export class McpReadService {
         let indexedMessages = 0
         let indexedTruncated = false
         const semanticQuery = args.data.semanticQuery || args.data.query
+        const vectorSearch: McpSearchVectorStatus = {
+          requested: matchMode !== 'exact' && Boolean(semanticQuery),
+          attempted: false,
+          providerAvailable: false,
+          indexComplete: false,
+          hitCount: 0,
+          indexedMessages: 0,
+          vectorizedMessages: 0
+        }
+        const vectorSkippedReasons = new Set<string>()
+        const vectorErrors = new Set<string>()
         const hitKey = (hit: Pick<SearchRawHit, 'session' | 'message'>) => `${hit.session.sessionId}:${hit.message.localId}:${hit.message.createTime}:${hit.message.sortSeq}`
         const addIndexedRawHit = (hit: SearchRawHit) => {
           const key = hitKey(hit)
@@ -2001,12 +2517,21 @@ export class McpReadService {
           indexedMessages += indexed.indexedCount
           indexedTruncated = indexedTruncated || indexed.truncated
 
-          const hybridHits = [...indexed.hits]
+          const hybridHits: Array<(typeof indexed.hits)[number] & { retrievalSource: McpSearchRetrievalSource }> = indexed.hits.map((hit) => ({
+            ...hit,
+            retrievalSource: 'keyword_index' as const
+          }))
           const vectorState = chatSearchIndexService.getSessionVectorIndexState(session.sessionId)
-          const shouldRunVectorSearch = matchMode !== 'exact'
-            && vectorState.isVectorComplete
+          vectorSearch.providerAvailable = vectorSearch.providerAvailable || Boolean(vectorState.vectorProviderAvailable)
+          vectorSearch.indexComplete = vectorSearch.indexComplete || vectorState.isVectorComplete
+          vectorSearch.indexedMessages += vectorState.indexedCount
+          vectorSearch.vectorizedMessages += vectorState.vectorizedCount
+          vectorSearch.model = vectorState.vectorModelName || vectorState.vectorModel || vectorSearch.model
+
+          const shouldRunVectorSearch = vectorSearch.requested && vectorState.isVectorComplete
           if (shouldRunVectorSearch) {
             try {
+              vectorSearch.attempted = true
               const vectorIndexed = await chatSearchIndexService.searchSessionByVector({
                 sessionId: session.sessionId,
                 query: semanticQuery,
@@ -2027,10 +2552,24 @@ export class McpReadService {
               })
 
               indexedTruncated = indexedTruncated || vectorIndexed.truncated
-              hybridHits.push(...vectorIndexed.hits)
+              vectorSearch.hitCount += vectorIndexed.hits.length
+              vectorSearch.indexedMessages = Math.max(vectorSearch.indexedMessages, vectorIndexed.indexedCount)
+              vectorSearch.vectorizedMessages = Math.max(vectorSearch.vectorizedMessages, vectorIndexed.vectorizedCount)
+              vectorSearch.model = vectorIndexed.model || vectorSearch.model
+              hybridHits.push(...vectorIndexed.hits.map((hit) => ({
+                ...hit,
+                retrievalSource: 'vector_index' as const
+              })))
             } catch (error) {
+              vectorErrors.add(compactText(String(error), 160))
               console.warn('[McpReadService] Local vector search failed, keeping keyword results:', error)
             }
+          } else if (!vectorSearch.requested) {
+            vectorSkippedReasons.add(matchMode === 'exact' ? 'exact_match_mode' : 'empty_semantic_query')
+          } else if (!vectorState.vectorProviderAvailable) {
+            vectorSkippedReasons.add('vector_provider_unavailable')
+          } else if (!vectorState.isVectorComplete) {
+            vectorSkippedReasons.add('vector_index_incomplete')
           }
 
           for (const hit of hybridHits) {
@@ -2049,9 +2588,17 @@ export class McpReadService {
               message: hit.message,
               matchedField: hit.matchedField,
               excerpt: hit.excerpt,
-              score: hit.score
+              score: hit.score,
+              retrievalSource: hit.retrievalSource
             })
           }
+        }
+
+        if (vectorSkippedReasons.size > 0) {
+          vectorSearch.skippedReason = Array.from(vectorSkippedReasons).join(',')
+        }
+        if (vectorErrors.size > 0) {
+          vectorSearch.error = Array.from(vectorErrors).join('; ')
         }
 
         indexedRawHits.push(...indexedRawHitMap.values())
@@ -2064,7 +2611,8 @@ export class McpReadService {
           }),
           excerpt: hit.excerpt,
           matchedField: hit.matchedField,
-          score: hit.score
+          score: hit.score,
+          retrievalSource: hit.retrievalSource
         })))
         const sessionSummaries = buildSearchSessionSummaries(hits)
 
@@ -2080,7 +2628,8 @@ export class McpReadService {
             ready: true,
             indexedSessions: targetSessions.length,
             indexedMessages
-          }
+          },
+          vectorSearch
         })
 
         return {
@@ -2095,7 +2644,8 @@ export class McpReadService {
             ready: true,
             indexedSessions: targetSessions.length,
             indexedMessages
-          }
+          },
+          vectorSearch
         }
       } catch (error) {
         console.warn('[McpReadService] Indexed search failed, falling back to scan:', error)
@@ -2114,6 +2664,23 @@ export class McpReadService {
     let truncated = false
     let bestScore = Number.NEGATIVE_INFINITY
     let hitTargetReached = false
+    const scanVectorStates = exhaustiveTargetedSearch
+      ? targetSessions.map((session) => chatSearchIndexService.getSessionVectorIndexState(session.sessionId))
+      : []
+    const scanVectorSearch: McpSearchVectorStatus | undefined = exhaustiveTargetedSearch
+      ? {
+        requested: matchMode !== 'exact' && Boolean(args.data.semanticQuery || args.data.query),
+        attempted: false,
+        providerAvailable: scanVectorStates.some((state) => Boolean(state.vectorProviderAvailable)),
+        indexComplete: scanVectorStates.some((state) => state.isVectorComplete),
+        hitCount: 0,
+        indexedMessages: scanVectorStates.reduce((sum, state) => sum + state.indexedCount, 0),
+        vectorizedMessages: scanVectorStates.reduce((sum, state) => sum + state.vectorizedCount, 0),
+        model: scanVectorStates.find((state) => state.vectorModelName || state.vectorModel)?.vectorModelName
+          || scanVectorStates.find((state) => state.vectorModel)?.vectorModel,
+        skippedReason: 'indexed_search_unavailable'
+      }
+      : undefined
     await reportProgress(reporter, {
       stage: 'scanning_messages',
       message: `Searching ${targetSessions.length} sessions for "${args.data.query}".`,
@@ -2179,7 +2746,8 @@ export class McpReadService {
             message,
             matchedField: match.matchedField,
             excerpt: match.excerpt,
-            score: match.score
+            score: match.score,
+            retrievalSource: 'scan'
           })
           roundBestScore = Math.max(roundBestScore, match.score)
           bestScore = Math.max(bestScore, match.score)
@@ -2226,7 +2794,8 @@ export class McpReadService {
       }),
       excerpt: hit.excerpt,
       matchedField: hit.matchedField,
-      score: hit.score
+      score: hit.score,
+      retrievalSource: hit.retrievalSource
     })))
     const sessionSummaries = buildSearchSessionSummaries(hits)
     await reportPartial(reporter, 'search_messages', {
@@ -2244,7 +2813,8 @@ export class McpReadService {
           indexedMessages: 0,
           error: 'Indexed search unavailable; used scan fallback.'
         }
-        : undefined
+        : undefined,
+      vectorSearch: scanVectorSearch
     })
 
     return {
@@ -2262,7 +2832,8 @@ export class McpReadService {
           indexedMessages: 0,
           error: 'Indexed search unavailable; used scan fallback.'
         }
-        : undefined
+        : undefined,
+      vectorSearch: scanVectorSearch
     }
   }
 

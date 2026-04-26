@@ -743,7 +743,8 @@
 
   .qa-evidence-card {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: 32px minmax(0, 1fr) auto;
+    align-items: flex-start;
     gap: 6px 12px;
     padding: 10px 12px;
     border: 1px solid color-mix(in srgb, var(--border-color) 40%, transparent);
@@ -757,9 +758,37 @@
     }
   }
 
+  .qa-evidence-avatar {
+    width: 32px;
+    height: 32px;
+    grid-row: 1 / span 2;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--primary) 12%, var(--bg-tertiary));
+    color: var(--primary);
+    font-size: 13px;
+    font-weight: 700;
+    flex-shrink: 0;
+
+    img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+  }
+
+  .qa-evidence-card-body {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
   .qa-evidence-card-meta {
     display: flex;
-    grid-column: 1 / -1;
     align-items: center;
     flex-wrap: wrap;
     gap: 6px;
@@ -785,6 +814,62 @@
     overflow: hidden;
   }
 
+  .qa-evidence-media {
+    width: fit-content;
+    max-width: 100%;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid color-mix(in srgb, var(--border-color) 60%, transparent);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--bg-primary) 70%, transparent);
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.3;
+
+    &.image {
+      padding: 0;
+      overflow: hidden;
+      border: none;
+      background: transparent;
+      cursor: zoom-in;
+
+      img {
+        display: block;
+        max-width: 168px;
+        max-height: 128px;
+        border-radius: 8px;
+        object-fit: contain;
+        background: color-mix(in srgb, var(--bg-tertiary) 70%, transparent);
+      }
+
+      &.emoji img {
+        max-width: 104px;
+        max-height: 104px;
+      }
+    }
+
+    &.loading,
+    &.unavailable,
+    &.pill {
+      padding: 7px 9px;
+    }
+
+    &.compact.image img {
+      max-width: 220px;
+      max-height: 180px;
+    }
+
+    &.compact.image.emoji img {
+      max-width: 132px;
+      max-height: 132px;
+    }
+
+    .spinner {
+      animation: spin 1s linear infinite;
+    }
+  }
+
   .qa-evidence-actions {
     display: flex;
     align-items: center;
@@ -792,6 +877,7 @@
     flex-wrap: wrap;
     gap: 6px;
     margin: 0;
+    grid-column: 3;
 
     button {
       display: inline-flex;
@@ -929,6 +1015,9 @@
   }
 
   .qa-context-message {
+    display: grid;
+    grid-template-columns: 32px minmax(0, 1fr);
+    gap: 10px;
     padding: 11px 13px;
     border: 1px solid var(--border-color);
     border-radius: 13px;
@@ -948,6 +1037,10 @@
       white-space: pre-wrap;
       word-break: break-word;
     }
+  }
+
+  .qa-context-message-content {
+    min-width: 0;
   }
 
   .qa-context-message-meta {
