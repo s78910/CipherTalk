@@ -630,6 +630,28 @@ export async function setAiMessageLimit(limit: number): Promise<void> {
   await config.set('aiMessageLimit', limit)
 }
 
+// 获取会话问答 Agent 每轮决策输出 token 上限
+export async function getAiAgentDecisionMaxTokens(): Promise<number> {
+  const value = await config.get('aiAgentDecisionMaxTokens')
+  return (value as number) || 2048
+}
+
+// 设置会话问答 Agent 每轮决策输出 token 上限
+export async function setAiAgentDecisionMaxTokens(maxTokens: number): Promise<void> {
+  await config.set('aiAgentDecisionMaxTokens', maxTokens)
+}
+
+// 获取会话问答最终回答输出 token 上限
+export async function getAiAgentAnswerMaxTokens(): Promise<number> {
+  const value = await config.get('aiAgentAnswerMaxTokens')
+  return (value as number) || 8192
+}
+
+// 设置会话问答最终回答输出 token 上限
+export async function setAiAgentAnswerMaxTokens(maxTokens: number): Promise<void> {
+  await config.set('aiAgentAnswerMaxTokens', maxTokens)
+}
+
 export async function getAiEmbeddingModelProfile(): Promise<string> {
   const value = await config.get(CONFIG_KEYS.AI_EMBEDDING_MODEL_PROFILE)
   return (value as string) || 'bge-large-zh-v1.5-int8'

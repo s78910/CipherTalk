@@ -105,6 +105,8 @@ export interface SessionQAOptions {
   apiKey?: string
   model?: string
   enableThinking?: boolean
+  agentDecisionMaxTokens?: number
+  agentAnswerMaxTokens?: number
 }
 
 export interface SessionQAResult {
@@ -948,6 +950,8 @@ ${detailInstructions[detail as keyof typeof detailInstructions] || detailInstruc
 
     const provider = this.getProvider(options.provider, options.apiKey)
     const model = options.model || provider.models[0]
+    const agentDecisionMaxTokens = Number(options.agentDecisionMaxTokens || this.configService.get('aiAgentDecisionMaxTokens') || 2048)
+    const agentAnswerMaxTokens = Number(options.agentAnswerMaxTokens || this.configService.get('aiAgentAnswerMaxTokens') || 8192)
 
     const result = await answerSessionQuestionWithAgent({
       sessionId: options.sessionId,
@@ -959,6 +963,8 @@ ${detailInstructions[detail as keyof typeof detailInstructions] || detailInstruc
       provider,
       model,
       enableThinking: options.enableThinking,
+      agentDecisionMaxTokens,
+      agentAnswerMaxTokens,
       onChunk,
       onProgress
     })

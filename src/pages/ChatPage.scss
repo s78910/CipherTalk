@@ -99,6 +99,7 @@
         }
 
         .refresh-btn {
+          position: relative;
           width: 32px;
           height: 32px;
           padding: 0;
@@ -121,6 +122,27 @@
           &:disabled {
             opacity: 0.4;
             cursor: not-allowed;
+          }
+
+          &[data-tooltip]:hover::after {
+            content: attr(data-tooltip);
+            position: absolute;
+            top: calc(100% + 8px);
+            right: 0;
+            width: max-content;
+            max-width: 260px;
+            padding: 6px 9px;
+            border-radius: 6px;
+            background: var(--bg-tooltip, rgba(0, 0, 0, 0.82));
+            color: #fff;
+            font-size: 11px;
+            white-space: pre-line;
+            writing-mode: horizontal-tb;
+            word-break: keep-all;
+            overflow-wrap: anywhere;
+            pointer-events: none;
+            z-index: 2147483647;
+            box-shadow: 0 8px 22px rgba(0, 0, 0, 0.22);
           }
 
           .spin {
@@ -246,6 +268,8 @@
       -webkit-app-region: no-drag;
 
       .message-header {
+        position: relative;
+        z-index: 1000;
         height: auto;
         padding: 0 24px;
         padding-top: calc(var(--window-chrome-height) + 6px);
@@ -305,8 +329,10 @@
           align-items: center;
           gap: 8px;
           -webkit-app-region: no-drag;
+          overflow: visible;
 
           .icon-btn {
+            position: relative;
             width: 32px;
             height: 32px;
             border: none;
@@ -335,6 +361,31 @@
             &:disabled {
               opacity: 0.5;
               cursor: not-allowed;
+            }
+
+            &[data-tooltip]:hover::after {
+              content: attr(data-tooltip);
+              position: absolute;
+              top: calc(100% + 8px);
+              left: 50%;
+              transform: translateX(-50%);
+              width: max-content;
+              min-width: 64px;
+              max-width: 280px;
+              padding: 6px 9px;
+              border-radius: 6px;
+              background: var(--bg-tooltip, rgba(0, 0, 0, 0.82));
+              color: #fff;
+              font-size: 11px;
+              line-height: 1.4;
+              white-space: pre-line;
+              writing-mode: horizontal-tb;
+              word-break: keep-all;
+              overflow-wrap: anywhere;
+              text-align: center;
+              pointer-events: none;
+              z-index: 2147483647;
+              box-shadow: 0 8px 22px rgba(0, 0, 0, 0.22);
             }
 
             .spin {
@@ -394,6 +445,112 @@
             }
           }
 
+          .vector-index-action-wrapper {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+          }
+
+          .vector-index-hover-panel {
+            position: absolute;
+            top: calc(100% + 10px);
+            right: 50%;
+            width: 310px;
+            max-width: min(310px, calc(100vw - 24px));
+            padding: 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            background: var(--card-bg);
+            color: var(--text-primary);
+            box-shadow: 0 16px 36px rgba(0, 0, 0, 0.24);
+            opacity: 0;
+            visibility: hidden;
+            transform: translate(50%, -4px);
+            transition: opacity 0.16s ease, transform 0.16s ease, visibility 0.16s ease;
+            pointer-events: none;
+            z-index: 2147483647;
+            writing-mode: horizontal-tb;
+
+            &::before {
+              content: '';
+              position: absolute;
+              top: -7px;
+              left: 50%;
+              width: 12px;
+              height: 12px;
+              border-left: 1px solid var(--border-color);
+              border-top: 1px solid var(--border-color);
+              background: var(--card-bg);
+              transform: translateX(-50%) rotate(45deg);
+            }
+          }
+
+          .vector-index-action-wrapper:hover .vector-index-hover-panel {
+            opacity: 1;
+            visibility: visible;
+            transform: translate(50%, 0);
+          }
+
+          .vector-hover-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 9px;
+            font-size: 12px;
+            font-weight: 700;
+
+            strong {
+              color: var(--primary);
+            }
+          }
+
+          .vector-hover-progress {
+            height: 7px;
+            border-radius: 999px;
+            background: var(--bg-tertiary);
+            overflow: hidden;
+            margin-bottom: 10px;
+
+            span {
+              display: block;
+              height: 100%;
+              min-width: 2px;
+              border-radius: inherit;
+              background: linear-gradient(90deg, var(--primary), #0ea5e9);
+              transition: width 0.2s ease;
+            }
+          }
+
+          .vector-hover-rows {
+            display: grid;
+            gap: 6px;
+
+            div {
+              display: grid;
+              grid-template-columns: 52px minmax(0, 1fr);
+              gap: 8px;
+              align-items: start;
+              font-size: 11px;
+              line-height: 1.4;
+
+              span {
+                color: var(--text-tertiary);
+              }
+
+              strong {
+                color: var(--text-primary);
+                font-weight: 500;
+                word-break: break-word;
+              }
+
+              &.error strong {
+                color: #dc2626;
+              }
+            }
+          }
+
           // 日期选择器包装器
           .date-picker-wrapper {
             position: relative;
@@ -407,6 +564,7 @@
         display: flex;
         overflow: hidden;
         position: relative;
+        z-index: 1;
       }
 
       .message-list {
@@ -1092,6 +1250,8 @@
 }
 
 .message-header {
+  position: relative;
+  z-index: 1000;
   padding: 16px 20px;
   display: flex;
   align-items: center;

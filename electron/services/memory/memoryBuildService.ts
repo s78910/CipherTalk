@@ -24,7 +24,8 @@ type StandardizedBlockMessage = {
   content?: string
 }
 
-const MESSAGE_MEMORY_BATCH_SIZE = 500
+const MEMORY_PROGRESS_BATCH_SIZE = 50
+const MEMORY_PROGRESS_MIN_INTERVAL_MS = 250
 const MEMORY_TEXT_LIMIT = 8000
 
 function compactText(value: string, limit: number): string {
@@ -47,6 +48,12 @@ function blockMemoryUid(block: AnalysisMemoryBlockRow): string {
 
 function factMemoryUid(fact: AnalysisMemoryFactRow): string {
   return `fact:${fact.sessionId}:${fact.runId}:${fact.factType}:${fact.factKey || fact.id}:${fact.id}`
+}
+
+function shouldReportProgress(processed: number, total: number, lastReportAt: number): boolean {
+  if (processed >= total) return true
+  if (processed % MEMORY_PROGRESS_BATCH_SIZE === 0) return true
+  return Date.now() - lastReportAt >= MEMORY_PROGRESS_MIN_INTERVAL_MS
 }
 
 function buildSessionRefs(sessionId: string): Pick<MemoryItemInput, 'sessionId' | 'contactId' | 'groupId'> {
@@ -301,13 +308,15 @@ export class MemoryBuildService {
     onProgress?: (event: SessionMemoryBuildProgressEvent) => void | Promise<void>
   ): Promise<number> {
     let count = 0
+    let lastReportAt = Date.now()
     for (let index = 0; index < messages.length; index += 1) {
       memoryDatabase.upsertMemoryItem(buildMessageMemoryInput(messages[index]))
       count += 1
       state.processedCount += 1
       state.messageCount = count
 
-      if (count % MESSAGE_MEMORY_BATCH_SIZE === 0 || count === messages.length) {
+      if (shouldReportProgress(count, messages.length, lastReportAt)) {
+        lastReportAt = Date.now()
         await this.report(state, 'building_messages', 'running', `已写入 ${count}/${messages.length} 条消息记忆`, onProgress)
       }
     }
@@ -321,13 +330,21 @@ export class MemoryBuildService {
   ): Promise<number> {
     await this.report(state, 'building_blocks', 'running', `正在写入 ${blocks.length} 个对话片段记忆`, onProgress)
     let count = 0
-    for (const block of blocks) {
+    let lastReportAt = Date.now()
+    for (let index = 0; index < blocks.length; index += 1) {
+      const block = blocks[index]
       if (block.renderedText.trim()) {
         memoryDatabase.upsertMemoryItem(buildBlockMemoryInput(block))
         count += 1
       }
       state.processedCount += 1
       state.blockCount = count
+
+      const processed = index + 1
+      if (shouldReportProgress(processed, blocks.length, lastReportAt)) {
+        lastReportAt = Date.now()
+        await this.report(state, 'building_blocks', 'running', `已处理 ${processed}/${blocks.length} 个对话片段，写入 ${count} 个`, onProgress)
+      }
     }
     await this.report(state, 'building_blocks', 'running', `已写入 ${count}/${blocks.length} 个对话片段记忆`, onProgress)
     return count
@@ -340,13 +357,21 @@ export class MemoryBuildService {
   ): Promise<number> {
     await this.report(state, 'building_facts', 'running', `正在写入 ${facts.length} 条事实记忆`, onProgress)
     let count = 0
-    for (const fact of facts) {
+    let lastReportAt = Date.now()
+    for (let index = 0; index < facts.length; index += 1) {
+      const fact = facts[index]
       if (fact.displayText.trim()) {
         memoryDatabase.upsertMemoryItem(buildFactMemoryInput(fact))
         count += 1
       }
       state.processedCount += 1
       state.factCount = count
+
+      const processed = index + 1
+      if (shouldReportProgress(processed, facts.length, lastReportAt)) {
+        lastReportAt = Date.now()
+        await this.report(state, 'building_facts', 'running', `已处理 ${processed}/${facts.length} 条事实，写入 ${count} 条`, onProgress)
+      }
     }
     await this.report(state, 'building_facts', 'running', `已写入 ${count}/${facts.length} 条事实记忆`, onProgress)
     return count

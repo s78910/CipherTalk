@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { createPortal } from 'react-dom'
-import { Search, MessageSquare, AlertCircle, Loader2, RefreshCw, X, ChevronDown, Info, Calendar, Database, Hash, Image as ImageIcon, Play, PlayCircle, Video, Copy, ZoomIn, CheckSquare, Check, Edit, Link, Sparkles, FileText, FileArchive, Users, Mic, CheckCircle, XCircle, Download, Phone, Aperture, MapPin, UserRound, BrainCircuit, Radar, BadgeCheck, TriangleAlert } from 'lucide-react'
+import { Search, MessageSquare, AlertCircle, Loader2, RefreshCw, X, ChevronDown, Info, Calendar, Database, Hash, Image as ImageIcon, Play, PlayCircle, Video, Copy, ZoomIn, CheckSquare, Check, Edit, Link, Sparkles, FileText, FileArchive, Users, Mic, CheckCircle, XCircle, Download, Phone, Aperture, MapPin, UserRound, BrainCircuit, Radar, BadgeCheck, TriangleAlert, Origami } from 'lucide-react'
 import { Qwen } from '@lobehub/icons'
 import { useChatStore } from '../stores/chatStore'
 import { useUpdateStatusStore } from '../stores/updateStatusStore'
@@ -517,7 +517,7 @@ function ChatPage(_props: ChatPageProps) {
       }))
 
       if (event.status === 'completed') {
-        void refreshMemoryBuildState(event.sessionId)
+        setMemoryBuildProgress(null)
       } else if (event.status === 'failed') {
         showTopToast(event.message || '会话记忆构建失败', false)
         void refreshMemoryBuildState(event.sessionId)
@@ -559,6 +559,27 @@ function ChatPage(_props: ChatPageProps) {
   const vectorButtonTitle = vectorIndexMetaTitle
     ? `${vectorButtonStatusTitle}\n${vectorIndexMetaTitle}`
     : vectorButtonStatusTitle
+  const vectorIndexStageLabelMap: Record<SessionVectorIndexProgressEvent['stage'], string> = {
+    preparing: '准备',
+    downloading_model: '下载模型',
+    indexing_messages: '更新索引',
+    vectorizing_messages: '生成向量',
+    completed: '完成'
+  }
+  const vectorIndexStageLabel = vectorIndexProgress
+    ? vectorIndexStageLabelMap[vectorIndexProgress.stage] || vectorIndexProgress.stage
+    : vectorIndexState?.isVectorComplete ? '完成' : '待处理'
+  const vectorIndexHoverRows = [
+    { label: '状态', value: vectorButtonStatusTitle },
+    { label: '阶段', value: vectorIndexStageLabel },
+    { label: '进度', value: `${vectorIndexDone}/${vectorIndexTotal || 0} (${vectorIndexPercent}%)` },
+    { label: '待处理', value: `${Math.max(0, vectorIndexState?.pendingCount || 0)} 条` },
+    { label: '模型', value: vectorIndexState?.vectorModelName || vectorIndexState?.vectorModel || vectorIndexProgress?.vectorModelName || vectorIndexProgress?.vectorModel || '未知' },
+    { label: '维度', value: String(vectorIndexState?.vectorDim || vectorIndexProgress?.vectorDim || '未知') },
+    { label: '后端', value: vectorIndexState?.vectorStoreName || vectorIndexProgress?.vectorStoreName || '未知' },
+    vectorIndexProgress?.message ? { label: '消息', value: vectorIndexProgress.message } : null,
+    vectorIndexState?.vectorProviderError ? { label: '错误', value: vectorIndexState.vectorProviderError } : null
+  ].filter((item): item is { label: string; value: string } => Boolean(item && item.value))
 
   const memoryBuildTotal = memoryBuildProgress?.totalCount || memoryBuildState?.totalCount || 0
   const memoryBuildDone = memoryBuildProgress?.processedCount ?? memoryBuildState?.processedCount ?? 0
@@ -2068,7 +2089,7 @@ function ChatPage(_props: ChatPageProps) {
               className="icon-btn refresh-btn"
               onClick={handleRefresh}
               disabled={isLoadingSessions}
-              title="刷新会话列表"
+              data-tooltip="刷新会话列表"
             >
               <RefreshCw size={16} className={isLoadingSessions || isUpdating ? 'spin' : ''} />
             </button>
@@ -2141,41 +2162,59 @@ function ChatPage(_props: ChatPageProps) {
                   className="icon-btn refresh-messages-btn"
                   onClick={handleRefreshMessages}
                   disabled={isRefreshingMessages || isLoadingMessages}
-                  title="刷新消息"
+                  data-tooltip="刷新消息"
                 >
                   <RefreshCw size={18} className={isRefreshingMessages || isUpdating ? 'spin' : ''} />
                 </button>
-                <button
-                  className={`icon-btn vector-index-btn ${isPreparingVectorIndex ? 'running active' : ''} ${vectorIndexState?.isVectorComplete ? 'complete' : ''} ${hasPendingVectorMessages ? 'pending' : ''}`}
-                  onClick={handleVectorIndexClick}
-                  disabled={!currentSessionId || (isVectorProviderUnavailable && !isPreparingVectorIndex)}
-                  title={vectorButtonTitle}
-                  aria-label={isPreparingVectorIndex ? '取消向量化' : '增量向量化当前聊天'}
-                >
-                  {isVectorProviderUnavailable && !isPreparingVectorIndex ? (
-                    <TriangleAlert size={18} />
-                  ) : isPreparingVectorIndex ? (
-                    <Radar size={18} className="vector-index-radar" />
-                  ) : vectorIndexState?.isVectorComplete ? (
-                    <BadgeCheck size={18} />
-                  ) : (
-                    <BrainCircuit size={18} />
-                  )}
-                  {vectorIndexBadgeLabel && (
-                    <span className="vector-index-badge">{vectorIndexBadgeLabel}</span>
-                  )}
-                </button>
+                <div className="vector-index-action-wrapper">
+                  <button
+                    className={`icon-btn vector-index-btn ${isPreparingVectorIndex ? 'running active' : ''} ${vectorIndexState?.isVectorComplete ? 'complete' : ''} ${hasPendingVectorMessages ? 'pending' : ''}`}
+                    onClick={handleVectorIndexClick}
+                    disabled={!currentSessionId || (isVectorProviderUnavailable && !isPreparingVectorIndex)}
+                    aria-label={isPreparingVectorIndex ? '取消向量化' : '增量向量化当前聊天'}
+                  >
+                    {isVectorProviderUnavailable && !isPreparingVectorIndex ? (
+                      <TriangleAlert size={18} />
+                    ) : isPreparingVectorIndex ? (
+                      <Radar size={18} className="vector-index-radar" />
+                    ) : vectorIndexState?.isVectorComplete ? (
+                      <BadgeCheck size={18} />
+                    ) : (
+                      <BrainCircuit size={18} />
+                    )}
+                    {vectorIndexBadgeLabel && (
+                      <span className="vector-index-badge">{vectorIndexBadgeLabel}</span>
+                    )}
+                  </button>
+                  <div className="vector-index-hover-panel" role="tooltip">
+                    <div className="vector-hover-header">
+                      <span>语义向量索引</span>
+                      <strong>{vectorIndexPercent}%</strong>
+                    </div>
+                    <div className="vector-hover-progress">
+                      <span style={{ width: `${vectorIndexPercent}%` }} />
+                    </div>
+                    <div className="vector-hover-rows">
+                      {vectorIndexHoverRows.map((row) => (
+                        <div key={row.label} className={row.label === '错误' ? 'error' : ''}>
+                          <span>{row.label}</span>
+                          <strong>{row.value}</strong>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
                 <button
                   className={`icon-btn memory-build-btn ${isPreparingMemoryBuild ? 'running active' : ''} ${memoryBuildCount > 0 ? 'complete' : ''}`}
                   onClick={handleMemoryBuildClick}
                   disabled={!currentSessionId || isPreparingMemoryBuild}
-                  title={memoryButtonTitle}
+                  data-tooltip={memoryButtonTitle}
                   aria-label="构建当前聊天三层记忆"
                 >
                   {isPreparingMemoryBuild ? (
                     <Radar size={18} className="vector-index-radar" />
                   ) : (
-                    <Database size={18} />
+                    <Origami size={18} />
                   )}
                   {memoryBuildBadgeLabel && (
                     <span className="vector-index-badge">{memoryBuildBadgeLabel}</span>
@@ -2185,7 +2224,7 @@ function ChatPage(_props: ChatPageProps) {
                   <button
                     className="icon-btn moments-btn"
                     onClick={() => window.electronAPI.window.openMomentsWindow(currentSession.username)}
-                    title="查看朋友圈"
+                    data-tooltip="查看朋友圈"
                   >
                     <Aperture size={18} />
                   </button>
@@ -2198,7 +2237,7 @@ function ChatPage(_props: ChatPageProps) {
                       currentSession.displayName || currentSession.username
                     )
                   }}
-                  title="AI 摘要"
+                  data-tooltip="AI 摘要"
                 >
                   <Sparkles size={18} />
                 </button>
@@ -2223,7 +2262,7 @@ function ChatPage(_props: ChatPageProps) {
                       }
                       setShowDatePicker(!showDatePicker)
                     }}
-                    title="跳转到日期"
+                    data-tooltip="跳转到日期"
                   >
                     <Calendar size={18} />
                   </button>
@@ -2382,7 +2421,7 @@ function ChatPage(_props: ChatPageProps) {
                   style={{ position: 'relative', zIndex: 10 }}
                   onClick={handleBatchTranscribe}
                   disabled={isBatchTranscribing || !currentSessionId}
-                  title={isBatchTranscribing ? `批量转写中 (${batchTranscribeProgress.current}/${batchTranscribeProgress.total})` : '批量语音转文字'}
+                  data-tooltip={isBatchTranscribing ? `批量转写中 (${batchTranscribeProgress.current}/${batchTranscribeProgress.total})` : '批量语音转文字'}
                 >
                   {isBatchTranscribing ? (
                     <Loader2 size={18} className="spin" />
@@ -2395,7 +2434,7 @@ function ChatPage(_props: ChatPageProps) {
                   style={{ position: 'relative', zIndex: 10 }}
                   onClick={handleBatchDecrypt}
                   disabled={isBatchDecrypting || !currentSessionId}
-                  title={isBatchDecrypting ? `批量解密中 (${batchDecryptProgress.current}/${batchDecryptProgress.total})` : '批量解密图片'}
+                  data-tooltip={isBatchDecrypting ? `批量解密中 (${batchDecryptProgress.current}/${batchDecryptProgress.total})` : '批量解密图片'}
                 >
                   {isBatchDecrypting ? (
                     <Loader2 size={18} className="spin" />
@@ -2406,7 +2445,7 @@ function ChatPage(_props: ChatPageProps) {
                 <button
                   className={`icon-btn detail-btn ${showDetailPanel ? 'active' : ''}`}
                   onClick={toggleDetailPanel}
-                  title="会话详情"
+                  data-tooltip="会话详情"
                 >
                   <Info size={18} />
                 </button>

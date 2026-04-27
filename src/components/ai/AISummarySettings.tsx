@@ -112,6 +112,10 @@ interface AISummarySettingsProps {
   setEnableThinking: (val: boolean) => void
   messageLimit: number
   setMessageLimit: (val: number) => void
+  agentDecisionMaxTokens: number
+  setAgentDecisionMaxTokens: (val: number) => void
+  agentAnswerMaxTokens: number
+  setAgentAnswerMaxTokens: (val: number) => void
   showMessage: (text: string, success: boolean) => void
 }
 
@@ -162,6 +166,10 @@ function AISummarySettings({
   setEnableThinking,
   messageLimit,
   setMessageLimit,
+  agentDecisionMaxTokens,
+  setAgentDecisionMaxTokens,
+  agentAnswerMaxTokens,
+  setAgentAnswerMaxTokens,
   showMessage
 }: AISummarySettingsProps) {
   const [showApiKey, setShowApiKey] = useState(false)
@@ -888,6 +896,40 @@ function AISummarySettings({
           </div>
           <div className="form-hint">
             设置 AI 分析时获取的最大消息数量（1000-5000）。数量越多，分析越全面，但可能增加 Token 消耗。
+          </div>
+        </div>
+
+        <div className="form-row">
+          <div className="form-group">
+            <label>Agent 决策 Token 上限</label>
+            <input
+              type="number"
+              min="512"
+              max="32768"
+              step="512"
+              value={agentDecisionMaxTokens}
+              onChange={(e) => setAgentDecisionMaxTokens(Math.max(512, Math.min(32768, Number(e.target.value) || 2048)))}
+              className="api-key-input"
+            />
+            <div className="form-hint">
+              控制每轮工具编排 JSON 的输出空间，默认 2048。一般不需要很高。
+            </div>
+          </div>
+
+          <div className="form-group">
+            <label>问答输出 Token 上限</label>
+            <input
+              type="number"
+              min="512"
+              max="65536"
+              step="1024"
+              value={agentAnswerMaxTokens}
+              onChange={(e) => setAgentAnswerMaxTokens(Math.max(512, Math.min(65536, Number(e.target.value) || 8192)))}
+              className="api-key-input"
+            />
+            <div className="form-hint">
+              控制会话问答最终答案长度，默认 8192。长上下文模型可按需调高。
+            </div>
           </div>
         </div>
       </div>

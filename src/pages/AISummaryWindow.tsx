@@ -95,6 +95,8 @@ const RESULT_TABS: Array<{ id: ResultTabId; label: string; icon: LucideIcon }> =
   { id: 'markdown', label: 'Markdown 摘要', icon: FileText }
 ]
 
+const STREAM_FLUSH_INTERVAL_MS = 80
+
 function getDefaultResultTab(summary: SummaryResult | null): ResultTabId {
   return summary?.structuredAnalysis ? 'overview' : 'markdown'
 }
@@ -595,6 +597,10 @@ function AISummaryWindow() {
   const activeQARequestIdRef = useRef<string | null>(null)
   const qaRequestMessageMapRef = useRef<Map<string, string>>(new Map())
   const evidenceMessageLoadingRef = useRef<Set<string>>(new Set())
+  const qaChunkBufferRef = useRef<Map<string, string>>(new Map())
+  const qaChunkFlushTimerRef = useRef<number | null>(null)
+  const summaryStreamBufferRef = useRef({ summary: '', think: '' })
+  const summaryStreamFlushTimerRef = useRef<number | null>(null)
 
   // 对话框状态
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
@@ -637,6 +643,60 @@ function AISummaryWindow() {
   const renderMarkdown = (text: string) => {
     const html = marked.parse(text) as string
     return { __html: DOMPurify.sanitize(html) }
+  }
+
+  const flushQAChunkBuffer = () => {
+    if (qaChunkFlushTimerRef.current !== null) {
+      window.clearTimeout(qaChunkFlushTimerRef.current)
+      qaChunkFlushTimerRef.current = null
+    }
+
+    if (qaChunkBufferRef.current.size === 0) return
+    const chunks = new Map(qaChunkBufferRef.current)
+    qaChunkBufferRef.current.clear()
+
+    setQaMessages(prev => prev.map(message => {
+      const chunk = chunks.get(message.id)
+      return chunk ? appendQAChunkToMessage(message, chunk) : message
+    }))
+  }
+
+  const scheduleQAChunkFlush = () => {
+    if (qaChunkFlushTimerRef.current !== null) return
+    qaChunkFlushTimerRef.current = window.setTimeout(() => {
+      qaChunkFlushTimerRef.current = null
+      flushQAChunkBuffer()
+    }, STREAM_FLUSH_INTERVAL_MS)
+  }
+
+  const flushSummaryStreamBuffer = () => {
+    if (summaryStreamFlushTimerRef.current !== null) {
+      window.clearTimeout(summaryStreamFlushTimerRef.current)
+      summaryStreamFlushTimerRef.current = null
+    }
+
+    const pending = summaryStreamBufferRef.current
+    if (!pending.summary && !pending.think) return
+    summaryStreamBufferRef.current = { summary: '', think: '' }
+    if (pending.summary) setSummaryText(prev => prev + pending.summary)
+    if (pending.think) setThinkText(prev => prev + pending.think)
+  }
+
+  const scheduleSummaryStreamFlush = () => {
+    if (summaryStreamFlushTimerRef.current !== null) return
+    summaryStreamFlushTimerRef.current = window.setTimeout(() => {
+      summaryStreamFlushTimerRef.current = null
+      flushSummaryStreamBuffer()
+    }, STREAM_FLUSH_INTERVAL_MS)
+  }
+
+  const appendSummaryStreamText = (type: 'summary' | 'think', value: string) => {
+    if (!value) return
+    summaryStreamBufferRef.current = {
+      ...summaryStreamBufferRef.current,
+      [type]: `${summaryStreamBufferRef.current[type]}${value}`
+    }
+    scheduleSummaryStreamFlush()
   }
 
   const renderQAAvatar = (message: QAMessage) => {
@@ -944,7 +1004,7 @@ function AISummaryWindow() {
       <div className="qa-progress-list" aria-label="AI 工具执行轨迹">
         {events.map((event) => {
           const isExpanded = expandedQAProgressIds.has(event.id)
-          const detailLines = getQAProgressDetailLines(event)
+          const detailLines = isExpanded ? getQAProgressDetailLines(event) : []
 
           return (
             <div key={event.id} className={`qa-progress-card ${event.stage} ${event.status} ${isExpanded ? 'expanded' : ''}`}>
@@ -1403,6 +1463,13 @@ function AISummaryWindow() {
     }
   }, [qaMessages])
 
+  useEffect(() => () => {
+    if (summaryStreamFlushTimerRef.current !== null) {
+      window.clearTimeout(summaryStreamFlushTimerRef.current)
+      summaryStreamFlushTimerRef.current = null
+    }
+  }, [])
+
   useEffect(() => {
     const cleanup = window.electronAPI.ai.onSessionQAEvent((event: SessionQAJobEvent) => {
       const assistantId = qaRequestMessageMapRef.current.get(event.requestId)
@@ -1418,15 +1485,14 @@ function AISummaryWindow() {
       }
 
       if (event.kind === 'chunk' && event.chunk) {
-        setQaMessages(prev => prev.map(message => (
-          message.id === assistantId
-            ? appendQAChunkToMessage(message, event.chunk!)
-            : message
-        )))
+        const previous = qaChunkBufferRef.current.get(assistantId) || ''
+        qaChunkBufferRef.current.set(assistantId, `${previous}${event.chunk}`)
+        scheduleQAChunkFlush()
         return
       }
 
       if (event.kind === 'final' && event.result) {
+        flushQAChunkBuffer()
         qaRequestMessageMapRef.current.delete(event.requestId)
         if (activeQARequestIdRef.current === event.requestId) {
           activeQARequestIdRef.current = null
@@ -1450,6 +1516,7 @@ function AISummaryWindow() {
       }
 
       if (event.kind === 'error' || event.kind === 'cancelled') {
+        flushQAChunkBuffer()
         qaRequestMessageMapRef.current.delete(event.requestId)
         if (activeQARequestIdRef.current === event.requestId) {
           activeQARequestIdRef.current = null
@@ -1473,7 +1540,14 @@ function AISummaryWindow() {
       }
     })
 
-    return cleanup
+    return () => {
+      if (qaChunkFlushTimerRef.current !== null) {
+        window.clearTimeout(qaChunkFlushTimerRef.current)
+        qaChunkFlushTimerRef.current = null
+      }
+      qaChunkBufferRef.current.clear()
+      cleanup()
+    }
   }, [])
 
   useEffect(() => {
@@ -1779,6 +1853,11 @@ function AISummaryWindow() {
     setError('')
     setSummaryText('')
     setThinkText('')
+    summaryStreamBufferRef.current = { summary: '', think: '' }
+    if (summaryStreamFlushTimerRef.current !== null) {
+      window.clearTimeout(summaryStreamFlushTimerRef.current)
+      summaryStreamFlushTimerRef.current = null
+    }
     setIsThinking(false)
     setShowThink(true)
     setResult(null)
@@ -1824,7 +1903,7 @@ function AISummaryWindow() {
             const parts = content.split('<think>')
             // 如果有前置内容，先添加到摘要
             if (parts[0]) {
-              setSummaryText(prev => prev + parts[0])
+              appendSummaryStreamText('summary', parts[0])
             }
 
             internalThinkMode = true
@@ -1843,15 +1922,15 @@ function AISummaryWindow() {
             const thinkPart = parts[0]
             const summaryPart = parts[1] || ''
 
-            setThinkText(prev => prev + thinkPart)
-            setSummaryText(prev => prev + summaryPart)
+            appendSummaryStreamText('think', thinkPart)
+            appendSummaryStreamText('summary', summaryPart)
             return
           }
 
           if (internalThinkMode) {
-            setThinkText(prev => prev + content)
+            appendSummaryStreamText('think', content)
           } else {
-            setSummaryText(prev => prev + content)
+            appendSummaryStreamText('summary', content)
           }
         } catch (e) {
           console.error('[AISummaryWindow] 处理流式输出出错:', e)
@@ -1881,6 +1960,7 @@ function AISummaryWindow() {
       console.log('[AISummaryWindow] 返回结果:', generateResult)
 
       cleanup()
+      flushSummaryStreamBuffer()
 
       if (!generateResult.success) {
         console.error('[AISummaryWindow] 生成失败:', generateResult.error)
@@ -1904,6 +1984,7 @@ function AISummaryWindow() {
       setIsGenerating(false)
 
     } catch (e) {
+      flushSummaryStreamBuffer()
       console.error('[AISummaryWindow] 生成异常:', e)
       setError('生成摘要失败: ' + String(e))
       setIsGenerating(false)
@@ -2393,13 +2474,15 @@ function AISummaryWindow() {
         <textarea
           ref={qaInputRef}
           value={qaInput}
-          placeholder="追问当前会话..."
-          rows={2}
+          placeholder="给 AI 发送消息..."
+          rows={1}
           onChange={(event) => setQaInput(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !event.shiftKey) {
               event.preventDefault()
-              handleAskQuestion()
+              if (qaInput.trim() && !isAsking) {
+                handleAskQuestion()
+              }
             }
           }}
         />
@@ -2408,15 +2491,24 @@ function AISummaryWindow() {
           type="button"
           onClick={isAsking ? handleCancelAsk : handleAskQuestion}
           disabled={!isAsking && !qaInput.trim()}
-          data-tooltip={isAsking ? '取消回答' : '发送问题'}
+          data-tooltip={isAsking ? '取消回答' : '发送消息'}
         >
-          {isAsking ? <X size={16} /> : <Send size={16} />}
+          {isAsking ? <X size={15} strokeWidth={2.5} /> : <Send size={14} strokeWidth={2.5} style={{ marginLeft: '2px' }} />}
         </button>
       </div>
 
       {renderEvidenceContextPanel()}
     </div>
   )
+
+  useEffect(() => {
+    if (qaInputRef.current) {
+      qaInputRef.current.style.height = 'auto'
+      if (qaInput) {
+        qaInputRef.current.style.height = `${Math.min(qaInputRef.current.scrollHeight, 200)}px`
+      }
+    }
+  }, [qaInput])
 
   const availableResultTabs = getAvailableResultTabs(result)
   const resolvedActiveResultTab = availableResultTabs.some((tab) => tab.id === activeResultTab)

@@ -71,8 +71,6 @@ export type EmbeddingModelProfile = {
   enabled: boolean
 }
 
-const HUGGINGFACE_HOST = 'https://huggingface.co/'
-const HUGGINGFACE_PATH_TEMPLATE = '{model}/resolve/{revision}/'
 const MODELSCOPE_HOST = 'https://www.modelscope.cn/'
 const MODELSCOPE_PATH_TEMPLATE = 'models/{model}/resolve/master/'
 const MODELSCOPE_REVISION = 'main'
@@ -86,9 +84,9 @@ const EMBEDDING_MODEL_PROFILES: EmbeddingModelProfile[] = [
     displayName: 'Qwen3 Embedding 0.6B · 新一代',
     description: '1024/768/512/256 维多语言语义向量，支持 query instruction，作为新记忆检索体系主模型路线。',
     modelId: 'onnx-community/Qwen3-Embedding-0.6B-ONNX',
-    remoteHosts: [HUGGINGFACE_HOST],
-    remotePathTemplate: HUGGINGFACE_PATH_TEMPLATE,
-    revision: 'main',
+    remoteHosts: [MODELSCOPE_HOST],
+    remotePathTemplate: MODELSCOPE_PATH_TEMPLATE,
+    revision: MODELSCOPE_REVISION,
     dim: 1024,
     baseDim: 1024,
     supportedDims: [1024, 768, 512, 256],

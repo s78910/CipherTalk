@@ -110,9 +110,41 @@ type SessionVectorIndexJob = {
   worker: Worker
   sender: WebContents
   cancelRequested: boolean
+  aiPauseReleased: boolean
 }
 
 const sessionVectorIndexJobs = new Map<string, SessionVectorIndexJob>()
+
+type SessionMemoryBuildWorkerMessage = {
+  type?: 'progress' | 'completed' | 'error'
+  sessionId?: string
+  progress?: any
+  state?: any
+  error?: string
+}
+
+type SessionMemoryBuildJob = {
+  worker: Worker
+  sender: WebContents
+  promise: Promise<any>
+}
+
+const sessionMemoryBuildJobs = new Map<string, SessionMemoryBuildJob>()
+
+function releaseSessionVectorIndexPause(job: SessionVectorIndexJob): void {
+  if (job.aiPauseReleased) return
+  job.aiPauseReleased = true
+  dataManagementService.resumeFromAi()
+}
+
+function finishSessionVectorIndexJob(sessionId: string, job?: SessionVectorIndexJob): SessionVectorIndexJob | null {
+  const currentJob = job || sessionVectorIndexJobs.get(sessionId)
+  if (!currentJob) return null
+
+  sessionVectorIndexJobs.delete(sessionId)
+  releaseSessionVectorIndexPause(currentJob)
+  return currentJob
+}
 
 function findElectronWorkerPath(fileName: string): string | null {
   const candidates = app.isPackaged
@@ -188,7 +220,8 @@ async function startSessionVectorIndexJob(sessionId: string, sender: WebContents
   const job: SessionVectorIndexJob = {
     worker,
     sender,
-    cancelRequested: false
+    cancelRequested: false,
+    aiPauseReleased: false
   }
   sessionVectorIndexJobs.set(sessionId, job)
   dataManagementService.pauseForAi()
@@ -203,27 +236,26 @@ async function startSessionVectorIndexJob(sessionId: string, sender: WebContents
     }
 
     if (message?.type === 'completed') {
-      sessionVectorIndexJobs.delete(sessionId)
+      finishSessionVectorIndexJob(sessionId, currentJob)
+      void worker.terminate().catch(() => undefined)
       return
     }
 
     if (message?.type === 'error') {
-      sessionVectorIndexJobs.delete(sessionId)
+      finishSessionVectorIndexJob(sessionId, currentJob)
       void sendSessionVectorIndexFailure(targetSender, sessionId, message.error || '向量化失败')
+      void worker.terminate().catch(() => undefined)
     }
   })
 
   worker.on('error', (error) => {
-    const currentJob = sessionVectorIndexJobs.get(sessionId)
-    sessionVectorIndexJobs.delete(sessionId)
+    const currentJob = finishSessionVectorIndexJob(sessionId)
     void sendSessionVectorIndexFailure(currentJob?.sender || sender, sessionId, String(error))
   })
 
   worker.on('exit', (code) => {
-    dataManagementService.resumeFromAi()
-    const currentJob = sessionVectorIndexJobs.get(sessionId)
+    const currentJob = finishSessionVectorIndexJob(sessionId)
     if (!currentJob) return
-    sessionVectorIndexJobs.delete(sessionId)
 
     if (code !== 0 && !currentJob.cancelRequested) {
       void sendSessionVectorIndexFailure(currentJob.sender, sessionId, `向量化 Worker 异常退出，代码：${code}`)
@@ -231,6 +263,84 @@ async function startSessionVectorIndexJob(sessionId: string, sender: WebContents
   })
 
   return getSessionVectorIndexStateForUi(sessionId)
+}
+
+async function getSessionMemoryBuildStateForUi(sessionId: string) {
+  const { memoryBuildService } = await import('./services/memory/memoryBuildService')
+  const state = memoryBuildService.getSessionState(sessionId)
+  return {
+    ...state,
+    isRunning: state.isRunning || sessionMemoryBuildJobs.has(sessionId)
+  }
+}
+
+function sendSessionMemoryBuildProgress(sender: WebContents, progress: any) {
+  if (!sender || sender.isDestroyed()) return
+  sender.send('ai:sessionMemoryBuildProgress', progress)
+}
+
+async function startSessionMemoryBuildJob(sessionId: string, sender: WebContents) {
+  const existing = sessionMemoryBuildJobs.get(sessionId)
+  if (existing) {
+    existing.sender = sender
+    return existing.promise
+  }
+
+  const workerPath = findElectronWorkerPath('sessionMemoryBuildWorker.js')
+  if (!workerPath) {
+    throw new Error('未找到 sessionMemoryBuildWorker.js')
+  }
+
+  const worker = new Worker(workerPath, {
+    workerData: { sessionId }
+  })
+
+  const promise = new Promise<any>((resolve, reject) => {
+    worker.on('message', (message: SessionMemoryBuildWorkerMessage) => {
+      const currentJob = sessionMemoryBuildJobs.get(sessionId)
+      const targetSender = currentJob?.sender || sender
+
+      if (message?.type === 'progress' && message.progress) {
+        sendSessionMemoryBuildProgress(targetSender, message.progress)
+        return
+      }
+
+      if (message?.type === 'completed') {
+        sessionMemoryBuildJobs.delete(sessionId)
+        void worker.terminate().catch(() => undefined)
+        resolve(message.state)
+        return
+      }
+
+      if (message?.type === 'error') {
+        sessionMemoryBuildJobs.delete(sessionId)
+        void worker.terminate().catch(() => undefined)
+        reject(new Error(message.error || '会话记忆构建失败'))
+      }
+    })
+
+    worker.on('error', (error) => {
+      sessionMemoryBuildJobs.delete(sessionId)
+      reject(error)
+    })
+
+    worker.on('exit', (code) => {
+      const currentJob = sessionMemoryBuildJobs.get(sessionId)
+      if (!currentJob) return
+      sessionMemoryBuildJobs.delete(sessionId)
+      if (code !== 0) {
+        reject(new Error(`会话记忆构建 Worker 异常退出，代码：${code}`))
+      }
+    })
+  })
+
+  sessionMemoryBuildJobs.set(sessionId, {
+    worker,
+    sender,
+    promise
+  })
+
+  return promise
 }
 
 type ImageViewerListItem = {
@@ -4379,10 +4489,9 @@ function registerIpcHandlers() {
 
   ipcMain.handle('ai:getSessionMemoryBuildState', async (_, sessionId: string) => {
     try {
-      const { memoryBuildService } = await import('./services/memory/memoryBuildService')
       return {
         success: true,
-        result: memoryBuildService.getSessionState(sessionId)
+        result: await getSessionMemoryBuildStateForUi(sessionId)
       }
     } catch (e) {
       console.error('[AI] 获取会话记忆构建状态失败:', e)
@@ -4398,10 +4507,7 @@ function registerIpcHandlers() {
         return { success: false, error: 'sessionId 不能为空' }
       }
 
-      const { memoryBuildService } = await import('./services/memory/memoryBuildService')
-      const result = await memoryBuildService.prepareSessionMemory(sessionId, (progress) => {
-        event.sender.send('ai:sessionMemoryBuildProgress', progress)
-      })
+      const result = await startSessionMemoryBuildJob(sessionId, event.sender)
       return { success: true, result }
     } catch (e) {
       console.error('[AI] 构建会话记忆失败:', e)

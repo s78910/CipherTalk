@@ -296,6 +296,9 @@ class SessionQAJobService {
       if (message?.type === 'error') {
         console.warn('[SessionQAJob] 后台语义向量增强失败:', message.error)
       }
+      if (message?.type === 'completed' || message?.type === 'error') {
+        void worker.terminate().catch(() => undefined)
+      }
     })
     worker.on('error', (error) => {
       console.warn('[SessionQAJob] 后台语义向量增强 Worker 异常:', error)

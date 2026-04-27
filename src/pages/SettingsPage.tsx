@@ -220,6 +220,8 @@ function SettingsPage() {
   const [aiCustomSystemPrompt, setAiCustomSystemPromptState] = useState<string>('')
   const [aiEnableThinking, setAiEnableThinkingState] = useState<boolean>(true)
   const [aiMessageLimit, setAiMessageLimitState] = useState<number>(3000)
+  const [aiAgentDecisionMaxTokens, setAiAgentDecisionMaxTokensState] = useState<number>(2048)
+  const [aiAgentAnswerMaxTokens, setAiAgentAnswerMaxTokensState] = useState<number>(8192)
 
   // 日志相关状态
   const [logFiles, setLogFiles] = useState<Array<{ name: string; size: number; mtime: Date }>>([])
@@ -419,6 +421,8 @@ function SettingsPage() {
       const savedAiCustomSystemPrompt = await configService.getAiCustomSystemPrompt()
       const savedAiEnableThinking = await configService.getAiEnableThinking()
       const savedAiMessageLimit = await configService.getAiMessageLimit()
+      const savedAiAgentDecisionMaxTokens = await configService.getAiAgentDecisionMaxTokens()
+      const savedAiAgentAnswerMaxTokens = await configService.getAiAgentAnswerMaxTokens()
 
       setAiProviderState(savedAiProvider)
       setAiApiKeyState(savedAiApiKey)
@@ -429,6 +433,8 @@ function SettingsPage() {
       setAiCustomSystemPromptState(savedAiCustomSystemPrompt)
       setAiEnableThinkingState(savedAiEnableThinking)
       setAiMessageLimitState(savedAiMessageLimit)
+      setAiAgentDecisionMaxTokensState(savedAiAgentDecisionMaxTokens)
+      setAiAgentAnswerMaxTokensState(savedAiAgentAnswerMaxTokens)
 
       // 加载关闭行为配置
       const savedCloseToTray = await configService.getCloseToTray()
@@ -470,6 +476,8 @@ function SettingsPage() {
         aiCustomSystemPrompt: savedAiCustomSystemPrompt,
         aiEnableThinking: savedAiEnableThinking,
         aiMessageLimit: savedAiMessageLimit,
+        aiAgentDecisionMaxTokens: savedAiAgentDecisionMaxTokens,
+        aiAgentAnswerMaxTokens: savedAiAgentAnswerMaxTokens,
         closeToTray: savedCloseToTray,
         editingAccountId: (editingAccount || activeAccount)?.id || ''
       })
@@ -527,6 +535,8 @@ function SettingsPage() {
       aiCustomSystemPrompt,
       aiEnableThinking,
       aiMessageLimit,
+      aiAgentDecisionMaxTokens,
+      aiAgentAnswerMaxTokens,
       closeToTray,
       editingAccountId
     }
@@ -542,6 +552,7 @@ function SettingsPage() {
     quoteStyle, exportDefaultDateRange, exportDefaultAvatars,
     aiProvider, aiApiKey, aiModel, aiDefaultTimeRange, aiSummaryDetail,
     aiSystemPromptPreset, aiCustomSystemPrompt, aiEnableThinking, aiMessageLimit,
+    aiAgentDecisionMaxTokens, aiAgentAnswerMaxTokens,
     closeToTray, editingAccountId, initialConfig
   ])
 
@@ -1373,6 +1384,8 @@ function SettingsPage() {
       await configService.setAiCustomSystemPrompt(aiCustomSystemPrompt)
       await configService.setAiEnableThinking(aiEnableThinking)
       await configService.setAiMessageLimit(aiMessageLimit)
+      await configService.setAiAgentDecisionMaxTokens(aiAgentDecisionMaxTokens)
+      await configService.setAiAgentAnswerMaxTokens(aiAgentAnswerMaxTokens)
 
       await configService.setSttMode(sttMode)
       await configService.setSttOnlineProvider(sttOnlineProvider)
@@ -1431,6 +1444,8 @@ function SettingsPage() {
         aiCustomSystemPrompt,
         aiEnableThinking,
         aiMessageLimit,
+        aiAgentDecisionMaxTokens,
+        aiAgentAnswerMaxTokens,
         closeToTray,
         editingAccountId: savedAccount?.id || editingAccountId
       })
@@ -3668,6 +3683,10 @@ function SettingsPage() {
             setEnableThinking={setAiEnableThinkingState}
             messageLimit={aiMessageLimit}
             setMessageLimit={setAiMessageLimitState}
+            agentDecisionMaxTokens={aiAgentDecisionMaxTokens}
+            setAgentDecisionMaxTokens={setAiAgentDecisionMaxTokensState}
+            agentAnswerMaxTokens={aiAgentAnswerMaxTokens}
+            setAgentAnswerMaxTokens={setAiAgentAnswerMaxTokensState}
             showMessage={showMessage}
           />
         )}

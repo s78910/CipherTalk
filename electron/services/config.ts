@@ -110,6 +110,8 @@ interface ConfigSchema {
   aiEnableCache: boolean
   aiEnableThinking: boolean  // 是否显示思考过程
   aiMessageLimit: number     // 摘要提取的消息条数限制
+  aiAgentDecisionMaxTokens: number // 会话问答 Agent 每轮决策输出 token 上限
+  aiAgentAnswerMaxTokens: number   // 会话问答最终回答输出 token 上限
   aiEmbeddingModelProfile: string
   aiEmbeddingVectorDims: Record<string, number>
   aiEmbeddingDevice: 'cpu' | 'dml'
@@ -177,6 +179,8 @@ const defaults: ConfigSchema = {
   aiEnableCache: true,
   aiEnableThinking: true,  // 默认显示思考过程
   aiMessageLimit: 3000,    // 默认3000条，用户可调至5000
+  aiAgentDecisionMaxTokens: 2048,
+  aiAgentAnswerMaxTokens: 8192,
   aiEmbeddingModelProfile: 'bge-large-zh-v1.5-int8',
   aiEmbeddingVectorDims: {},
   aiEmbeddingDevice: 'cpu',
