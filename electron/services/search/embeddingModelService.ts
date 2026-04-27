@@ -5,6 +5,7 @@ import { dirname, join } from 'path'
 import { ConfigService } from '../config'
 
 export type EmbeddingModelProfileId =
+  | 'qwen3-embedding-0.6b-onnx-q8'
   | 'bge-large-zh-v1.5-int8'
   | 'bge-large-zh-v1.5-fp32'
   | 'bge-m3'
@@ -55,10 +56,14 @@ export type EmbeddingModelProfile = {
   maxTokens: number
   maxTextChars: number
   dtype: 'q8' | 'fp32'
+  pooling: 'mean' | 'last_token'
+  queryInstruction?: string
   sizeLabel: string
   enabled: boolean
 }
 
+const HUGGINGFACE_HOST = 'https://huggingface.co/'
+const HUGGINGFACE_PATH_TEMPLATE = '{model}/resolve/{revision}/'
 const MODELSCOPE_HOST = 'https://www.modelscope.cn/'
 const MODELSCOPE_PATH_TEMPLATE = 'models/{model}/resolve/master/'
 const MODELSCOPE_REVISION = 'main'
@@ -67,6 +72,23 @@ const CPU_EMBEDDING_THREADS = Math.max(1, Math.min(2, Math.floor((cpus().length 
 export const DEFAULT_EMBEDDING_MODEL_PROFILE: EmbeddingModelProfileId = 'bge-large-zh-v1.5-int8'
 
 const EMBEDDING_MODEL_PROFILES: EmbeddingModelProfile[] = [
+  {
+    id: 'qwen3-embedding-0.6b-onnx-q8',
+    displayName: 'Qwen3 Embedding 0.6B · 新一代',
+    description: '1024 维多语言语义向量，支持 query instruction，作为新记忆检索体系主模型路线。',
+    modelId: 'onnx-community/Qwen3-Embedding-0.6B-ONNX',
+    remoteHosts: [HUGGINGFACE_HOST],
+    remotePathTemplate: HUGGINGFACE_PATH_TEMPLATE,
+    revision: 'main',
+    dim: 1024,
+    maxTokens: 8192,
+    maxTextChars: 2400,
+    dtype: 'q8',
+    pooling: 'last_token',
+    queryInstruction: 'Given a chat history search query, retrieve relevant conversation messages that answer the query',
+    sizeLabel: '约 614 MB',
+    enabled: true
+  },
   {
     id: 'bge-large-zh-v1.5-int8',
     displayName: 'BGE Large 中文 · 推荐',
@@ -79,6 +101,7 @@ const EMBEDDING_MODEL_PROFILES: EmbeddingModelProfile[] = [
     maxTokens: 512,
     maxTextChars: 480,
     dtype: 'q8',
+    pooling: 'mean',
     sizeLabel: '约 330 MB',
     enabled: true
   },
@@ -94,6 +117,7 @@ const EMBEDDING_MODEL_PROFILES: EmbeddingModelProfile[] = [
     maxTokens: 512,
     maxTextChars: 480,
     dtype: 'fp32',
+    pooling: 'mean',
     sizeLabel: '约 1.2 GB',
     enabled: true
   },
@@ -109,6 +133,7 @@ const EMBEDDING_MODEL_PROFILES: EmbeddingModelProfile[] = [
     maxTokens: 8192,
     maxTextChars: 2400,
     dtype: 'q8',
+    pooling: 'mean',
     sizeLabel: '约 600 MB',
     enabled: true
   }
@@ -217,6 +242,12 @@ function limitEmbeddingText(text: string, maxChars: number): string {
   return `${value.slice(0, headLength)}\n${value.slice(-tailLength)}`
 }
 
+function applyEmbeddingInstruction(text: string, profile: EmbeddingModelProfile, inputType: EmbeddingInputType): string {
+  const value = String(text || '')
+  if (inputType !== 'query' || !profile.queryInstruction) return value
+  return `Instruct: ${profile.queryInstruction}\nQuery: ${value}`
+}
+
 function tensorToVectors(output: any, expectedCount: number): Float32Array[] {
   const data = output?.data
   const dims = Array.isArray(output?.dims) ? output.dims.map((item: unknown) => Number(item)) : []
@@ -243,6 +274,19 @@ function tensorToVectors(output: any, expectedCount: number): Float32Array[] {
   }
 
   return vectors
+}
+
+function normalizeVector(vector: Float32Array): Float32Array {
+  let norm = 0
+  for (let index = 0; index < vector.length; index += 1) {
+    norm += vector[index] * vector[index]
+  }
+
+  norm = Math.sqrt(norm) || 1
+  for (let index = 0; index < vector.length; index += 1) {
+    vector[index] /= norm
+  }
+  return vector
 }
 
 export function hashEmbeddingContent(value: string): string {
@@ -282,20 +326,51 @@ function meanPoolNormalize(output: any, attentionMask: any, expectedCount: numbe
     }
 
     const divisor = tokenCount > 0 ? tokenCount : 1
-    let norm = 0
     for (let index = 0; index < dim; index += 1) {
       vector[index] /= divisor
-      norm += vector[index] * vector[index]
     }
-    norm = Math.sqrt(norm) || 1
-    for (let index = 0; index < dim; index += 1) {
-      vector[index] /= norm
-    }
-    vectors.push(vector)
+    vectors.push(normalizeVector(vector))
   }
 
   return vectors
 }
+
+function lastTokenPoolNormalize(output: any, attentionMask: any, expectedCount: number): Float32Array[] {
+  const hidden = output?.last_hidden_state || output?.token_embeddings || output?.logits
+  const hiddenData = hidden?.data
+  const hiddenDims = Array.isArray(hidden?.dims) ? hidden.dims.map((item: unknown) => Number(item)) : []
+  const maskData = attentionMask?.data
+  if (!hiddenData || hiddenDims.length !== 3 || !maskData) {
+    throw new Error('Embedding 模型输出为空')
+  }
+
+  const [batchSize, seqLength, dim] = hiddenDims
+  if (batchSize !== expectedCount || !Number.isInteger(seqLength) || !Number.isInteger(dim) || dim <= 0) {
+    throw new Error(`Embedding 输出维度无效：${hiddenDims.join('x')}`)
+  }
+
+  const vectors: Float32Array[] = []
+  for (let batch = 0; batch < batchSize; batch += 1) {
+    let tokenIndex = seqLength - 1
+    for (let index = seqLength - 1; index >= 0; index -= 1) {
+      if (Number(maskData[batch * seqLength + index] || 0) > 0) {
+        tokenIndex = index
+        break
+      }
+    }
+
+    const offset = (batch * seqLength + tokenIndex) * dim
+    const vector = new Float32Array(dim)
+    for (let index = 0; index < dim; index += 1) {
+      vector[index] = Number(hiddenData[offset + index] || 0)
+    }
+    vectors.push(normalizeVector(vector))
+  }
+
+  return vectors
+}
+
+export type EmbeddingInputType = 'query' | 'document'
 
 export class LocalEmbeddingModelService {
   private pipelines = new Map<string, Promise<{ tokenizer: any; model: any }>>()
@@ -462,9 +537,17 @@ export class LocalEmbeddingModelService {
     return status
   }
 
-  async embedTexts(texts: string[], profileId?: string): Promise<Float32Array[]> {
+  async embedTexts(
+    texts: string[],
+    profileId?: string,
+    options: { inputType?: EmbeddingInputType } = {}
+  ): Promise<Float32Array[]> {
     const profile = this.getProfile(profileId)
-    const cleaned = texts.map((text) => limitEmbeddingText(String(text || ''), profile.maxTextChars))
+    const inputType = options.inputType || 'document'
+    const cleaned = texts.map((text) => {
+      const limited = limitEmbeddingText(String(text || ''), profile.maxTextChars)
+      return applyEmbeddingInstruction(limited, profile, inputType)
+    })
     await this.ensureModelReady(profile.id)
     const deviceStatus = this.getDeviceStatus()
 
@@ -481,8 +564,12 @@ export class LocalEmbeddingModelService {
     return this.runEmbedding(profile, cleaned, 'cpu')
   }
 
-  async embedText(text: string, profileId?: string): Promise<Float32Array> {
-    const [vector] = await this.embedTexts([text], profileId)
+  async embedText(
+    text: string,
+    profileId?: string,
+    options: { inputType?: EmbeddingInputType } = {}
+  ): Promise<Float32Array> {
+    const [vector] = await this.embedTexts([text], profileId, { inputType: options.inputType || 'query' })
     return vector
   }
 
@@ -498,7 +585,9 @@ export class LocalEmbeddingModelService {
       max_length: profile.maxTokens
     })
     const output = await runtime.model(modelInputs)
-    return meanPoolNormalize(output, modelInputs.attention_mask, texts.length)
+    return profile.pooling === 'last_token'
+      ? lastTokenPoolNormalize(output, modelInputs.attention_mask, texts.length)
+      : meanPoolNormalize(output, modelInputs.attention_mask, texts.length)
   }
 
   private async getPipeline(
@@ -604,7 +693,7 @@ export class LocalEmbeddingModelService {
       }
     }
 
-    throw new Error(`语义模型下载失败。已尝试 ModelScope/魔塔社区：${profile.remoteHosts.join('、')}。请检查网络/代理或稍后重试。${errors.length ? ` 原始错误：${errors.join(' | ')}` : ''}`)
+    throw new Error(`语义模型下载失败。已尝试模型源：${profile.remoteHosts.join('、')}。请检查网络/代理或稍后重试。${errors.length ? ` 原始错误：${errors.join(' | ')}` : ''}`)
   }
 }
 

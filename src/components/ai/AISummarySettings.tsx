@@ -863,7 +863,7 @@ function AISummarySettings({
 
       <h3 className="section-title">本地语义检索</h3>
       <p className="section-desc">
-        使用 ModelScope/魔塔社区的 BGE 模型在本地生成真实语义向量，用于问 AI 检索聊天记录。模型下载到缓存目录，仅需下载一次。
+        使用 Qwen3 Embedding / BGE 模型在本地生成真实语义向量，用于问 AI 检索聊天记录。模型下载到缓存目录，仅需下载一次。
       </p>
 
       <h4 className="subsection-title semantic-vector-subtitle">语义模型版本</h4>

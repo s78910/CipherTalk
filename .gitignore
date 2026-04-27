@@ -43,6 +43,10 @@ release
 .env.local
 .env.production
 
+# Local evaluation data
+evaluation/retrieval/*.local.jsonl
+evaluation/retrieval/*.report.json
+
 # OS
 Thumbs.db
 

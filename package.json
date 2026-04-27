@@ -30,6 +30,7 @@
     "notify:telegram": "node scripts/send-telegram-release.js",
     "mcp": "node scripts/mcp-runner.js",
     "mcp:probe": "node scripts/mcp-probe.js",
+    "eval:retrieval": "node scripts/run-retrieval-evaluator.cjs",
     "preview": "vite preview",
     "electron:dev": "vite --mode electron",
     "electron:build": "npm run build",

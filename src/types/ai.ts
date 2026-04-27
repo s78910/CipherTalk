@@ -300,6 +300,8 @@ export interface EmbeddingModelProfile {
   maxTokens: number
   maxTextChars: number
   dtype: string
+  pooling?: 'mean' | 'last_token'
+  queryInstruction?: string
   sizeLabel: string
   enabled: boolean
 }
