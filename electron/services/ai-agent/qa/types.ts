@@ -192,9 +192,9 @@ export const MAX_SEARCH_HITS = 8
 export const MAX_CONTEXT_WINDOWS = 4
 export const SEARCH_CONTEXT_BEFORE = 6
 export const SEARCH_CONTEXT_AFTER = 6
-export const MAX_TOOL_CALLS = 10
-export const MAX_TOOL_DECISION_ATTEMPTS = 14
-export const MAX_SEARCH_RETRIES = 2
+export const MAX_TOOL_CALLS = 30
+export const MAX_TOOL_DECISION_ATTEMPTS = 40
+export const MAX_SEARCH_RETRIES = 4
 export const MAX_HISTORY_MESSAGES = 8
 export const MAX_SUMMARY_CHARS = 3000
 export const MAX_STRUCTURED_CHARS = 4000
@@ -207,12 +207,12 @@ export const DEFAULT_AGENT_DECISION_MAX_TOKENS = 2048
 export const DEFAULT_AGENT_ANSWER_MAX_TOKENS = 8192
 export const MAX_AGENT_DECISION_MAX_TOKENS = 32768
 export const MAX_AGENT_ANSWER_MAX_TOKENS = 65536
-/** 默认整体超时：2 分钟 */
-export const DEFAULT_TIMEOUT_MS = 120_000
+/** 默认整体超时：5 分钟（安全网，正常流程不应触发） */
+export const DEFAULT_TIMEOUT_MS = 300_000
 /** 单次工具调用超时：30 秒 */
 export const TOOL_CALL_TIMEOUT_MS = 30_000
-/** 默认 Token 预算上限（决策循环总计） */
-export const DEFAULT_TOKEN_BUDGET = 200_000
+/** 默认 Token 预算上限（安全网，正常流程不应触发） */
+export const DEFAULT_TOKEN_BUDGET = 500_000
 
 // ─── 错误分类 ────────────────────────────────────────────────
 
