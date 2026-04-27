@@ -976,13 +976,25 @@ function AISummaryWindow() {
   }
 
   const getQAProgressTargetLabel = (event: SessionQAProgressEvent) => {
-    if (event.toolName) {
-      return `ciphertalk : ${event.toolName}`
-    }
-    return event.title
+    return event.nodeName || event.displayName || event.title
   }
 
   const getQAProgressDetailLines = (event: SessionQAProgressEvent) => {
+    const stageLabels: Record<SessionQAProgressEvent['stage'], string> = {
+      intent: '识别意图',
+      tool: '运行工具',
+      context: '整理依据',
+      answer: '生成回答',
+      thought: '规划下一步'
+    }
+    const sourceLabels: Record<NonNullable<SessionQAProgressEvent['source']>, string> = {
+      summary: '摘要事实',
+      chat: '原始消息',
+      search_index: '检索索引',
+      vector: '语义向量',
+      aggregate: '聚合统计',
+      model: '模型推理'
+    }
     const lines = [
       ...(event.detail
         ? event.detail.split('\n').map((line) => line.trim()).filter(Boolean)
@@ -990,8 +1002,8 @@ function AISummaryWindow() {
     ]
 
     if (event.diagnostics?.length) lines.push(...event.diagnostics)
-    if (event.stage) lines.push(`阶段：${event.stage}`)
-    if (event.source) lines.push(`数据源：${event.source}`)
+    if (event.stage) lines.push(`阶段：${stageLabels[event.stage]}`)
+    if (event.source) lines.push(`数据来源：${sourceLabels[event.source]}`)
     if (event.query) lines.push(`查询：${event.query}`)
     if (event.count !== undefined) lines.push(`数量：${event.count}`)
     if (event.elapsedMs !== undefined) lines.push(`耗时：${(event.elapsedMs / 1000).toFixed(1)} 秒`)

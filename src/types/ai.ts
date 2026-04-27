@@ -200,6 +200,8 @@ export interface SessionQAToolCall {
     | 'answer'
     | 'get_session_context'
     | 'prepare_vector_index'
+  displayName?: string
+  nodeName?: string
   args: Record<string, unknown>
   summary: string
   status?: 'running' | 'completed' | 'failed' | 'cancelled'
@@ -216,6 +218,8 @@ export interface SessionQAProgressEvent {
   stage: SessionQAProgressStage
   status: SessionQAProgressStatus
   title: string
+  displayName?: string
+  nodeName?: string
   detail?: string
   toolName?: SessionQAToolCall['toolName']
   query?: string

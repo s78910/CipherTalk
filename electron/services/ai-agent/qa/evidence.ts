@@ -10,7 +10,7 @@ import type {
   SessionQAIntentType,
   ToolObservation
 } from './types'
-import type { McpSearchMessagesPayload } from '../../mcp/types'
+import type { AgentSearchResult } from './data/models'
 import { compactText } from './utils/text'
 import { formatCursor, formatMessageLine, getMessageCursorKey } from './utils/message'
 import type { ToolLoopAction } from './types'
@@ -75,6 +75,8 @@ export function describeVectorSkipReason(reason?: string): string {
     exact_match_mode: '精确匹配模式',
     empty_semantic_query: '语义查询为空',
     vector_provider_unavailable: '向量能力不可用',
+    sqlite_vec_unavailable: '向量扩展不可用',
+    index_db_missing: '向量索引库不存在',
     vector_index_incomplete: '向量索引未完成',
     indexed_search_unavailable: '本地索引不可用，已回退扫描',
     search_index_not_ready: '搜索索引未就绪，已回退扫描'
@@ -89,7 +91,7 @@ export function describeVectorSkipReason(reason?: string): string {
 /**
  * 解释搜索失败原因
  */
-export function interpretSearchFailure(payload?: McpSearchMessagesPayload): {
+export function interpretSearchFailure(payload?: AgentSearchResult): {
   reason: SearchFailureReason
   suggestion: string
 } {
@@ -134,7 +136,7 @@ export function interpretSearchFailure(payload?: McpSearchMessagesPayload): {
 /**
  * 格式化向量搜索诊断行
  */
-export function formatVectorSearchLine(payload?: McpSearchMessagesPayload): string {
+export function formatVectorSearchLine(payload?: AgentSearchResult): string {
   const vector = payload?.vectorSearch
   if (!vector) return '向量索引：无诊断信息'
 
@@ -157,7 +159,7 @@ export function formatVectorSearchLine(payload?: McpSearchMessagesPayload): stri
 /**
  * 获取搜索诊断信息
  */
-export function getSearchDiagnostics(payload?: McpSearchMessagesPayload): string[] {
+export function getSearchDiagnostics(payload?: AgentSearchResult): string[] {
   if (!payload) return []
 
   const lines = [
@@ -203,7 +205,7 @@ export function buildKnownHitsText(hits: KnownSearchHit[]): string {
 /**
  * 汇总搜索结果观察
  */
-export function summarizeSearchObservation(query: string, payload?: McpSearchMessagesPayload, knownHits: KnownSearchHit[] = []): string {
+export function summarizeSearchObservation(query: string, payload?: AgentSearchResult, knownHits: KnownSearchHit[] = []): string {
   const hits = payload?.hits || []
   const diagnostics = getSearchDiagnostics(payload)
   if (hits.length === 0) {

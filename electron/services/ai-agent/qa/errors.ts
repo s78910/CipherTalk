@@ -33,7 +33,7 @@ export function classifyAgentError(error: unknown): ClassifiedAgentError {
     }
   }
 
-  // API 限流（可重试，需退避）
+  // 模型服务限流（可重试，需退避）
   if (
     lowerMessage.includes('rate limit') ||
     lowerMessage.includes('too many requests') ||
@@ -44,7 +44,7 @@ export function classifyAgentError(error: unknown): ClassifiedAgentError {
     return {
       severity: 'retryable',
       category: 'rate_limit',
-      message: `API 限流：${message}`,
+      message: `模型服务限流：${message}`,
       originalError: error,
       shouldRetry: true,
       retryDelayMs: 3000
@@ -56,7 +56,7 @@ export function classifyAgentError(error: unknown): ClassifiedAgentError {
     lowerMessage.includes('unauthorized') ||
     lowerMessage.includes('401') ||
     lowerMessage.includes('403') ||
-    lowerMessage.includes('invalid api key') ||
+    lowerMessage.includes('invalid key') ||
     lowerMessage.includes('authentication')
   ) {
     return {

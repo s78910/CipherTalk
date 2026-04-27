@@ -1,11 +1,32 @@
-import type { Contact, Message } from '../../chatService'
-import { voiceTranscribeService } from '../../voiceTranscribeService'
+import { agentTranscriptCache } from './transcriptCache'
 import type { AnalysisBlock, StandardizedAnalysisMessage } from '../types/analysis'
 
 export const ANALYSIS_MAX_MESSAGE_CHARS = 800
 export const ANALYSIS_BLOCK_MAX_MESSAGES = 120
 export const ANALYSIS_BLOCK_MAX_CHARS = 12000
 export const ANALYSIS_BLOCK_OVERLAP_MESSAGES = 12
+
+export interface AnalysisContact {
+  remark?: string
+  nickName?: string
+}
+
+export interface AnalysisChatRecordItem {
+  datatype: number
+  datadesc?: string
+  datatitle?: string
+  sourcename?: string
+}
+
+export interface AnalysisMessage {
+  localId: number
+  createTime: number
+  sortSeq: number
+  senderUsername?: string | null
+  localType: number
+  parsedContent?: string
+  chatRecordList?: AnalysisChatRecordItem[]
+}
 
 function formatTimestamp(timestampSeconds: number): string {
   const date = new Date(timestampSeconds * 1000)
@@ -59,7 +80,7 @@ function formatStandardizedLine(sender: string, time: string, messageType: strin
   return `[${messageType}] {${sender}：${time} ${content}}`
 }
 
-function buildChatRecordContent(message: Message): string {
+function buildChatRecordContent(message: AnalysisMessage): string {
   const recordCount = message.chatRecordList?.length || 0
   const recordLines: string[] = []
   let title = '聊天记录'
@@ -98,8 +119,8 @@ function buildChatRecordContent(message: Message): string {
 }
 
 export function standardizeMessagesForAnalysis(
-  messages: Message[],
-  contacts: Map<string, Contact>,
+  messages: AnalysisMessage[],
+  contacts: Map<string, AnalysisContact>,
   sessionId: string
 ): StandardizedAnalysisMessage[] {
   const sortedMessages = [...messages].sort((a, b) =>
@@ -123,7 +144,7 @@ export function standardizeMessagesForAnalysis(
       content = buildChatRecordContent(message)
     } else if (message.localType === 34) {
       messageType = '语音'
-      const transcript = voiceTranscribeService.getCachedTranscript(sessionId, message.createTime)
+      const transcript = agentTranscriptCache.getCachedTranscript(sessionId, message.createTime)
       content = transcript || message.parsedContent || '[语音消息]'
     } else if (message.localType === 10002) {
       continue

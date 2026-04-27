@@ -1,14 +1,16 @@
 /**
- * 参与者解析工具
+ * 参与者解析工具。
  */
-import { executeMcpTool } from '../../../mcp/dispatcher'
-import type { McpContactsPayload } from '../../../mcp/types'
+import { agentDataRepository } from '../data/repository'
 import type { ContextWindow, KnownSearchHit, ParticipantResolution, ToolLoopAction } from '../types'
 import { compactText } from '../utils/text'
 import { dedupeMessagesByCursor, describeSender, participantMatches } from '../utils/message'
 
 export async function resolveParticipantName(input: {
-  sessionId: string; name?: string; contextWindows: ContextWindow[]; knownHits: KnownSearchHit[]
+  sessionId: string
+  name?: string
+  contextWindows: ContextWindow[]
+  knownHits: KnownSearchHit[]
 }): Promise<ParticipantResolution> {
   const query = compactText(input.name || '', 48)
   const observedMessages = dedupeMessagesByCursor([
@@ -19,23 +21,42 @@ export async function resolveParticipantName(input: {
   if (query) {
     const observed = observedMessages.find((m) => participantMatches(query, m))
     if (observed?.sender.username || observed?.sender.displayName) {
-      return { query, senderUsername: observed.sender.username || undefined, displayName: describeSender(observed), confidence: observed.sender.username ? 'high' : 'medium', source: 'observed' }
+      return {
+        query,
+        senderUsername: observed.sender.username || undefined,
+        displayName: describeSender(observed),
+        confidence: observed.sender.username ? 'high' : 'medium',
+        source: 'observed'
+      }
     }
   }
 
   if (query) {
-    try {
-      const result = await executeMcpTool('list_contacts', { q: query, limit: 10, offset: 0 })
-      const payload = result.payload as McpContactsPayload
-      const exact = payload.items.find((c) => {
-        const names = [c.displayName, c.remark || '', c.nickname || '', c.contactId]
-        return names.some((n) => n && (n === query || n.toLowerCase() === query.toLowerCase()))
-      }) || payload.items[0]
-      if (exact) {
-        return { query, senderUsername: exact.contactId, displayName: exact.displayName || exact.remark || exact.nickname || exact.contactId, confidence: exact.displayName === query || exact.remark === query || exact.nickname === query ? 'high' : 'medium', source: 'contacts' }
+    const normalized = query.toLowerCase()
+    const candidates = [
+      ...agentDataRepository.listContacts(),
+      ...agentDataRepository.loadGroupMembers(input.sessionId)
+    ]
+    const exact = candidates.find((contact) => {
+      const names = [contact.displayName, contact.remark || '', contact.nickname || '', contact.contactId]
+      return names.some((name) => name && (name === query || name.toLowerCase() === normalized))
+    })
+    const partial = exact || candidates.find((contact) => {
+      const names = [contact.displayName, contact.remark || '', contact.nickname || '', contact.contactId]
+      return names.some((name) => {
+        const candidate = name.toLowerCase()
+        return Boolean(candidate) && (candidate.includes(normalized) || normalized.includes(candidate))
+      })
+    })
+
+    if (partial) {
+      return {
+        query,
+        senderUsername: partial.contactId,
+        displayName: partial.displayName || partial.remark || partial.nickname || partial.contactId,
+        confidence: exact ? 'high' : 'medium',
+        source: 'contacts'
       }
-    } catch {
-      // 参与者解析失败不应中断问答
     }
   }
 

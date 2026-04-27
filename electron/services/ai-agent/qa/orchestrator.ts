@@ -9,7 +9,8 @@ import type {
   SessionQAAgentOptions,
   SessionQAAgentResult,
   ToolLoopAction,
-  ContextWindow
+  ContextWindow,
+  SessionQAToolCall
 } from './types'
 import {
   MAX_CONTEXT_MESSAGES,
@@ -44,6 +45,7 @@ import { aggregateMessages } from './tools/aggregate'
 import { buildAnswerPrompt } from './prompts/answer'
 import { classifyAgentError, shouldRetryToolCall, getRetryDelayMs } from './errors'
 import type { SummaryEvidenceRef } from '../types/analysis'
+import { getAgentNodeName } from './nodeNames'
 
 // ─── 辅助函数 ────────────────────────────────────────────────
 
@@ -82,6 +84,11 @@ function isExactLookupQuestion(question: string): boolean {
   return /邮箱|邮件|email|e-mail|电话|手机|手机号|号码|账号|帐号|密码|地址|网址|链接|url|http/i.test(question)
 }
 
+function buildToolCall(input: Omit<SessionQAToolCall, 'displayName' | 'nodeName'>): SessionQAToolCall {
+  const nodeName = getAgentNodeName({ toolName: input.toolName })
+  return { ...input, displayName: nodeName, nodeName }
+}
+
 // ─── 工具执行器（每个分支独立函数）─────────────────────────────
 
 async function executeSummaryFacts(ctx: AgentContext, action: ToolLoopAction & { action: 'read_summary_facts' }) {
@@ -97,7 +104,7 @@ async function executeSummaryFacts(ctx: AgentContext, action: ToolLoopAction & {
     ctx.evidenceCandidates.push(...collectStructuredEvidenceRefs(ctx.options.structuredAnalysis))
   }
 
-  ctx.toolCalls.push({ toolName: 'read_summary_facts', args: { hasSummaryText: Boolean(stripThinkBlocks(ctx.options.summaryText || '').trim()), hasStructuredAnalysis: Boolean(structuredContext) }, summary: ctx.summaryFactsRead ? '已读取当前摘要和结构化摘要。' : '当前没有可用摘要事实。' })
+  ctx.toolCalls.push(buildToolCall({ toolName: 'read_summary_facts', args: { hasSummaryText: Boolean(stripThinkBlocks(ctx.options.summaryText || '').trim()), hasStructuredAnalysis: Boolean(structuredContext) }, summary: ctx.summaryFactsRead ? '已读取当前摘要和结构化摘要。' : '当前没有可用摘要事实。' }))
   emitProgress(ctx.options, { id: progressId, stage: 'tool', status: 'completed', title: '读取摘要事实', detail: ctx.summaryFactsRead ? '当前摘要/结构化摘要可作为回答依据' : '当前摘要为空或不足', toolName: 'read_summary_facts', count: ctx.summaryFactsRead ? 1 : 0 })
   ctx.observations.push({ title: '读取摘要事实', detail: ctx.summaryFactsRead ? ctx.summaryFactsText : '当前没有可用摘要事实。' })
 }
@@ -111,7 +118,7 @@ async function executeResolveParticipant(ctx: AgentContext, action: ToolLoopActi
 
   const resolution = await resolveParticipantName({ sessionId: ctx.sessionId, name, contextWindows: ctx.contextWindows, knownHits: ctx.knownHits })
   ctx.resolvedParticipants.push(resolution)
-  ctx.toolCalls.push({ toolName: 'resolve_participant', args: { sessionId: ctx.sessionId, name }, summary: resolution.senderUsername ? `解析为 ${resolution.displayName || resolution.senderUsername}` : '未解析到明确发送者，后续读取会不加发送者过滤。' })
+  ctx.toolCalls.push(buildToolCall({ toolName: 'resolve_participant', args: { sessionId: ctx.sessionId, name }, summary: resolution.senderUsername ? `解析为 ${resolution.displayName || resolution.senderUsername}` : '未解析到明确发送者，后续读取会不加发送者过滤。' }))
   emitProgress(ctx.options, { id: progressId, stage: 'tool', status: resolution.senderUsername ? 'completed' : 'failed', title: '解析参与者', detail: resolution.senderUsername ? `${resolution.query} => ${resolution.displayName || resolution.senderUsername}` : `${resolution.query} 未解析到明确发送者`, toolName: 'resolve_participant', query: name, count: resolution.senderUsername ? 1 : 0 })
   ctx.observations.push({ title: '解析参与者', detail: resolution.senderUsername ? `${resolution.query} => ${resolution.displayName || resolution.senderUsername} (${resolution.senderUsername})，置信度 ${resolution.confidence}。` : `${resolution.query} 未解析到明确 senderUsername。` })
 }
@@ -224,7 +231,7 @@ async function executeAggregateMessages(ctx: AgentContext, action: ToolLoopActio
   }
 
   ctx.aggregateText = aggregateMessages(messages, action.metric)
-  ctx.toolCalls.push({ toolName: 'aggregate_messages', args: { metric: action.metric || 'summary', messageCount: messages.length }, summary: ctx.aggregateText, status: messages.length > 0 ? 'completed' : 'failed', evidenceCount: messages.length })
+  ctx.toolCalls.push(buildToolCall({ toolName: 'aggregate_messages', args: { metric: action.metric || 'summary', messageCount: messages.length }, summary: ctx.aggregateText, status: messages.length > 0 ? 'completed' : 'failed', evidenceCount: messages.length }))
   emitProgress(ctx.options, { id: progressId, stage: 'tool', status: messages.length > 0 ? 'completed' : 'failed', title: '整理统计', detail: messages.length > 0 ? `已整理 ${messages.length} 条消息` : '没有可聚合的消息', toolName: 'aggregate_messages', count: messages.length })
   ctx.observations.push({ title: '整理统计', detail: ctx.aggregateText })
 }
@@ -295,7 +302,7 @@ async function executeSearchMessages(ctx: AgentContext, action: ToolLoopAction &
       }
     }
   } catch (error) {
-    ctx.toolCalls.push({ toolName: 'search_messages', args: { sessionId: ctx.sessionId, query }, summary: `检索失败：${String(error)}` })
+    ctx.toolCalls.push(buildToolCall({ toolName: 'search_messages', args: { sessionId: ctx.sessionId, query }, summary: `检索失败：${String(error)}`, status: 'failed' }))
     emitProgress(ctx.options, { id: progressId, stage: 'tool', status: 'failed', title: '搜索相关消息失败', detail: `关键词：${query}，${compactText(String(error), 120)}`, toolName: 'search_messages', query })
     ctx.observations.push({ title: '搜索相关消息失败', detail: `关键词：${query}，失败原因：${compactText(String(error), 160)}。` })
   }

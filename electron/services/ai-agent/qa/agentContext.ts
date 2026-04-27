@@ -17,9 +17,9 @@ import type {
   TimeRangeHint,
   TokenUsage
 } from './types'
-import type { McpMessageItem, McpSearchMessagesPayload } from '../../mcp/types'
 import type { SummaryEvidenceRef } from '../types/analysis'
 import type { StructuredAnalysis } from '../types/analysis'
+import type { AgentMessage, AgentSearchResult } from './data/models'
 import { assessEvidenceQuality } from './evidence'
 import { getMessageCursorKey, toEvidenceRef } from './utils/message'
 import { stripThinkBlocks } from './utils/text'
@@ -220,7 +220,7 @@ export class AgentContext {
   }
 
   /** 添加搜索结果命中 */
-  addKnownHits(query: string, payload?: McpSearchMessagesPayload) {
+  addKnownHits(query: string, payload?: AgentSearchResult) {
     if (!payload) return
 
     for (const hit of payload.hits) {
@@ -238,7 +238,7 @@ export class AgentContext {
   }
 
   /** 添加上下文消息的证据 */
-  addContextEvidence(messages: McpMessageItem[], limit = 8) {
+  addContextEvidence(messages: AgentMessage[], limit = 8) {
     for (const message of messages.slice(-limit)) {
       const ref = toEvidenceRef(this.sessionId, message)
       if (ref) this.evidenceCandidates.push(ref)

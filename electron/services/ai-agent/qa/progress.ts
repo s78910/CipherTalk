@@ -6,6 +6,7 @@ import type {
   SessionQAProgressEvent,
   SessionQAProgressSource
 } from './types'
+import { getAgentNodeName } from './nodeNames'
 
 /**
  * 推断进度事件来源
@@ -36,8 +37,11 @@ function inferProgressSource(event: Omit<SessionQAProgressEvent, 'createdAt'>): 
 export function buildProgressEvent(
   event: Omit<SessionQAProgressEvent, 'createdAt'>
 ): SessionQAProgressEvent {
+  const nodeName = event.nodeName || event.displayName || getAgentNodeName(event)
   return {
     ...event,
+    displayName: event.displayName || nodeName,
+    nodeName,
     createdAt: Date.now(),
     source: event.source || inferProgressSource(event)
   }

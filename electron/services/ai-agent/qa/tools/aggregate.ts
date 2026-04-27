@@ -1,12 +1,12 @@
 /**
  * 消息聚合工具
  */
-import type { McpMessageItem } from '../../../mcp/types'
+import type { AgentMessage } from '../data/models'
 import type { ToolLoopAction } from '../types'
 import { dedupeMessagesByCursor, describeSender, formatMessageLine } from '../utils/message'
 import { formatTime } from '../utils/time'
 
-export function aggregateMessages(messages: McpMessageItem[], metric: Extract<ToolLoopAction, { action: 'aggregate_messages' }>['metric'] = 'summary'): string {
+export function aggregateMessages(messages: AgentMessage[], metric: Extract<ToolLoopAction, { action: 'aggregate_messages' }>['metric'] = 'summary'): string {
   const unique = dedupeMessagesByCursor(messages)
   if (unique.length === 0) return '没有可聚合的消息。'
 

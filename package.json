@@ -31,6 +31,7 @@
     "mcp": "node scripts/mcp-runner.js",
     "mcp:probe": "node scripts/mcp-probe.js",
     "eval:retrieval": "node scripts/run-retrieval-evaluator.cjs",
+    "test:agent-qa": "node scripts/test-agent-qa-independent.cjs",
     "preview": "vite preview",
     "electron:dev": "vite --mode electron",
     "electron:build": "npm run build",

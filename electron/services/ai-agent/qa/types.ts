@@ -1,7 +1,7 @@
 /**
  * SessionQA Agent 公共类型、常量
  */
-import type { McpCursor, McpMessageItem, McpSearchMessagesPayload } from '../../mcp/types'
+import type { AgentContextWindow, AgentCursor, AgentMessage, AgentSearchHit, AgentSearchResult } from './data/models'
 import type { SummaryEvidenceRef } from '../types/analysis'
 
 // ─── 公共接口（对外导出）───────────────────────────────────
@@ -13,6 +13,8 @@ export interface SessionQAHistoryMessage {
 
 export interface SessionQAToolCall {
   toolName: SessionQAToolName
+  displayName?: string
+  nodeName?: string
   args: Record<string, unknown>
   summary: string
   status?: 'running' | 'completed' | 'failed' | 'cancelled'
@@ -43,6 +45,8 @@ export interface SessionQAProgressEvent {
   stage: SessionQAProgressStage
   status: SessionQAProgressStatus
   title: string
+  displayName?: string
+  nodeName?: string
   detail?: string
   toolName?: SessionQAToolCall['toolName']
   query?: string
@@ -97,17 +101,11 @@ export interface TokenUsage {
 
 // ─── 内部类型 ───────────────────────────────────────────────
 
-export type SearchPayloadWithQuery = { query: string; payload: McpSearchMessagesPayload }
-export type SearchHitWithQuery = McpSearchMessagesPayload['hits'][number] & { query: string }
+export type SearchPayloadWithQuery = { query: string; payload: AgentSearchResult }
+export type SearchHitWithQuery = AgentSearchHit & { query: string }
 export type KnownSearchHit = SearchHitWithQuery & { hitId: string }
 
-export type ContextWindow = {
-  source: 'search' | 'latest' | 'time_range'
-  query?: string
-  label?: string
-  anchor?: McpMessageItem
-  messages: McpMessageItem[]
-}
+export type ContextWindow = AgentContextWindow
 
 export type ToolObservation = {
   title: string
@@ -168,7 +166,7 @@ export type IntentRoute = {
 export type ToolLoopAction =
   | { action: 'read_summary_facts'; reason?: string }
   | { action: 'search_messages'; query: string; reason?: string }
-  | { action: 'read_context'; hitId?: string; cursor?: McpCursor; beforeLimit?: number; afterLimit?: number; reason?: string }
+  | { action: 'read_context'; hitId?: string; cursor?: AgentCursor; beforeLimit?: number; afterLimit?: number; reason?: string }
   | { action: 'read_latest'; limit?: number; reason?: string }
   | { action: 'read_by_time_range'; startTime?: number; endTime?: number; label?: string; limit?: number; keyword?: string; senderUsername?: string; participantName?: string; reason?: string }
   | { action: 'resolve_participant'; name?: string; reason?: string }
@@ -183,6 +181,8 @@ export type AutonomousAgentAction =
   | { action: 'final_answer'; content?: string; reason?: string }
 
 export type EvidenceQuality = 'none' | 'weak' | 'sufficient'
+
+export type { AgentMessage }
 
 // ─── 常量 ───────────────────────────────────────────────────
 
