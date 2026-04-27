@@ -4377,6 +4377,39 @@ function registerIpcHandlers() {
     }
   })
 
+  ipcMain.handle('ai:getSessionMemoryBuildState', async (_, sessionId: string) => {
+    try {
+      const { memoryBuildService } = await import('./services/memory/memoryBuildService')
+      return {
+        success: true,
+        result: memoryBuildService.getSessionState(sessionId)
+      }
+    } catch (e) {
+      console.error('[AI] 获取会话记忆构建状态失败:', e)
+      logService?.error('AI', '获取会话记忆构建状态失败', { error: String(e) })
+      return { success: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('ai:prepareSessionMemory', async (event, options: { sessionId: string }) => {
+    try {
+      const sessionId = String(options?.sessionId || '').trim()
+      if (!sessionId) {
+        return { success: false, error: 'sessionId 不能为空' }
+      }
+
+      const { memoryBuildService } = await import('./services/memory/memoryBuildService')
+      const result = await memoryBuildService.prepareSessionMemory(sessionId, (progress) => {
+        event.sender.send('ai:sessionMemoryBuildProgress', progress)
+      })
+      return { success: true, result }
+    } catch (e) {
+      console.error('[AI] 构建会话记忆失败:', e)
+      logService?.error('AI', '构建会话记忆失败', { error: String(e) })
+      return { success: false, error: String(e) }
+    }
+  })
+
   ipcMain.handle('ai:getEmbeddingModelProfiles', async () => {
     try {
       const { localEmbeddingModelService } = await import('./services/search/embeddingModelService')

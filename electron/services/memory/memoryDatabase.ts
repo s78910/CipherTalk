@@ -384,6 +384,30 @@ export class MemoryDatabase {
     return rows.map(toMemoryItem)
   }
 
+  countMemoryItems(options: {
+    sourceType?: MemorySourceType
+    sessionId?: string
+  } = {}): number {
+    const clauses: string[] = []
+    const params: Record<string, unknown> = {}
+
+    if (options.sourceType) {
+      clauses.push('source_type = @sourceType')
+      params.sourceType = options.sourceType
+    }
+    if (options.sessionId) {
+      clauses.push('session_id = @sessionId')
+      params.sessionId = options.sessionId
+    }
+
+    const whereSql = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
+    const row = this.getDb().prepare(`
+      SELECT COUNT(*) AS count FROM memory_items
+      ${whereSql}
+    `).get(params) as { count: number } | undefined
+    return Number(row?.count || 0)
+  }
+
   deleteMemoryItem(id: number): boolean {
     const result = this.getDb().prepare('DELETE FROM memory_items WHERE id = ?').run(id)
     return result.changes > 0

@@ -51,6 +51,48 @@ export interface SaveAnalysisArtifactsInput {
   updatedAt?: number
 }
 
+export interface AnalysisMemoryBlockRow {
+  id: number
+  runId: number
+  summaryId: number
+  sessionId: string
+  blockIndex: number
+  blockId: string
+  startTime: number
+  endTime: number
+  messageCount: number
+  charCount: number
+  renderedText: string
+  messagesJson: string
+  extractedResultJson?: string | null
+  createdAt: number
+  updatedAt: number
+}
+
+export interface AnalysisMemoryFactRow {
+  id: number
+  runId: number
+  summaryId: number
+  sessionId: string
+  factType: string
+  factKey: string
+  sortOrder: number
+  displayText: string
+  confidence: number | null
+  importance: number | null
+  severity: string | null
+  owner: string | null
+  deadline: string | null
+  status: string | null
+  eventDate: string | null
+  payloadJson: string
+  timeRangeStart: number
+  timeRangeEnd: number
+  evidenceRefs: SummaryEvidenceRef[]
+  createdAt: number
+  updatedAt: number
+}
+
 interface SummaryBackfillRow {
   id: number
   session_id: string
@@ -801,6 +843,123 @@ export class AIDatabase {
       customName: row.custom_name,
       structuredAnalysis: this.parseStructuredAnalysisColumn(row.structured_result_json)
     }))
+  }
+
+  listAnalysisMemoryBlocks(sessionId: string): AnalysisMemoryBlockRow[] {
+    const db = this.getDb()
+    const rows = db.prepare(`
+      SELECT
+        b.id,
+        b.run_id,
+        r.summary_id,
+        r.session_id,
+        b.block_index,
+        b.block_id,
+        b.start_time,
+        b.end_time,
+        b.message_count,
+        b.char_count,
+        b.rendered_text,
+        b.messages_json,
+        b.extracted_result_json,
+        r.created_at,
+        r.updated_at
+      FROM analysis_blocks b
+      JOIN analysis_runs r ON r.id = b.run_id
+      WHERE r.session_id = ?
+      ORDER BY r.created_at ASC, b.block_index ASC, b.id ASC
+    `).all(sessionId) as any[]
+
+    return rows.map((row) => ({
+      id: Number(row.id || 0),
+      runId: Number(row.run_id || 0),
+      summaryId: Number(row.summary_id || 0),
+      sessionId: row.session_id,
+      blockIndex: Number(row.block_index || 0),
+      blockId: String(row.block_id || ''),
+      startTime: Number(row.start_time || 0),
+      endTime: Number(row.end_time || 0),
+      messageCount: Number(row.message_count || 0),
+      charCount: Number(row.char_count || 0),
+      renderedText: String(row.rendered_text || ''),
+      messagesJson: String(row.messages_json || '[]'),
+      extractedResultJson: row.extracted_result_json ?? null,
+      createdAt: Number(row.created_at || 0),
+      updatedAt: Number(row.updated_at || 0)
+    }))
+  }
+
+  listAnalysisMemoryFacts(sessionId: string): AnalysisMemoryFactRow[] {
+    const db = this.getDb()
+    const rows = db.prepare(`
+      SELECT
+        f.id,
+        f.run_id,
+        r.summary_id,
+        r.session_id,
+        f.fact_type,
+        f.fact_key,
+        f.sort_order,
+        f.display_text,
+        f.confidence,
+        f.importance,
+        f.severity,
+        f.owner,
+        f.deadline,
+        f.status,
+        f.event_date,
+        f.payload_json,
+        r.time_range_start,
+        r.time_range_end,
+        r.created_at,
+        r.updated_at
+      FROM extracted_facts f
+      JOIN analysis_runs r ON r.id = f.run_id
+      WHERE r.session_id = ?
+      ORDER BY r.created_at ASC, f.sort_order ASC, f.id ASC
+    `).all(sessionId) as any[]
+
+    const evidenceRows = db.prepare(`
+      SELECT *
+      FROM evidence_links
+      WHERE fact_id = ?
+      ORDER BY evidence_order ASC, id ASC
+    `)
+
+    return rows.map((row) => {
+      const evidence = evidenceRows.all(row.id) as any[]
+      return {
+        id: Number(row.id || 0),
+        runId: Number(row.run_id || 0),
+        summaryId: Number(row.summary_id || 0),
+        sessionId: row.session_id,
+        factType: String(row.fact_type || ''),
+        factKey: String(row.fact_key || ''),
+        sortOrder: Number(row.sort_order || 0),
+        displayText: String(row.display_text || ''),
+        confidence: row.confidence == null ? null : Number(row.confidence),
+        importance: row.importance == null ? null : Number(row.importance),
+        severity: row.severity ?? null,
+        owner: row.owner ?? null,
+        deadline: row.deadline ?? null,
+        status: row.status ?? null,
+        eventDate: row.event_date ?? null,
+        payloadJson: String(row.payload_json || '{}'),
+        timeRangeStart: Number(row.time_range_start || 0),
+        timeRangeEnd: Number(row.time_range_end || 0),
+        evidenceRefs: evidence.map((item) => ({
+          sessionId: String(item.session_id || row.session_id || ''),
+          localId: Number(item.local_id || 0),
+          createTime: Number(item.create_time || 0),
+          sortSeq: Number(item.sort_seq || 0),
+          senderUsername: item.sender_username || undefined,
+          senderDisplayName: item.sender_display_name || undefined,
+          previewText: String(item.preview_text || '')
+        })),
+        createdAt: Number(row.created_at || 0),
+        updatedAt: Number(row.updated_at || 0)
+      }
+    })
   }
 
   /**

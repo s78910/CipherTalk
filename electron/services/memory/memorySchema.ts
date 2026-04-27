@@ -130,3 +130,45 @@ export type MemoryDatabaseStats = {
   embeddingCount: number
   staleEmbeddingCount: number
 }
+
+export type SessionMemoryBuildProgressStage =
+  | 'preparing'
+  | 'indexing_messages'
+  | 'building_messages'
+  | 'building_blocks'
+  | 'building_facts'
+  | 'completed'
+
+export type SessionMemoryBuildProgressStatus =
+  | 'running'
+  | 'completed'
+  | 'failed'
+
+export type SessionMemoryBuildState = {
+  sessionId: string
+  messageCount: number
+  blockCount: number
+  factCount: number
+  totalCount: number
+  processedCount: number
+  isRunning: boolean
+  updatedAt: number
+  completedAt?: number
+  lastError?: string
+}
+
+export type SessionMemoryBuildProgressEvent = {
+  sessionId: string
+  stage: SessionMemoryBuildProgressStage
+  status: SessionMemoryBuildProgressStatus
+  processedCount: number
+  totalCount: number
+  message: string
+  messageCount: number
+  blockCount: number
+  factCount: number
+}
+
+export type SessionMemoryBuildResult = SessionMemoryBuildState & {
+  success: boolean
+}

@@ -104,6 +104,21 @@ export interface ChatVectorSearchSessionResult {
   model: string
 }
 
+export interface ChatSearchMemoryMessage {
+  id: number
+  sessionId: string
+  localId: number
+  serverId: number
+  localType: number
+  createTime: number
+  sortSeq: number
+  isSend: number | null
+  senderUsername: string | null
+  parsedContent: string
+  rawContent: string
+  searchText: string
+}
+
 type MessageIndexRow = {
   id: number
   session_id: string
@@ -1736,6 +1751,60 @@ export class ChatSearchIndexService {
       truncated: rows.length > scanLimit,
       model: profile.id
     }
+  }
+
+  async listSessionMemoryMessages(
+    sessionId: string,
+    onProgress?: ChatSearchSessionOptions['onProgress']
+  ): Promise<ChatSearchMemoryMessage[]> {
+    await this.ensureSessionIndexed(sessionId, onProgress)
+    const rows = this.getDb().prepare(`
+      SELECT
+        id,
+        session_id,
+        local_id,
+        server_id,
+        local_type,
+        create_time,
+        sort_seq,
+        is_send,
+        sender_username,
+        parsed_content,
+        raw_content,
+        search_text
+      FROM message_index
+      WHERE session_id = ?
+        AND trim(search_text) != ''
+      ORDER BY sort_seq ASC, create_time ASC, local_id ASC
+    `).all(sessionId) as Array<Pick<MessageIndexRow,
+      | 'id'
+      | 'session_id'
+      | 'local_id'
+      | 'server_id'
+      | 'local_type'
+      | 'create_time'
+      | 'sort_seq'
+      | 'is_send'
+      | 'sender_username'
+      | 'parsed_content'
+      | 'raw_content'
+      | 'search_text'
+    >>
+
+    return rows.map((row) => ({
+      id: Number(row.id || 0),
+      sessionId: row.session_id,
+      localId: Number(row.local_id || 0),
+      serverId: Number(row.server_id || 0),
+      localType: Number(row.local_type || 0),
+      createTime: Number(row.create_time || 0),
+      sortSeq: Number(row.sort_seq || 0),
+      isSend: row.is_send ?? null,
+      senderUsername: row.sender_username ?? null,
+      parsedContent: String(row.parsed_content || ''),
+      rawContent: String(row.raw_content || ''),
+      searchText: String(row.search_text || '')
+    }))
   }
 }
 
