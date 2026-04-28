@@ -223,6 +223,7 @@
       "node_modules/sherpa-onnx-node/**/*",
       "node_modules/sqlite-vec*/**/*",
       "node_modules/koffi/**/*",
+      "node_modules/zod/**/*",
       "dist-electron/*Worker.js",
       "dist-electron/workers/**/*",
       "resources/wedecrypt/*.node",
