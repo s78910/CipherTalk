@@ -21,7 +21,8 @@ import {
   ONLINE_EMBEDDING_COMMON_DIMS
 } from './onlineEmbeddingRegistry'
 
-const ONLINE_EMBEDDING_CONCURRENCY = 16
+const ONLINE_EMBEDDING_CONCURRENCY = 10
+const ONLINE_EMBEDDING_BATCH_SIZE = 20
 const ONLINE_EMBEDDING_MIN_CHARS_ON_413 = 512
 const ONLINE_EMBEDDING_413_SHRINK_RATIO = 0.5
 
@@ -356,7 +357,7 @@ export class OnlineEmbeddingService {
   getCurrentBatchSize(): number {
     const config = this.getCurrentConfig()
     if (!config) return 1
-    return Math.max(1, Math.min(10, this.getModelInfo(config.providerId, config.model)?.maxBatchSize || 10))
+    return Math.max(1, Math.min(ONLINE_EMBEDDING_BATCH_SIZE, this.getModelInfo(config.providerId, config.model)?.maxBatchSize || ONLINE_EMBEDDING_BATCH_SIZE))
   }
 
   getCurrentConcurrency(): number {
@@ -490,7 +491,7 @@ export class OnlineEmbeddingService {
     if (texts.length === 0) return []
 
     const model = this.getModelInfo(config.providerId, config.model)
-    const batchSize = Math.max(1, Math.min(model?.maxBatchSize || 10, texts.length))
+    const batchSize = Math.max(1, Math.min(model?.maxBatchSize || ONLINE_EMBEDDING_BATCH_SIZE, ONLINE_EMBEDDING_BATCH_SIZE, texts.length))
     const maxChars = model?.maxTokens ? Math.max(1000, model.maxTokens * 2) : 8000
     const batches: string[][] = []
 
@@ -605,19 +606,13 @@ export class OnlineEmbeddingService {
   }
 
   private async requestVolcengineEmbeddings(config: OnlineEmbeddingConfig, texts: string[]): Promise<Float32Array[]> {
-    if (texts.length !== 1) {
-      throw new Error('火山引擎多模态向量接口当前按单条输入调用')
-    }
-
     const model = this.getModelInfo(config.providerId, config.model)
     const body: Record<string, unknown> = {
       model: config.model,
-      input: [
-        {
-          type: 'text',
-          text: texts[0]
-        }
-      ]
+      input: texts.map((text) => ({
+        type: 'text',
+        text
+      }))
     }
     if (model?.supportsDimensions) {
       body.dimensions = config.dim

@@ -19,7 +19,7 @@ const PROVIDERS: OnlineEmbeddingProviderInfo[] = [
         displayName: 'text-embedding-v4',
         supportedDims: [2048, 1536, 1024, 768, 512, 256, 128, 64],
         defaultDim: 1024,
-        maxBatchSize: 10,
+        maxBatchSize: 20,
         maxTokens: 8192,
         supportsDimensions: true
       },
@@ -28,7 +28,7 @@ const PROVIDERS: OnlineEmbeddingProviderInfo[] = [
         displayName: 'text-embedding-v3',
         supportedDims: [1024, 768, 512, 256, 128, 64],
         defaultDim: 1024,
-        maxBatchSize: 10,
+        maxBatchSize: 20,
         maxTokens: 8192,
         supportsDimensions: true
       },
@@ -37,7 +37,7 @@ const PROVIDERS: OnlineEmbeddingProviderInfo[] = [
         displayName: 'text-embedding-v2',
         supportedDims: [1536],
         defaultDim: 1536,
-        maxBatchSize: 25,
+        maxBatchSize: 20,
         maxTokens: 2048,
         supportsDimensions: false
       }
@@ -55,7 +55,7 @@ const PROVIDERS: OnlineEmbeddingProviderInfo[] = [
         displayName: 'Qwen3 VL Embedding 8B（收费）',
         supportedDims: [4096, 2560, 2048, 1536, 1024, 768, 512, 256, 128, 64],
         defaultDim: 4096,
-        maxBatchSize: 10,
+        maxBatchSize: 20,
         maxTokens: 32768,
         supportsDimensions: true
       },
@@ -64,7 +64,7 @@ const PROVIDERS: OnlineEmbeddingProviderInfo[] = [
         displayName: 'Qwen3 Embedding 8B（收费）',
         supportedDims: [4096, 2560, 2048, 1536, 1024, 768, 512, 256, 128, 64],
         defaultDim: 4096,
-        maxBatchSize: 10,
+        maxBatchSize: 20,
         maxTokens: 32768,
         supportsDimensions: true
       },
@@ -73,7 +73,7 @@ const PROVIDERS: OnlineEmbeddingProviderInfo[] = [
         displayName: 'Qwen3 Embedding 4B（收费）',
         supportedDims: [2560, 2048, 1536, 1024, 768, 512, 256, 128, 64],
         defaultDim: 2560,
-        maxBatchSize: 10,
+        maxBatchSize: 20,
         maxTokens: 32768,
         supportsDimensions: true
       },
@@ -82,7 +82,7 @@ const PROVIDERS: OnlineEmbeddingProviderInfo[] = [
         displayName: 'Qwen3 Embedding 0.6B（收费）',
         supportedDims: [1024, 768, 512, 256, 128, 64],
         defaultDim: 1024,
-        maxBatchSize: 10,
+        maxBatchSize: 20,
         maxTokens: 32768,
         supportsDimensions: true
       },
@@ -91,7 +91,7 @@ const PROVIDERS: OnlineEmbeddingProviderInfo[] = [
         displayName: 'BAAI bge-m3（免费）',
         supportedDims: [1024],
         defaultDim: 1024,
-        maxBatchSize: 10,
+        maxBatchSize: 20,
         maxTokens: 8192,
         supportsDimensions: false
       },
@@ -100,7 +100,7 @@ const PROVIDERS: OnlineEmbeddingProviderInfo[] = [
         displayName: 'netease-youdao bce-embedding-base_v1（免费）',
         supportedDims: [768],
         defaultDim: 768,
-        maxBatchSize: 10,
+        maxBatchSize: 20,
         maxTokens: 512,
         supportsDimensions: false
       },
@@ -109,7 +109,7 @@ const PROVIDERS: OnlineEmbeddingProviderInfo[] = [
         displayName: 'BAAI bge-large-zh-v1.5（免费）',
         supportedDims: [1024],
         defaultDim: 1024,
-        maxBatchSize: 10,
+        maxBatchSize: 20,
         maxTokens: 512,
         supportsDimensions: false
       },
@@ -118,7 +118,7 @@ const PROVIDERS: OnlineEmbeddingProviderInfo[] = [
         displayName: 'BAAI bge-large-en-v1.5（免费）',
         supportedDims: [1024],
         defaultDim: 1024,
-        maxBatchSize: 10,
+        maxBatchSize: 20,
         maxTokens: 512,
         supportsDimensions: false
       },
@@ -127,7 +127,7 @@ const PROVIDERS: OnlineEmbeddingProviderInfo[] = [
         displayName: 'Pro BAAI bge-m3（免费）',
         supportedDims: [1024],
         defaultDim: 1024,
-        maxBatchSize: 10,
+        maxBatchSize: 20,
         maxTokens: 8192,
         supportsDimensions: false
       }
@@ -145,7 +145,7 @@ const PROVIDERS: OnlineEmbeddingProviderInfo[] = [
         displayName: 'doubao-embedding-vision-251215',
         supportedDims: [2048, 1024],
         defaultDim: 2048,
-        maxBatchSize: 1,
+        maxBatchSize: 20,
         maxTokens: 131072,
         supportsDimensions: true
       }
