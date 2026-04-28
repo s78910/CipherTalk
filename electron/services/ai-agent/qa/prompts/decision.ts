@@ -19,50 +19,24 @@ function buildAvailableToolSchemaText(): string {
   return `可调用工具：
 1. read_summary_facts args={}
    读取当前摘要和结构化摘要。适合先判断摘要是否已经覆盖问题。
-2. read_latest args={"limit":40}
-   读取最近消息。只适合最近进展或其它工具无法提供线索时兜底。
-3. read_by_time_range args={"startTime":秒级时间戳,"endTime":秒级时间戳,"label":"昨天晚上","limit":80,"keyword":"可选关键词","participantName":"可选昵称"}
-   按时间/关键词/参与者读取消息。
-4. resolve_participant args={"name":"张三"}
-   把昵称、备注或问题中的人名解析为 senderUsername。
-5. search_messages args={"query":"关键词或短语"}
+2. search_messages args={"query":"关键词或短语"}
    混合检索消息、对话块和记忆证据。适合具体词、原话、实体、产品名、技术名、是否提到过等问题。
-6. read_context args={"hitId":"h1","beforeLimit":6,"afterLimit":6}
+3. read_context args={"hitId":"h1","beforeLimit":6,"afterLimit":6}
    围绕 search_messages 命中读取前后文。必须已有命中 h1/h2 后再用。
+4. read_latest args={"limit":40}
+   读取最近消息。只适合最近进展或其它工具无法提供线索时兜底。
+5. read_by_time_range args={"startTime":秒级时间戳,"endTime":秒级时间戳,"label":"昨天晚上","limit":80,"keyword":"可选关键词","participantName":"可选昵称"}
+   按时间/关键词/参与者读取消息。
+6. resolve_participant args={"name":"张三"}
+   把昵称、备注或问题中的人名解析为 senderUsername。
 7. get_session_statistics args={"startTime":秒级时间戳,"endTime":秒级时间戳,"participantLimit":20,"includeSamples":true}
    统计当前会话消息量、发送者、类型和样例。
 8. get_keyword_statistics args={"keywords":["关键词"],"matchMode":"substring","startTime":秒级时间戳,"endTime":秒级时间戳}
    统计某些词/短语出现次数、发送者分布和样例。
 9. aggregate_messages args={"metric":"speaker_count|message_count|kind_count|timeline|summary"}
-   对已读取消息做聚合整理。`
-}
-
-function buildOutputFormatText(): string {
-  // 使用 JSON.stringify 生成正确的 JSON 示例，避免手动转义
-  const example1 = JSON.stringify({
-    action: 'tool_call',
-    toolName: 'search_messages',
-    args: { query: '关键词' },
-    reason: '为什么调用',
-    assistantText: '我先查一下相关记录。'
-  })
-  const example2 = JSON.stringify({
-    action: 'final_answer',
-    content: '最终回答文本',
-    reason: '为什么现在可以回答'
-  })
-  const example3 = JSON.stringify({
-    action: 'tool_call',
-    toolName: 'search_messages',
-    args: { query: '关键词' },
-    reason: '为什么调用'
-  })
-  return `输出格式必须是严格 JSON，推荐以下格式：
-1. ${example1}
-2. ${example2}
-3. ${example3}
-
-注意：如果你想给用户一句进度文字（如"好的，我来查一下"），请把它写在 tool_call 的 assistantText 字段中，不要单独用 assistant_text。这样可以一步完成"说话+调工具"。`
+   对已读取消息做聚合整理。
+10. answer args={"reason":"为什么现在可以回答"}
+   证据已经足够，或工具观察明确显示内容不存在/证据不足时，进入最终回答。`
 }
 
 export interface BuildDecisionPromptInput {
@@ -96,7 +70,7 @@ export function buildAutonomousAgentPrompt(input: BuildDecisionPromptInput): str
     : '无'
   const searchHints = input.route.searchQueries.join('、') || '无'
 
-  return `你是 CipherTalk 的本地聊天记录问答 Agent。你要自主决定下一步：调用一个本地工具，或给出最终答案。
+  return `你是 CipherTalk 的本地聊天记录问答 Agent。你要通过原生 tool calling 自主决定下一步：调用一个本地工具，或直接给出最终答案。
 
 当前时间：${formatTime(Date.now())}
 会话：${input.sessionName}
@@ -144,16 +118,14 @@ ${buildObservationText(input.observations)}
 
 ${buildAvailableToolSchemaText()}
 
-${buildOutputFormatText()}
-
 决策规则：
-- 优先使用带 assistantText 的 tool_call，一步完成进度提示和工具调用。不要使用独立的 assistant_text 动作。
-- 寒暄、感谢、能力询问等不需要聊天记录的问题，可以直接 final_answer，不要调用工具。
-- 事实类、证据类、原话类、是否提到某词、统计类问题，必须先有证据再 final_answer。
-- 证据质量为 none 时，不要 final_answer；优先 search_messages、get_session_statistics、get_keyword_statistics、read_by_time_range 或 read_summary_facts。例外：工具观察明确为 content_not_found 时，应 final_answer 说明证据不足。
+- 使用 API 提供的 tools/tool_calls，不要输出 JSON action，不要把工具调用过程写成自然语言给用户。
+- 寒暄、感谢、能力询问等不需要聊天记录的问题，可以直接用普通文本回答，不要调用工具。
+- 事实类、证据类、原话类、是否提到某词、统计类问题，必须先调用工具取得证据；证据足够后可以直接回答，或调用 answer。
+- 证据质量为 none 时，不要直接回答；优先 search_messages、get_session_statistics、get_keyword_statistics、read_by_time_range 或 read_summary_facts。例外：工具观察明确为 content_not_found 时，应调用 answer 或直接回答证据不足。
 - 搜索 0 命中时先看工具观察里的失败原因：content_not_found 表示关键词和语义检索都无证据，应回答证据不足；vector_unavailable 或 keyword_miss_only 才换更核心/同义关键词或按时间读取。
 - read_context 只能在已有搜索命中 h1/h2 后调用。
+- 同一个 read_context 命中如果已读取过或返回 0 条，不要重复调用；换其它 hitId、换搜索词，或进入 answer。
 - 工具预算接近用完时，若仍无证据，可以调用 read_latest 兜底。
-- final_answer.content 是给用户看的最终答案，可以在 JSON 字符串内使用 Markdown 标题、列表、表格和引用；但整个响应本身仍必须是可解析 JSON。
-- 不要输出 Markdown 代码块，不要解释 JSON 之外的内容。`
+- 最终答案可以使用 Markdown 标题、列表、表格和引用，但不要输出工具调用过程。`
 }

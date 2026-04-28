@@ -51,6 +51,10 @@ export class KimiProvider extends BaseAIProvider {
     return MODEL_MAPPING[displayName] || displayName
   }
 
+  protected resolveModelId(displayName: string): string {
+    return this.getModelId(displayName)
+  }
+
   async chat(messages: any[], options?: any): Promise<string> {
     const modelId = this.getModelId(options?.model || this.models[0])
     return super.chat(messages, { ...options, model: modelId })

@@ -58,6 +58,10 @@ export class TencentProvider extends BaseAIProvider {
         return MODEL_MAPPING[displayName] || displayName
     }
 
+    protected resolveModelId(displayName: string): string {
+        return this.getModelId(displayName)
+    }
+
     /**
      * 重写 getClient 以处理特殊的鉴权格式
      */

@@ -72,6 +72,10 @@ export class QwenProvider extends BaseAIProvider {
     return MODEL_MAPPING[displayName] || displayName
   }
 
+  protected resolveModelId(displayName: string): string {
+    return this.getModelId(displayName)
+  }
+
   /**
    * 重写 chat 方法以使用映射后的模型ID
    */

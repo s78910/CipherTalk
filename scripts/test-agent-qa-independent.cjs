@@ -94,6 +94,33 @@ async function main() {
   assert.equal(progressEvent.nodeName, '语义搜索')
   assert.equal(progressEvent.displayName, '语义搜索')
 
+  const nativeTools = require(fromRoot('electron', 'services', 'ai-agent', 'qa', 'nativeTools.ts'))
+  const tools = nativeTools.getNativeSessionQATools()
+  const toolNames = tools.map((tool) => tool.function.name)
+  assert.deepEqual(toolNames, [
+    'read_summary_facts',
+    'search_messages',
+    'read_context',
+    'read_latest',
+    'read_by_time_range',
+    'resolve_participant',
+    'get_session_statistics',
+    'get_keyword_statistics',
+    'aggregate_messages',
+    'answer'
+  ])
+  const searchTool = tools.find((tool) => tool.function.name === 'search_messages')
+  assert.deepEqual(searchTool.function.parameters.required, ['query'])
+  const contextTool = tools.find((tool) => tool.function.name === 'read_context')
+  assert.deepEqual(contextTool.function.parameters.required, ['hitId'])
+  assert.equal(contextTool.function.parameters.properties.beforeLimit.default, 6)
+  const parsedToolCall = nativeTools.parseNativeToolCallArguments('search_messages', '{"query":"Falcon","reason":"查项目"}')
+  assert.equal(parsedToolCall.action.action, 'search_messages')
+  assert.equal(parsedToolCall.action.query, 'Falcon')
+  const invalidToolCall = nativeTools.parseNativeToolCallArguments('search_messages', '{bad json')
+  assert.equal(invalidToolCall.action, null)
+  assert.match(invalidToolCall.error, /JSON/)
+
   const textParser = require(fromRoot('electron', 'services', 'ai-agent', 'qa', 'data', 'textParser.ts'))
   assert.equal(textParser.parseMessageContent('hello', 1), 'hello')
   assert.equal(textParser.parseMessageContent('<msg><appmsg><type>6</type><title>报价.xlsx</title></appmsg></msg>', 49), '[文件] 报价.xlsx')

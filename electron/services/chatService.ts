@@ -5090,13 +5090,132 @@ class ChatService extends EventEmitter {
    */
   public async getMessageByLocalId(sessionId: string, localId: number): Promise<{ success: boolean; message?: Message; error?: string }> {
     const dbTablePairs = this.findSessionTables(sessionId)
+    const myWxid = this.configService.get('myWxid')
+    const cleanedMyWxid = myWxid ? this.cleanAccountDirName(myWxid) : ''
 
-    for (const { db, tableName } of dbTablePairs) {
+    for (const { db, tableName, dbPath } of dbTablePairs) {
       try {
-        const row = db.prepare(`SELECT * FROM ${tableName} WHERE local_id = ?`).get(localId) as any
+        const hasName2IdTable = this.checkTableExists(db, 'Name2Id')
+        let myRowId: number | null = null
+
+        if (myWxid && hasName2IdTable) {
+          const cacheKeyOriginal = `${dbPath}:${myWxid}`
+          const cachedRowIdOriginal = this.myRowIdCache.get(cacheKeyOriginal)
+
+          if (cachedRowIdOriginal !== undefined) {
+            myRowId = cachedRowIdOriginal
+          } else {
+            const row = db.prepare('SELECT rowid FROM Name2Id WHERE user_name = ?').get(myWxid) as any
+            if (row?.rowid) {
+              myRowId = row.rowid
+              this.myRowIdCache.set(cacheKeyOriginal, myRowId)
+            } else if (cleanedMyWxid && cleanedMyWxid !== myWxid) {
+              const cacheKeyCleaned = `${dbPath}:${cleanedMyWxid}`
+              const cachedRowIdCleaned = this.myRowIdCache.get(cacheKeyCleaned)
+
+              if (cachedRowIdCleaned !== undefined) {
+                myRowId = cachedRowIdCleaned
+              } else {
+                const row2 = db.prepare('SELECT rowid FROM Name2Id WHERE user_name = ?').get(cleanedMyWxid) as any
+                myRowId = row2?.rowid ?? null
+                this.myRowIdCache.set(cacheKeyCleaned, myRowId)
+              }
+            } else {
+              this.myRowIdCache.set(cacheKeyOriginal, null)
+            }
+          }
+        }
+
+        let row: any
+        if (hasName2IdTable && myRowId !== null) {
+          row = db.prepare(`SELECT m.*,
+                  CASE WHEN m.real_sender_id = ? THEN 1 ELSE 0 END AS computed_is_send,
+                  n.user_name AS sender_username
+                  FROM ${tableName} m
+                  LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid
+                  WHERE m.local_id = ?`).get(myRowId, localId) as any
+        } else if (hasName2IdTable) {
+          row = db.prepare(`SELECT m.*, n.user_name AS sender_username
+                  FROM ${tableName} m
+                  LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid
+                  WHERE m.local_id = ?`).get(localId) as any
+        } else {
+          row = db.prepare(`SELECT * FROM ${tableName} WHERE local_id = ?`).get(localId) as any
+        }
+
         if (row) {
           const content = this.decodeMessageContent(row.message_content, row.compress_content)
           const localType = row.local_type || row.type || 1
+          const isSend = row.computed_is_send ?? row.is_send ?? null
+
+          let emojiCdnUrl: string | undefined
+          let emojiMd5: string | undefined
+          let emojiProductId: string | undefined
+          let quotedContent: string | undefined
+          let quotedSender: string | undefined
+          let quotedImageMd5: string | undefined
+          let quotedEmojiMd5: string | undefined
+          let quotedEmojiCdnUrl: string | undefined
+          let imageMd5: string | undefined
+          let imageDatName: string | undefined
+          let isLivePhoto: boolean | undefined
+          let videoMd5: string | undefined
+          let videoDuration: number | undefined
+          let voiceDuration: number | undefined
+
+          if (localType === 47 && content) {
+            const emojiInfo = this.parseEmojiInfo(content)
+            emojiCdnUrl = emojiInfo.cdnUrl
+            emojiMd5 = emojiInfo.md5
+            emojiProductId = emojiInfo.productId
+          } else if (localType === 3 && content) {
+            const imageInfo = this.parseImageInfo(content)
+            imageMd5 = imageInfo.md5
+            imageDatName = this.parseImageDatNameFromRow(row)
+            isLivePhoto = imageInfo.isLivePhoto
+          } else if (localType === 43 && content) {
+            videoMd5 = this.parseVideoMd5(content)
+            videoDuration = this.parseVideoDuration(content)
+          } else if (localType === 34 && content) {
+            voiceDuration = this.parseVoiceDuration(content)
+          } else if (localType === 244813135921 || (content && content.includes('<type>57</type>'))) {
+            const quoteInfo = this.parseQuoteMessage(content)
+            quotedContent = quoteInfo.content
+            quotedSender = quoteInfo.sender
+            quotedImageMd5 = quoteInfo.imageMd5
+            quotedEmojiMd5 = quoteInfo.emojiMd5
+            quotedEmojiCdnUrl = quoteInfo.emojiCdnUrl
+          }
+
+          let fileName: string | undefined
+          let fileSize: number | undefined
+          let fileExt: string | undefined
+          let fileMd5: string | undefined
+          if (localType === 49 && content) {
+            const fileInfo = this.parseFileInfo(content)
+            fileName = fileInfo.fileName
+            fileSize = fileInfo.fileSize
+            fileExt = fileInfo.fileExt
+            fileMd5 = fileInfo.fileMd5
+          }
+
+          let chatRecordList: ChatRecordItem[] | undefined
+          if (content) {
+            const xmlType = this.extractXmlValue(content, 'type')
+            if (xmlType === '19' || localType === 49) {
+              chatRecordList = this.parseChatHistory(content)
+            }
+          }
+
+          let transferPayerUsername: string | undefined
+          let transferReceiverUsername: string | undefined
+          if ((localType === 49 || localType === 8589934592049) && content) {
+            const xmlType = this.extractXmlValue(content, 'type')
+            if (xmlType === '2000') {
+              transferPayerUsername = this.extractXmlValue(content, 'payer_username') || undefined
+              transferReceiverUsername = this.extractXmlValue(content, 'receiver_username') || undefined
+            }
+          }
 
           return {
             success: true,
@@ -5106,14 +5225,31 @@ class ChatService extends EventEmitter {
               localType,
               createTime: row.create_time || 0,
               sortSeq: row.sort_seq || 0,
-              isSend: row.is_send ?? null,
+              isSend,
               senderUsername: row.sender_username || null,
               parsedContent: this.parseMessageContent(content, localType),
               rawContent: content,
-              chatRecordList: content ? (() => {
-                const xmlType = this.extractXmlValue(content, 'type')
-                return (xmlType === '19' || localType === 49) ? this.parseChatHistory(content) : undefined
-              })() : undefined
+              emojiCdnUrl,
+              emojiMd5,
+              productId: emojiProductId,
+              quotedContent,
+              quotedSender,
+              quotedImageMd5,
+              quotedEmojiMd5,
+              quotedEmojiCdnUrl,
+              imageMd5,
+              imageDatName,
+              isLivePhoto,
+              videoMd5,
+              videoDuration,
+              voiceDuration,
+              fileName,
+              fileSize,
+              fileExt,
+              fileMd5,
+              chatRecordList,
+              transferPayerUsername,
+              transferReceiverUsername
             }
           }
         }

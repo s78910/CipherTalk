@@ -19,6 +19,14 @@ export interface AIProvider {
   chat(messages: OpenAI.Chat.ChatCompletionMessageParam[], options?: ChatOptions): Promise<string>
 
   /**
+   * 原生工具调用（OpenAI-compatible Chat Completions tools/tool_calls）
+   */
+  chatWithTools(
+    messages: OpenAI.Chat.ChatCompletionMessageParam[],
+    options: ChatWithToolsOptions
+  ): Promise<NativeToolCallResult>
+
+  /**
    * 流式聊天
    */
   streamChat(
@@ -41,6 +49,53 @@ export interface ChatOptions {
   temperature?: number
   maxTokens?: number
   enableThinking?: boolean  // 是否启用思考模式（处理 reasoning_content）
+}
+
+export type NativeToolDefinition = OpenAI.Chat.ChatCompletionTool
+
+export interface ChatWithToolsOptions extends ChatOptions {
+  tools: NativeToolDefinition[]
+  toolChoice?: OpenAI.Chat.ChatCompletionToolChoiceOption
+  parallelToolCalls?: boolean
+}
+
+export interface NativeToolCallResult {
+  message: OpenAI.Chat.ChatCompletionMessage
+  finishReason?: string | null
+}
+
+export const NATIVE_TOOL_CALLING_UNSUPPORTED_MESSAGE = '当前模型/服务商不支持原生工具调用，请切换支持 tools 的 OpenAI-compatible 模型'
+
+export function isNativeToolCallingUnsupportedError(error: unknown): boolean {
+  const status = typeof error === 'object' && error && 'status' in error
+    ? Number((error as { status?: unknown }).status)
+    : undefined
+  const message = error instanceof Error ? error.message : String(error || '')
+  const lower = message.toLowerCase()
+
+  return (
+    status === 400
+    || status === 404
+    || status === 422
+  ) && (
+    lower.includes('tool')
+    || lower.includes('tool_choice')
+    || lower.includes('tool_calls')
+    || lower.includes('function_call')
+    || lower.includes('function calling')
+    || lower.includes('functions')
+    || lower.includes('unsupported parameter')
+    || lower.includes('unknown parameter')
+    || lower.includes('unrecognized request argument')
+  )
+}
+
+export function normalizeNativeToolCallingError(error: unknown): Error {
+  if (isNativeToolCallingUnsupportedError(error)) {
+    return new Error(NATIVE_TOOL_CALLING_UNSUPPORTED_MESSAGE)
+  }
+
+  return error instanceof Error ? error : new Error(String(error || '模型工具调用失败'))
 }
 
 /**
@@ -89,11 +144,16 @@ export abstract class BaseAIProvider implements AIProvider {
     return new OpenAI(clientConfig)
   }
 
+  protected resolveModelId(displayName: string): string {
+    return displayName
+  }
+
   async chat(messages: OpenAI.Chat.ChatCompletionMessageParam[], options?: ChatOptions): Promise<string> {
     const client = await this.getClient()
+    const model = this.resolveModelId(options?.model || this.models[0])
     
     const response = await client.chat.completions.create({
-      model: options?.model || this.models[0],
+      model,
       messages: messages,
       temperature: options?.temperature || 0.7,
       max_tokens: options?.maxTokens,
@@ -103,6 +163,38 @@ export abstract class BaseAIProvider implements AIProvider {
     return response.choices[0]?.message?.content || ''
   }
 
+  async chatWithTools(
+    messages: OpenAI.Chat.ChatCompletionMessageParam[],
+    options: ChatWithToolsOptions
+  ): Promise<NativeToolCallResult> {
+    const client = await this.getClient()
+    const model = this.resolveModelId(options?.model || this.models[0])
+
+    const requestParams: any = {
+      model,
+      messages,
+      temperature: options?.temperature ?? 0.2,
+      max_tokens: options?.maxTokens,
+      stream: false,
+      tools: options.tools,
+      tool_choice: options.toolChoice ?? 'auto'
+    }
+
+    if (typeof options.parallelToolCalls === 'boolean') {
+      requestParams.parallel_tool_calls = options.parallelToolCalls
+    }
+
+    try {
+      const response = await client.chat.completions.create(requestParams)
+      return {
+        message: response.choices[0]?.message || { role: 'assistant', content: '' },
+        finishReason: response.choices[0]?.finish_reason || null
+      }
+    } catch (error) {
+      throw normalizeNativeToolCallingError(error)
+    }
+  }
+
   async streamChat(
     messages: OpenAI.Chat.ChatCompletionMessageParam[],
     options: ChatOptions,
@@ -110,10 +202,11 @@ export abstract class BaseAIProvider implements AIProvider {
   ): Promise<void> {
     const client = await this.getClient()
     const enableThinking = options?.enableThinking !== false  // 默认启用
+    const model = this.resolveModelId(options?.model || this.models[0])
     
     // 构建请求参数
     const requestParams: any = {
-      model: options?.model || this.models[0],
+      model,
       messages: messages,
       temperature: options?.temperature || 0.7,
       max_tokens: options?.maxTokens,

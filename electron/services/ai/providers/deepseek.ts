@@ -1,5 +1,5 @@
 import type OpenAI from 'openai'
-import { BaseAIProvider, ChatOptions } from './base'
+import { BaseAIProvider, ChatOptions, ChatWithToolsOptions, NativeToolCallResult, normalizeNativeToolCallingError } from './base'
 
 /**
  * DeepSeek 提供商元数据
@@ -47,6 +47,10 @@ export class DeepSeekProvider extends BaseAIProvider {
     return MODEL_MAPPING[displayName] || displayName
   }
 
+  protected resolveModelId(displayName: string): string {
+    return this.getModelId(displayName)
+  }
+
   private buildRequestParams(
     messages: OpenAI.Chat.ChatCompletionMessageParam[],
     options: ChatOptions | undefined,
@@ -82,6 +86,32 @@ export class DeepSeekProvider extends BaseAIProvider {
     )
 
     return response.choices[0]?.message?.content || ''
+  }
+
+  async chatWithTools(
+    messages: OpenAI.Chat.ChatCompletionMessageParam[],
+    options: ChatWithToolsOptions
+  ): Promise<NativeToolCallResult> {
+    const client = await this.getClient()
+    const requestParams: any = {
+      ...this.buildRequestParams(messages, { ...options, enableThinking: false }, false),
+      tools: options.tools,
+      tool_choice: options.toolChoice ?? 'auto'
+    }
+
+    if (typeof options.parallelToolCalls === 'boolean') {
+      requestParams.parallel_tool_calls = options.parallelToolCalls
+    }
+
+    try {
+      const response = await client.chat.completions.create(requestParams)
+      return {
+        message: response.choices[0]?.message || { role: 'assistant', content: '' },
+        finishReason: response.choices[0]?.finish_reason || null
+      }
+    } catch (error) {
+      throw normalizeNativeToolCallingError(error)
+    }
   }
 
   /**

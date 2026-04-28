@@ -11,7 +11,8 @@ import type {
   ToolLoopAction,
   ContextWindow,
   SessionQAToolCall,
-  IntentRoute
+  IntentRoute,
+  NativeToolExecutionResult
 } from './types'
 import {
   MAX_CONTEXT_MESSAGES,
@@ -37,14 +38,15 @@ import { loadSessionContactMap } from './utils/contacts'
 import { routeFromHeuristics, enforceConcreteEvidenceRoute, getRouteLabel } from './intent/router'
 import { emitProgress } from './progress'
 import { AgentContext, AgentAbortError } from './agentContext'
-import { chooseNextAutonomousAgentAction } from './agentDecision'
-import { assessEvidenceQuality, hasConclusiveSearchFailure, findKnownHitForAction, summarizeSearchObservation, getSearchDiagnostics, interpretSearchFailure } from './evidence'
+import { hasConclusiveSearchFailure, findKnownHitForAction, summarizeSearchObservation, getSearchDiagnostics, interpretSearchFailure } from './evidence'
 import { searchSessionMessages, loadLatestContext, loadContextAroundMessage } from './tools/search'
 import { loadSessionStatistics, loadKeywordStatistics, loadMessagesByTimeRange, loadMessagesByTimeRangeAll, formatSessionStatisticsText, formatKeywordStatisticsText } from './tools/statistics'
 import { resolveParticipantName, findResolvedSenderUsername } from './tools/participant'
 import { aggregateMessages } from './tools/aggregate'
+import { buildAutonomousAgentPrompt } from './prompts/decision'
 import { buildAnswerPrompt } from './prompts/answer'
-import { classifyAgentError, shouldRetryToolCall, getRetryDelayMs } from './errors'
+import { getNativeSessionQATools, parseNativeToolCallArguments, toSessionQAToolName } from './nativeTools'
+import { NATIVE_TOOL_CALLING_UNSUPPORTED_MESSAGE, isNativeToolCallingUnsupportedError } from '../../ai/providers/base'
 import type { SummaryEvidenceRef } from '../types/analysis'
 import { getAgentNodeName } from './nodeNames'
 
@@ -251,7 +253,7 @@ async function executeSearchMessages(ctx: AgentContext, action: ToolLoopAction &
     ctx.toolCallsUsed += 1
     const progressId = `tool-loop-${ctx.toolCallsUsed}-search`
     emitProgress(ctx.options, { id: progressId, stage: 'tool', status: 'completed', title: '搜索相关消息', detail: `已跳过重复关键词：${query}`, toolName: 'search_messages', query, count: 0 })
-    ctx.observations.push({ title: '跳过重复搜索', detail: `关键词 "${query}" 已经搜索过，请更换关键词，或进入 final_answer。` })
+    ctx.observations.push({ title: '跳过重复搜索', detail: `关键词 "${query}" 已经搜索过，请更换关键词，或进入回答。` })
     return
   }
 
@@ -369,7 +371,7 @@ async function executeReadLatest(ctx: AgentContext, action: ToolLoopAction & { a
     ctx.toolCallsUsed += 1
     const progressId = `tool-loop-${ctx.toolCallsUsed}-latest`
     emitProgress(ctx.options, { id: progressId, stage: 'tool', status: 'completed', title: '读取最近上下文', detail: '已跳过重复读取', toolName: 'read_latest', count: 0 })
-    ctx.observations.push({ title: '跳过重复读取', detail: '已读取过最近上下文，请进入 final_answer 进行回答。' })
+    ctx.observations.push({ title: '跳过重复读取', detail: '已读取过最近上下文，请进入回答。' })
     return
   }
   ctx.toolCallsUsed += 1
@@ -412,10 +414,146 @@ async function dispatchToolAction(ctx: AgentContext, action: ToolLoopAction): Pr
   }
 }
 
-// ─── assistant_text 自动推进：根据当前状态选择下一个工具 ────────
+function stringifyAssistantContent(content: OpenAI.Chat.ChatCompletionMessage['content'] | null | undefined): string {
+  if (!content) return ''
+  if (typeof content === 'string') return stripThinkBlocks(content).trim()
+  if (Array.isArray(content)) {
+    return content
+      .map((part: any) => typeof part?.text === 'string' ? part.text : '')
+      .join('')
+      .trim()
+  }
+  return ''
+}
+
+function buildNativeToolState(ctx: AgentContext): NativeToolExecutionResult['state'] {
+  return {
+    toolCallsUsed: ctx.toolCallsUsed,
+    knownHitIds: ctx.knownHits.slice(0, 12).map((hit) => hit.hitId),
+    searchPayloadCount: ctx.searchPayloads.length,
+    contextWindowCount: ctx.contextWindows.length,
+    contextMessageCount: ctx.contextWindows.reduce((sum, window) => sum + window.messages.length, 0)
+  }
+}
+
+function compactToolObservationForModel(result: NativeToolExecutionResult): string {
+  return JSON.stringify({
+    ok: result.ok,
+    toolName: result.toolName,
+    summary: compactText(result.summary, 1200),
+    evidenceQuality: result.evidenceQuality,
+    observations: result.observations.slice(-3).map((item) => ({
+      title: item.title,
+      detail: compactText(item.detail, 1800)
+    })),
+    state: result.state,
+    error: result.error
+  })
+}
+
+function createFailedNativeToolResult(
+  ctx: AgentContext,
+  toolName: string,
+  args: Record<string, unknown>,
+  error: string
+): NativeToolExecutionResult {
+  const safeToolName = toSessionQAToolName(toolName)
+  const toolCall = buildToolCall({
+    toolName: safeToolName,
+    args,
+    summary: error,
+    status: 'failed'
+  })
+
+  ctx.toolCallsUsed += 1
+  ctx.toolCalls.push(toolCall)
+  ctx.observations.push({ title: '工具参数错误', detail: error })
+  emitProgress(ctx.options, {
+    id: `tool-loop-${ctx.toolCallsUsed}-invalid`,
+    stage: 'tool',
+    status: 'failed',
+    title: getAgentNodeName({ toolName: safeToolName }),
+    detail: error,
+    toolName: safeToolName
+  })
+
+  return {
+    ok: false,
+    toolName: safeToolName,
+    args,
+    summary: error,
+    observations: [{ title: '工具参数错误', detail: error }],
+    toolCalls: [toolCall],
+    evidenceQuality: ctx.evidenceQuality,
+    error,
+    state: buildNativeToolState(ctx)
+  }
+}
+
+async function executeNativeToolAction(
+  ctx: AgentContext,
+  action: ToolLoopAction,
+  args: Record<string, unknown>
+): Promise<NativeToolExecutionResult> {
+  if (action.action === 'answer') {
+    const summary = action.reason || '模型判断可以进入最终回答。'
+    ctx.observations.push({ title: '开始回答', detail: summary })
+    return {
+      ok: true,
+      toolName: 'answer',
+      args,
+      summary,
+      observations: [{ title: '开始回答', detail: summary }],
+      toolCalls: [],
+      evidenceQuality: ctx.evidenceQuality,
+      state: buildNativeToolState(ctx)
+    }
+  }
+
+  const beforeObservationCount = ctx.observations.length
+  const beforeToolCallCount = ctx.toolCalls.length
+  await dispatchToolAction(ctx, action)
+
+  const observations = ctx.observations.slice(beforeObservationCount)
+  const toolCalls = ctx.toolCalls.slice(beforeToolCallCount)
+  const summary = observations.map((item) => `${item.title}: ${item.detail}`).join('\n\n')
+    || toolCalls.map((item) => item.summary).join('\n')
+    || `${action.action} 执行完成。`
+  const hasFailedToolCall = toolCalls.some((item) => item.status === 'failed')
+
+  return {
+    ok: !hasFailedToolCall,
+    toolName: action.action,
+    args,
+    summary,
+    observations,
+    toolCalls,
+    evidenceQuality: ctx.evidenceQuality,
+    state: buildNativeToolState(ctx)
+  }
+}
+
+function shouldAcceptPlainAssistantAnswer(ctx: AgentContext, route: IntentRoute): boolean {
+  return ctx.evidenceQuality !== 'none'
+    || route.intent === 'direct_answer'
+    || hasConclusiveSearchFailure(ctx.searchPayloads)
+}
+
+function appendLocalFallbackResultMessage(
+  messages: OpenAI.Chat.ChatCompletionMessageParam[],
+  action: ToolLoopAction,
+  result: NativeToolExecutionResult
+) {
+  messages.push({
+    role: 'user',
+    content: `系统已自动执行本地补充工具 ${action.action}，结果如下。请基于这些观察继续：\n${compactToolObservationForModel(result)}`
+  })
+}
+
+// ─── 普通文本自动推进：根据当前状态选择下一个工具 ────────
 
 /**
- * 当模型输出纯 assistant_text 时，根据当前 Agent 状态自动选择一个合理的工具执行，
+ * 当模型输出普通文本但当前证据不足时，根据当前 Agent 状态自动选择一个合理的工具执行，
  * 避免 continue 空转导致重复输出。
  *
  * 选择策略按优先级：
@@ -429,12 +567,12 @@ function pickFallbackToolAction(ctx: AgentContext, route: IntentRoute): ToolLoop
   // 优先用启发式路由建议的搜索关键词
   const nextSearchQuery = route.searchQueries.find((q) => !ctx.searchedQueries.has(q.toLowerCase()))
   if (nextSearchQuery && ctx.toolCallsUsed < MAX_TOOL_CALLS - 2) {
-    return { action: 'search_messages', query: nextSearchQuery, reason: '模型输出进度文字，自动执行路由推荐的搜索' }
+    return { action: 'search_messages', query: nextSearchQuery, reason: '模型输出普通文本但证据不足，自动执行路由推荐的搜索' }
   }
 
   // 还没读过摘要
   if (!ctx.summaryFactsRead && !ctx.observations.some((o) => o.title === '读取摘要事实')) {
-    return { action: 'read_summary_facts', reason: '模型输出进度文字，自动检查摘要事实' }
+    return { action: 'read_summary_facts', reason: '模型输出普通文本但证据不足，自动检查摘要事实' }
   }
 
   // 路由有时间范围线索
@@ -444,17 +582,17 @@ function pickFallbackToolAction(ctx: AgentContext, route: IntentRoute): ToolLoop
       startTime: route.timeRange.startTime,
       endTime: route.timeRange.endTime,
       label: route.timeRange.label,
-      reason: '模型输出进度文字，自动按时间范围读取'
+      reason: '模型输出普通文本但证据不足，自动按时间范围读取'
     }
   }
 
   // 路由有参与者线索但尚未解析
   if (route.participantHints.length > 0 && ctx.resolvedParticipants.length === 0) {
-    return { action: 'resolve_participant', name: route.participantHints[0], reason: '模型输出进度文字，自动解析参与者' }
+    return { action: 'resolve_participant', name: route.participantHints[0], reason: '模型输出普通文本但证据不足，自动解析参与者' }
   }
 
   if (!ctx.contextWindows.some((w) => w.source === 'latest')) {
-    return { action: 'read_latest', limit: MAX_CONTEXT_MESSAGES, reason: '模型输出进度文字，自动读取最近上下文兜底' }
+    return { action: 'read_latest', limit: MAX_CONTEXT_MESSAGES, reason: '模型输出普通文本但证据不足，自动读取最近上下文兜底' }
   }
 
   return { action: 'answer', reason: '所有自动探测工具已执行完毕，强制进入总结环节。' }
@@ -476,118 +614,181 @@ export async function answerSessionQuestionWithAgent(
 
   const agentDecisionMaxTokens = clampTokenBudget(options.agentDecisionMaxTokens, DEFAULT_AGENT_DECISION_MAX_TOKENS, 512, MAX_AGENT_DECISION_MAX_TOKENS)
   const agentAnswerMaxTokens = clampTokenBudget(options.agentAnswerMaxTokens, DEFAULT_AGENT_ANSWER_MAX_TOKENS, 512, MAX_AGENT_ANSWER_MAX_TOKENS)
-  const finalAnswerContentCharLimit = Math.max(4000, agentAnswerMaxTokens * 4)
+  const nativeTools = getNativeSessionQATools()
+  const initialAgentPrompt = buildAutonomousAgentPrompt({
+    sessionName: ctx.sessionName, question: ctx.question, route,
+    summaryText: options.summaryText, structuredContext, historyText,
+    observations: ctx.observations, knownHits: ctx.knownHits,
+    resolvedParticipants: ctx.resolvedParticipants, aggregateText: ctx.aggregateText,
+    summaryFactsRead: ctx.summaryFactsRead, toolCallsUsed: ctx.toolCallsUsed,
+    evidenceQuality: ctx.evidenceQuality, searchRetries: ctx.searchRetries,
+    searchPayloads: ctx.searchPayloads, contextWindows: ctx.contextWindows
+  })
+  ctx.lastAgentPrompt = initialAgentPrompt
+
+  const toolLoopMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+    {
+      role: 'system',
+      content: '你是 CipherTalk 的本地聊天记录问答 Agent。必须使用 OpenAI-compatible 原生 tools/tool_calls 调用工具；不要输出 JSON action。证据不足时继续调用工具或明确说明证据不足。'
+    },
+    {
+      role: 'user',
+      content: initialAgentPrompt
+    }
+  ]
+
+  const emitAssistantThought = (text?: string) => {
+    const content = compactText(text || '', 500)
+    if (!content) return
+    const lastThought = ctx.observations.filter((o) => o.title === 'Agent 输出').pop()
+    if (lastThought && lastThought.detail === content) return
+    emitProgress(ctx.options, {
+      id: `thought-${Date.now()}-${ctx.decisionAttempts}`,
+      stage: 'thought',
+      status: 'completed',
+      title: content,
+      detail: content
+    })
+    ctx.observations.push({ title: 'Agent 输出', detail: content })
+  }
 
   try {
-    // ── 主决策循环 ──
+    if (typeof options.provider.chatWithTools !== 'function') {
+      throw new Error(NATIVE_TOOL_CALLING_UNSUPPORTED_MESSAGE)
+    }
+
+    // ── 原生 tools/tool_calls 主循环 ──
     while (ctx.shouldContinueLoop()) {
       ctx.checkAbort()
       ctx.decisionAttempts += 1
 
-      const evidenceQuality = ctx.evidenceQuality
-      const conclusiveSearchFailure = hasConclusiveSearchFailure(ctx.searchPayloads)
-
-      const agentDecision = await chooseNextAutonomousAgentAction(options.provider, options.model, {
-        sessionName: ctx.sessionName, question: ctx.question, route,
-        summaryText: options.summaryText, structuredContext, historyText,
-        observations: ctx.observations, knownHits: ctx.knownHits,
-        resolvedParticipants: ctx.resolvedParticipants, aggregateText: ctx.aggregateText,
-        summaryFactsRead: ctx.summaryFactsRead, toolCallsUsed: ctx.toolCallsUsed,
-        evidenceQuality, searchRetries: ctx.searchRetries,
-        searchPayloads: ctx.searchPayloads, contextWindows: ctx.contextWindows
-      }, { decisionMaxTokens: agentDecisionMaxTokens, finalAnswerContentCharLimit })
-      ctx.lastAgentPrompt = agentDecision.prompt
-
-      // ── 辅助：发射 assistantText 思考气泡（如果有的话）──
-      const maybeEmitAssistantText = (text?: string) => {
-        if (!text) return
-        // 去重：和上一条相同内容则不发射
-        const lastThought = ctx.observations.filter((o) => o.title === 'Agent 输出').pop()
-        if (lastThought && lastThought.detail === text) return
-        emitProgress(ctx.options, {
-          id: `thought-${Date.now()}-${ctx.decisionAttempts}`,
-          stage: 'thought',
-          status: 'completed',
-          title: text,
-          detail: text
+      let nativeResponse
+      try {
+        nativeResponse = await options.provider.chatWithTools(toolLoopMessages, {
+          model: options.model,
+          temperature: 0.2,
+          maxTokens: agentDecisionMaxTokens,
+          enableThinking: false,
+          tools: nativeTools,
+          toolChoice: 'auto'
         })
-        ctx.observations.push({ title: 'Agent 输出', detail: text })
+      } catch (error) {
+        if ((error instanceof Error && error.message === NATIVE_TOOL_CALLING_UNSUPPORTED_MESSAGE) || isNativeToolCallingUnsupportedError(error)) {
+          throw new Error(NATIVE_TOOL_CALLING_UNSUPPORTED_MESSAGE)
+        }
+        throw error
       }
 
-      // 处理 assistant_text → 不再空转 continue，直接推进到工具调用
-      // 根本原因：模型想表达"说句话+调工具"，但格式限制只能三选一，
-      // 导致它先输出 assistant_text，continue 后上下文几乎没变，又重复同样的输出。
-      // 修复：将 assistant_text 视为"附带进度文字的隐含工具调用"，自动推进。
-      if (agentDecision.action.action === 'assistant_text') {
-        maybeEmitAssistantText(agentDecision.action.content)
-        // 不再 continue 空转。根据当前状态自动选择一个工具执行，确保每轮都有实质推进。
-        const autoAction = pickFallbackToolAction(ctx, route)
-        ctx.observations.push({ title: '自动推进', detail: `模型输出进度文字后自动执行：${autoAction.action}` })
-        await dispatchToolAction(ctx, autoAction)
+      const assistantMessage = nativeResponse.message
+      const assistantText = stringifyAssistantContent(assistantMessage.content)
+      const nativeToolCalls = Array.isArray((assistantMessage as any).tool_calls)
+        ? (assistantMessage as any).tool_calls as Array<{ id: string; type: string; function?: { name?: string; arguments?: string } }>
+        : []
+      const decisionTrace = JSON.stringify({
+        content: compactText(assistantText, 800),
+        toolCalls: nativeToolCalls.map((call) => ({
+          id: call.id,
+          name: call.function?.name,
+          arguments: compactText(call.function?.arguments || '', 800)
+        })),
+        finishReason: nativeResponse.finishReason
+      })
+      ctx.trackDecisionTokens(ctx.lastAgentPrompt, decisionTrace)
+
+      toolLoopMessages.push(assistantMessage as OpenAI.Chat.ChatCompletionMessageParam)
+
+      if (nativeToolCalls.length > 0) {
+        emitAssistantThought(assistantText)
+        let shouldGenerateFinalAnswer = false
+
+        for (const toolCall of nativeToolCalls) {
+          ctx.checkAbort()
+          const toolName = String(toolCall.function?.name || '')
+          const toolCallId = toolCall.id || `tool-${Date.now()}-${ctx.toolCallsUsed}`
+          const parsed = parseNativeToolCallArguments(toolName, toolCall.function?.arguments)
+
+          let result: NativeToolExecutionResult
+          if (!parsed.action || parsed.error) {
+            result = createFailedNativeToolResult(ctx, toolName || 'unknown', parsed.args, parsed.error || '工具参数无效。')
+            toolLoopMessages.push({
+              role: 'tool',
+              tool_call_id: toolCallId,
+              content: compactToolObservationForModel(result)
+            } as OpenAI.Chat.ChatCompletionMessageParam)
+            continue
+          }
+
+          let action = parsed.action
+          const evidenceQuality = ctx.evidenceQuality
+          const conclusiveSearchFailure = hasConclusiveSearchFailure(ctx.searchPayloads)
+
+          if (evidenceQuality === 'none' && ctx.toolCallsUsed >= MAX_TOOL_CALLS - 1 && action.action !== 'read_latest' && action.action !== 'answer') {
+            action = { action: 'read_latest', limit: MAX_CONTEXT_MESSAGES, reason: '工具预算即将耗尽' }
+          }
+
+          if (action.action === 'answer') {
+            if (evidenceQuality === 'none' && route.intent !== 'direct_answer' && !conclusiveSearchFailure) {
+              action = ctx.summaryFactsRead
+                ? { action: 'read_latest', limit: MAX_CONTEXT_MESSAGES, reason: '模型准备回答但仍缺少证据，读取最近上下文兜底' }
+                : { action: 'read_summary_facts', reason: '模型准备回答但尚无证据，先检查摘要事实' }
+            } else if (evidenceQuality === 'weak' && ctx.toolCallsUsed < MAX_TOOL_CALLS - 2) {
+              const hasSearchedWithNoHits = ctx.searchPayloads.length > 0 && ctx.searchPayloads.every((i) => i.payload.hits.length === 0)
+              if (hasSearchedWithNoHits && ctx.searchRetries < MAX_SEARCH_RETRIES) {
+                const nextQuery = route.searchQueries.find((q) => !ctx.searchedQueries.has(q.toLowerCase()))
+                action = nextQuery
+                  ? { action: 'search_messages', query: nextQuery, reason: '之前的搜索没有命中，换关键词重试' }
+                  : { action: 'read_latest', limit: MAX_CONTEXT_MESSAGES, reason: '搜索没有命中且缺少新关键词' }
+              }
+            }
+          }
+
+          result = await executeNativeToolAction(ctx, action, parsed.args)
+          toolLoopMessages.push({
+            role: 'tool',
+            tool_call_id: toolCallId,
+            content: compactToolObservationForModel(result)
+          } as OpenAI.Chat.ChatCompletionMessageParam)
+
+          if (action.action === 'answer') {
+            shouldGenerateFinalAnswer = true
+            break
+          }
+        }
+
+        if (shouldGenerateFinalAnswer) {
+          break
+        }
         continue
       }
 
-      // tool_call / final_answer 如果携带了 assistantText，先展示
-      if ('assistantText' in agentDecision.action && agentDecision.action.assistantText) {
-        maybeEmitAssistantText(agentDecision.action.assistantText)
-      }
-
-      // 处理 final_answer
-      if (agentDecision.action.action === 'final_answer') {
-        if (evidenceQuality === 'none' && route.intent !== 'direct_answer' && !conclusiveSearchFailure) {
-          const hasTriedSummary = ctx.observations.some((i) => i.title === '读取摘要事实')
-          const fallbackAction: ToolLoopAction = ctx.summaryFactsRead || hasTriedSummary
-            ? { action: 'read_latest', limit: MAX_CONTEXT_MESSAGES, reason: '模型准备回答但仍缺少证据，读取最近上下文兜底' }
-            : { action: 'read_summary_facts', reason: '模型准备回答但尚无证据，先检查摘要事实' }
-          ctx.observations.push({ title: '延后回答', detail: agentDecision.action.reason || '当前没有证据，继续收集上下文。' })
-          agentDecision.action = { action: 'tool_call', tool: fallbackAction }
-        } else if (agentDecision.action.content) {
+      if (assistantText) {
+        if (shouldAcceptPlainAssistantAnswer(ctx, route)) {
           emitProgress(options, { id: 'answer', stage: 'answer', status: 'running', title: '生成回答', detail: 'Agent 已决定直接回答' })
-          ctx.emitVisibleText(agentDecision.action.content)
+          ctx.emitVisibleText(assistantText)
+          ctx.trackAnswerTokens(ctx.lastAgentPrompt, assistantText)
           emitProgress(options, { id: 'answer', stage: 'answer', status: 'completed', title: '生成回答', detail: '回答生成完成' })
           ctx.logger.lifecycle('Agent 直接回答完成', { ...ctx.getTokenUsage() })
           return { answerText: stripThinkBlocks(ctx.answerText), evidenceRefs: dedupeEvidenceRefs(ctx.evidenceCandidates), toolCalls: ctx.toolCalls, promptText: ctx.lastAgentPrompt, tokenUsage: ctx.getTokenUsage() }
-        } else {
-          ctx.observations.push({ title: '开始回答', detail: agentDecision.action.reason || 'Agent 判断已有可用证据，进入最终回答。' })
+        }
+
+        emitAssistantThought(assistantText)
+        const fallbackAction = pickFallbackToolAction(ctx, route)
+        if (fallbackAction.action === 'answer') {
+          ctx.observations.push({ title: '开始回答', detail: fallbackAction.reason || '本地补充工具已执行完毕，进入最终回答。' })
           break
         }
+        const fallbackResult = await executeNativeToolAction(ctx, fallbackAction, { ...fallbackAction })
+        appendLocalFallbackResultMessage(toolLoopMessages, fallbackAction, fallbackResult)
+        continue
       }
 
-      // 处理 tool_call
-      let action: ToolLoopAction = agentDecision.action.action === 'tool_call'
-        ? agentDecision.action.tool
-        : { action: 'read_latest', limit: MAX_CONTEXT_MESSAGES, reason: 'Agent 动作无效，读取最近上下文兜底' }
-
-      // 预算即将耗尽时强制读取最近消息
-      if (evidenceQuality === 'none' && ctx.toolCallsUsed >= MAX_TOOL_CALLS - 1 && action.action !== 'read_latest') {
-        action = { action: 'read_latest', limit: MAX_CONTEXT_MESSAGES, reason: '工具预算即将耗尽' }
+      const fallbackAction = pickFallbackToolAction(ctx, route)
+      if (fallbackAction.action === 'answer') {
+        ctx.observations.push({ title: '开始回答', detail: fallbackAction.reason || '模型未返回工具调用，进入最终回答。' })
+        break
       }
-
-      // answer 动作的证据检查
-      if (action.action === 'answer') {
-        if (evidenceQuality === 'none' && !conclusiveSearchFailure) {
-          action = ctx.summaryFactsRead
-            ? { action: 'read_latest', limit: MAX_CONTEXT_MESSAGES, reason: '摘要事实不足，回答前读取最近上下文' }
-            : { action: 'read_summary_facts', reason: '尚无可用证据，先检查摘要事实' }
-        } else if (evidenceQuality === 'weak' && ctx.toolCallsUsed < MAX_TOOL_CALLS - 2) {
-          const hasSearchedWithNoHits = ctx.searchPayloads.length > 0 && ctx.searchPayloads.every((i) => i.payload.hits.length === 0)
-          if (hasSearchedWithNoHits && ctx.searchRetries < MAX_SEARCH_RETRIES) {
-            const nextQuery = route.searchQueries.find((q) => !ctx.searchedQueries.has(q.toLowerCase()))
-            action = nextQuery
-              ? { action: 'search_messages', query: nextQuery, reason: '之前的搜索没有命中，换关键词重试' }
-              : { action: 'read_latest', limit: MAX_CONTEXT_MESSAGES, reason: '搜索没有命中且缺少新关键词' }
-          } else {
-            ctx.observations.push({ title: '开始回答', detail: '证据有限但已尝试多种策略，进入回答生成。' })
-            break
-          }
-        } else {
-          ctx.observations.push({ title: '开始回答', detail: action.reason || '已有可用证据，进入回答生成。' })
-          break
-        }
-      }
-
-      // 分发工具执行
-      await dispatchToolAction(ctx, action)
+      const fallbackResult = await executeNativeToolAction(ctx, fallbackAction, { ...fallbackAction })
+      appendLocalFallbackResultMessage(toolLoopMessages, fallbackAction, fallbackResult)
     }
 
     // ── 循环结束后的兜底读取 ──

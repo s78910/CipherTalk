@@ -175,6 +175,25 @@ export type ToolLoopAction =
   | { action: 'get_keyword_statistics'; keywords: string[]; startTime?: number; endTime?: number; label?: string; matchMode?: 'substring' | 'exact'; participantLimit?: number; reason?: string }
   | { action: 'answer'; reason?: string }
 
+export interface NativeToolExecutionResult {
+  ok: boolean
+  toolName: SessionQAToolName
+  args: Record<string, unknown>
+  summary: string
+  observations: ToolObservation[]
+  toolCalls: SessionQAToolCall[]
+  evidenceQuality: EvidenceQuality
+  error?: string
+  state: {
+    toolCallsUsed: number
+    knownHitIds: string[]
+    searchPayloadCount: number
+    contextWindowCount: number
+    contextMessageCount: number
+  }
+}
+
+/** @deprecated 旧 JSON action 决策模式已被原生 tools/tool_calls 替代。 */
 export type AutonomousAgentAction =
   | { action: 'assistant_text'; content: string }
   | { action: 'tool_call'; tool: ToolLoopAction; reason?: string; assistantText?: string }

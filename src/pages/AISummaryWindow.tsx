@@ -203,8 +203,51 @@ function getRiskSeverityLabel(severity: 'low' | 'medium' | 'high') {
   }
 }
 
-function getEvidenceSender(ref: SummaryEvidenceRef) {
-  return ref.senderDisplayName || ref.senderUsername || '未知发送人'
+const senderDisplayNameCache = new Map<string, string>()
+
+function isTechnicalSenderName(value?: string | null) {
+  const text = String(value || '').trim()
+  return !text || /^wxid_/i.test(text)
+}
+
+function getReadableSenderName(input: {
+  isSelf?: boolean
+  senderUsername?: string | null
+  senderDisplayName?: string | null
+  sessionName?: string
+  isGroup?: boolean
+}) {
+  if (input.isSelf) return '我'
+
+  const cached = input.senderUsername ? senderDisplayNameCache.get(input.senderUsername) : ''
+  if (cached && !isTechnicalSenderName(cached)) return cached
+
+  if (input.senderDisplayName && !isTechnicalSenderName(input.senderDisplayName)) {
+    return input.senderDisplayName
+  }
+
+  if (input.senderUsername && !isTechnicalSenderName(input.senderUsername)) {
+    return input.senderUsername
+  }
+
+  if (!input.isGroup && input.sessionName) {
+    return input.sessionName
+  }
+
+  return '未知发送人'
+}
+
+function getEvidenceSender(ref: SummaryEvidenceRef, message?: Message, sessionName?: string, sessionId?: string) {
+  const isSelf = message?.isSend === 1 || ref.senderDisplayName === '我'
+  const senderUsername = message?.senderUsername || ref.senderUsername || ''
+  const effectiveSessionId = sessionId || ref.sessionId
+  return getReadableSenderName({
+    isSelf,
+    senderUsername,
+    senderDisplayName: ref.senderDisplayName,
+    sessionName,
+    isGroup: effectiveSessionId.includes('@chatroom')
+  })
 }
 
 function getAvatarLetter(name: string) {
@@ -224,6 +267,71 @@ function isSameEvidenceMessage(message: Message, ref: SummaryEvidenceRef) {
   return message.localId === ref.localId
     && message.createTime === ref.createTime
     && message.sortSeq === ref.sortSeq
+}
+
+function EvidenceSenderName({
+  refItem,
+  message,
+  sessionId,
+  sessionName
+}: {
+  refItem: SummaryEvidenceRef
+  message?: Message
+  sessionId: string
+  sessionName?: string
+}) {
+  const isSelf = message?.isSend === 1 || refItem.senderDisplayName === '我'
+  const senderUsername = message?.senderUsername || refItem.senderUsername || ''
+  const isGroup = sessionId.includes('@chatroom')
+  const [displayName, setDisplayName] = useState(() => getReadableSenderName({
+    isSelf,
+    senderUsername,
+    senderDisplayName: refItem.senderDisplayName,
+    sessionName,
+    isGroup
+  }))
+
+  useEffect(() => {
+    let cancelled = false
+    setDisplayName(getReadableSenderName({
+      isSelf,
+      senderUsername,
+      senderDisplayName: refItem.senderDisplayName,
+      sessionName,
+      isGroup
+    }))
+
+    if (isSelf || !senderUsername) return
+
+    const cached = senderDisplayNameCache.get(senderUsername)
+    if (cached && !isTechnicalSenderName(cached)) {
+      setDisplayName(cached)
+      return
+    }
+
+    window.electronAPI.chat.getContactAvatar(senderUsername).then((result) => {
+      if (cancelled) return
+      const resolvedName = result?.displayName || ''
+      if (resolvedName) senderDisplayNameCache.set(senderUsername, resolvedName)
+      setDisplayName(getReadableSenderName({
+        isSelf,
+        senderUsername,
+        senderDisplayName: resolvedName || refItem.senderDisplayName,
+        sessionName,
+        isGroup
+      }))
+    }).catch(() => {})
+
+    return () => {
+      cancelled = true
+    }
+  }, [isGroup, isSelf, refItem.senderDisplayName, senderUsername, sessionName])
+
+  return (
+    <span className="qa-sender-name" title={senderUsername && displayName !== senderUsername ? senderUsername : undefined}>
+      {displayName}
+    </span>
+  )
 }
 
 function compareMessagesByTime(a: Message, b: Message) {
@@ -277,6 +385,7 @@ function EvidenceAvatar({
       if (cancelled) return
       setContactAvatar(result?.avatarUrl || '')
       setContactName(result?.displayName || '')
+      if (result?.displayName) senderDisplayNameCache.set(senderUsername, result.displayName)
     }).catch(() => {})
 
     return () => {
@@ -286,7 +395,12 @@ function EvidenceAvatar({
 
   const displayName = isSelf
     ? '我'
-    : contactName || refItem.senderDisplayName || refItem.senderUsername || sessionName || '未知'
+    : getReadableSenderName({
+        senderUsername,
+        senderDisplayName: contactName || refItem.senderDisplayName,
+        sessionName,
+        isGroup
+      })
   const avatarSrc = isSelf ? myAvatarUrl : (contactAvatar || (!isGroup ? sessionAvatarUrl : ''))
 
   return (
@@ -742,7 +856,11 @@ function AISummaryWindow() {
           >
             <div className="evidence-meta">
               <span>{formatEvidenceTime(ref.createTime)}</span>
-              <span>{getEvidenceSender(ref)}</span>
+              <EvidenceSenderName
+                refItem={ref}
+                sessionId={ref.sessionId || sessionId}
+                sessionName={sessionName}
+              />
             </div>
             <div className="evidence-preview">{ref.previewText}</div>
           </div>
@@ -753,15 +871,23 @@ function AISummaryWindow() {
 
   const buildEvidenceCopyText = (ref: SummaryEvidenceRef) => [
     `时间：${formatEvidenceFullTime(ref.createTime)}`,
-    `发送人：${getEvidenceSender(ref)}`,
+    `发送人：${getEvidenceSender(ref, evidenceMessageMap[getEvidenceKey(ref)], sessionName, ref.sessionId || sessionId)}`,
     `内容：${ref.previewText}`,
     `消息游标：sessionId=${ref.sessionId}, localId=${ref.localId}, createTime=${ref.createTime}, sortSeq=${ref.sortSeq}`
   ].join('\n')
 
   const getContextMessageSender = (message: Message, fallbackRef?: SummaryEvidenceRef) => {
     if (message.isSend === 1) return '我'
-    if (message.senderUsername) return message.senderUsername
-    if (fallbackRef && isSameEvidenceMessage(message, fallbackRef)) return getEvidenceSender(fallbackRef)
+    if (fallbackRef && isSameEvidenceMessage(message, fallbackRef)) {
+      return getEvidenceSender(fallbackRef, message, sessionName, fallbackRef.sessionId || sessionId)
+    }
+    if (message.senderUsername) {
+      return getReadableSenderName({
+        senderUsername: message.senderUsername,
+        sessionName,
+        isGroup: (fallbackRef?.sessionId || sessionId).includes('@chatroom')
+      })
+    }
     return sessionName || '未知发送人'
   }
 
@@ -795,7 +921,7 @@ function AISummaryWindow() {
     setQaInput([
       '为什么这条消息能支持你的结论？请结合上下文解释。',
       '',
-      `证据：${formatEvidenceFullTime(ref.createTime)} ${getEvidenceSender(ref)}：${ref.previewText}`
+      `证据：${formatEvidenceFullTime(ref.createTime)} ${getEvidenceSender(ref, evidenceMessageMap[getEvidenceKey(ref)], sessionName, ref.sessionId || sessionId)}：${ref.previewText}`
     ].join('\n'))
 
     window.setTimeout(() => {
@@ -908,7 +1034,12 @@ function AISummaryWindow() {
                     <div className="qa-evidence-card-meta">
                       <span>#{index + 1}</span>
                       <span>{formatEvidenceTime(ref.createTime)}</span>
-                      <span>{getEvidenceSender(ref)}</span>
+                      <EvidenceSenderName
+                        refItem={ref}
+                        message={evidenceMessage}
+                        sessionId={ref.sessionId || sessionId}
+                        sessionName={sessionName}
+                      />
                     </div>
                     <div className="qa-evidence-card-preview">
                       <MessageContent content={ref.previewText} disableLinks />
@@ -1123,7 +1254,7 @@ function AISummaryWindow() {
       return (
         <div className="qa-streaming-placeholder">
           <Loader2 size={14} className="spinner" />
-          <span>正在检索上下文...</span>
+          <span>正在规划下一步...</span>
         </div>
       )
     }
@@ -1190,7 +1321,12 @@ function AISummaryWindow() {
 
           <div className="qa-context-anchor">
             <span>{formatEvidenceFullTime(evidenceContext.ref.createTime)}</span>
-            <span>{getEvidenceSender(evidenceContext.ref)}</span>
+            <EvidenceSenderName
+              refItem={evidenceContext.ref}
+              message={evidenceMessageMap[getEvidenceKey(evidenceContext.ref)]}
+              sessionId={evidenceContext.ref.sessionId || sessionId}
+              sessionName={sessionName}
+            />
             <span>localId {evidenceContext.ref.localId}</span>
           </div>
 
@@ -1236,7 +1372,12 @@ function AISummaryWindow() {
                         <div className="qa-context-message-content">
                           <div className="qa-context-message-meta">
                             <span>{formatEvidenceTime(message.createTime)}</span>
-                            <span>{getContextMessageSender(message, evidenceContext.ref)}</span>
+                            <EvidenceSenderName
+                              refItem={contextRef}
+                              message={message}
+                              sessionId={evidenceContext.ref.sessionId || sessionId}
+                              sessionName={sessionName}
+                            />
                             {isAnchor && <strong>原消息</strong>}
                           </div>
                           <p>
