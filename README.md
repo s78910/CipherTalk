@@ -1,5 +1,3 @@
-[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/ilovebinglu-ciphertalk-badge.png)](https://mseep.ai/app/ilovebinglu-ciphertalk)
-
 <div align="center">
 
 <img src="welcome.jpg" alt="密语 CipherTalk" width="100%" />
@@ -18,6 +16,8 @@
 [在线说明文档](https://ilovebinglu.notion.site/ciphertalk)
 
 [功能特性](#-功能特性) • [快速开始](#-快速开始) • [技术栈](#️-技术栈) • [贡献指南](#-贡献指南) • [许可证](#-许可证)
+
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/ilovebinglu-ciphertalk-badge.png)](https://mseep.ai/app/ilovebinglu-ciphertalk)
 </div>
 
 ## 开发者愿景
