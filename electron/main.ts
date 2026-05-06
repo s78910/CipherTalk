@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, nativeImage, nativeTheme, protocol, net, Tray, Menu, type BrowserWindowConstructorOptions, type WebContents } from 'electron'
+﻿import { app, BrowserWindow, ipcMain, nativeImage, nativeTheme, protocol, net, Tray, Menu, type BrowserWindowConstructorOptions, type WebContents } from 'electron'
 import { join } from 'path'
 import { randomBytes } from 'crypto'
 import { readFileSync, existsSync, mkdirSync } from 'fs'
@@ -37,6 +37,9 @@ import { mcpProxyService } from './services/mcp/proxyService'
 import { skillManagerService } from './services/skillManagerService'
 import { mcpClientService } from './services/mcpClientService'
 import { getElectronWorkerEnv } from './services/workerEnvironment'
+import type { MainProcessContext, WindowManager } from './main/context'
+import { createWindowManager } from './main/windows/windowManager'
+import { registerModularIpcHandlers } from './main/ipc/register'
 
 type AppWithQuitFlag = typeof app & {
   isQuitting?: boolean
@@ -80,6 +83,15 @@ let logService: LogService | null = null
 let tray: Tray | null = null
 let isInstallingUpdate = false
 
+// 主窗口引用
+let mainWindow: BrowserWindow | null = null
+// 启动屏窗口引用
+let splashWindow: BrowserWindow | null = null
+// 启动屏就绪状态
+let splashReady = false
+// 启动时是否已成功连接数据库（用于通知主窗口跳过重复连接）
+let startupDbConnected = false
+
 // 聊天窗口实例
 let chatWindow: BrowserWindow | null = null
 // 朋友圈窗口实例
@@ -99,6 +111,59 @@ let welcomeWindow: BrowserWindow | null = null
 // 聊天记录窗口实例
 let chatHistoryWindow: BrowserWindow | null = null
 const allowDevTools = !!process.env.VITE_DEV_SERVER_URL
+let windowManager: WindowManager | null = null
+
+const ctx: MainProcessContext = {
+  appWithQuitFlag,
+  allowDevTools,
+  getDbService: () => dbService,
+  setDbService: (service) => {
+    dbService = service
+  },
+  getConfigService: () => configService,
+  setConfigService: (service) => {
+    configService = service
+  },
+  getLogService: () => logService,
+  setLogService: (service) => {
+    logService = service
+  },
+  getMainWindow: () => mainWindow,
+  setMainWindow: (window) => {
+    mainWindow = window
+  },
+  getSplashWindow: () => splashWindow,
+  setSplashWindow: (window) => {
+    splashWindow = window
+  },
+  getTray: () => tray,
+  setTray: (nextTray) => {
+    tray = nextTray
+  },
+  getSplashReady: () => splashReady,
+  setSplashReady: (ready) => {
+    splashReady = ready
+  },
+  getStartupDbConnected: () => startupDbConnected,
+  setStartupDbConnected: (connected) => {
+    startupDbConnected = connected
+  },
+  getIsInstallingUpdate: () => isInstallingUpdate,
+  setIsInstallingUpdate: (installing) => {
+    isInstallingUpdate = installing
+  },
+  getWindowManager: () => {
+    if (!windowManager) {
+      throw new Error('WindowManager 未初始化')
+    }
+    return windowManager
+  },
+  setWindowManager: (manager) => {
+    windowManager = manager
+  }
+}
+
+ctx.setWindowManager(createWindowManager(ctx))
 
 type SessionVectorIndexWorkerMessage = {
   type?: 'progress' | 'completed' | 'error'
@@ -348,1390 +413,8 @@ async function startSessionMemoryBuildJob(sessionId: string, sender: WebContents
   return promise
 }
 
-type ImageViewerListItem = {
-  imagePath: string
-  liveVideoPath?: string
-}
-
-type ImageViewerOpenOptions = {
-  sessionId?: string
-  imageMd5?: string
-  imageDatName?: string
-}
-
-type ReleaseAnnouncementPayload = {
-  version: string
-  releaseBody?: string
-  releaseNotes?: string
-  generatedAt?: string
-}
-
-function getReleaseAnnouncementPath(): string {
-  const isDev = !!process.env.VITE_DEV_SERVER_URL
-  return isDev
-    ? join(__dirname, '../.tmp/release-announcement.json')
-    : join(process.resourcesPath, 'release-announcement.json')
-}
-
-function syncPackagedReleaseAnnouncement() {
-  if (!configService) return
-
-  const announcementPath = getReleaseAnnouncementPath()
-  if (!existsSync(announcementPath)) {
-    return
-  }
-
-  try {
-    const raw = readFileSync(announcementPath, 'utf8')
-    const payload = JSON.parse(raw) as ReleaseAnnouncementPayload
-    if (!payload || typeof payload !== 'object') return
-
-    const version = String(payload.version || '').trim()
-    if (!version || version !== app.getVersion()) return
-
-    const releaseBody = String(payload.releaseBody || '').trim()
-    const releaseNotes = String(payload.releaseNotes || '').trim()
-
-    const storedVersion = configService.get('releaseAnnouncementVersion')
-    const storedBody = configService.get('releaseAnnouncementBody')
-    const storedNotes = configService.get('releaseAnnouncementNotes')
-
-    if (
-      storedVersion === version &&
-      storedBody === releaseBody &&
-      storedNotes === releaseNotes
-    ) {
-      return
-    }
-
-    configService.set('releaseAnnouncementVersion', version)
-    configService.set('releaseAnnouncementBody', releaseBody)
-    configService.set('releaseAnnouncementNotes', releaseNotes)
-    logService?.info('ReleaseAnnouncement', '已同步本地版本公告', {
-      version,
-      hasBody: Boolean(releaseBody),
-      hasNotes: Boolean(releaseNotes)
-    })
-  } catch (error) {
-    logService?.warn('ReleaseAnnouncement', '同步本地版本公告失败', { error: String(error) })
-  }
-}
-
-/**
- * 获取当前主题的 URL 查询参数
- * 用于子窗口加载时传递主题，防止闪烁
- */
-function getThemeQueryParams(): string {
-  if (!configService) return ''
-  const theme = configService.get('theme') || 'cloud-dancer'
-  const themeMode = configService.get('themeMode') || 'light'
-  return `theme=${encodeURIComponent(theme)}&mode=${encodeURIComponent(themeMode)}`
-}
-
-/**
- * 获取当前应用图标路径
- */
-function getAppIconPath(): string {
-  const isDev = !!process.env.VITE_DEV_SERVER_URL
-  const iconName = configService?.get('appIcon') || 'default'
-
-  if (process.platform === 'darwin') {
-    if (iconName === 'xinnian') {
-      return isDev
-        ? join(__dirname, '../public/xinnian.icns')
-        : join(process.resourcesPath, 'icon.icns')
-    }
-
-    return isDev
-      ? join(__dirname, '../public/icon.icns')
-      : join(process.resourcesPath, 'icon.icns')
-  }
-
-  if (iconName === 'xinnian') {
-    return isDev
-      ? join(__dirname, '../public/xinnian.ico')
-      : join(process.resourcesPath, 'xinnian.ico')
-  } else {
-    return isDev
-      ? join(__dirname, '../public/icon.ico')
-      : join(process.resourcesPath, 'icon.ico')
-  }
-}
-
-function loadNativeImageIfValid(iconPath: string, purpose: string): ReturnType<typeof nativeImage.createFromPath> | null {
-  if (!existsSync(iconPath)) {
-    console.warn(`[Icon] ${purpose} not found: ${iconPath}`)
-    return null
-  }
-
-  try {
-    const image = nativeImage.createFromPath(iconPath)
-    if (image.isEmpty()) {
-      console.warn(`[Icon] ${purpose} failed to load: ${iconPath}`)
-      return null
-    }
-    return image
-  } catch (error) {
-    console.warn(`[Icon] ${purpose} failed to load: ${iconPath}`, error)
-    return null
-  }
-}
-
-function getWindowIconOptions(): Pick<BrowserWindowConstructorOptions, 'icon'> {
-  // macOS uses the bundle/dock icon. Passing a missing or invalid .icns here can crash Electron.
-  if (process.platform === 'darwin') {
-    return {}
-  }
-
-  const image = loadNativeImageIfValid(getAppIconPath(), 'window icon')
-  return image ? { icon: image } : {}
-}
-
-function getDockIconPath(): string {
-  const isDev = !!process.env.VITE_DEV_SERVER_URL
-  const iconName = configService?.get('appIcon') || 'default'
-
-  if (iconName === 'xinnian') {
-    const devPaddedPath = join(__dirname, '../public/xinnian-dock.png')
-    const devFallbackPath = join(__dirname, '../public/xinnian.png')
-    return isDev
-      ? (existsSync(devPaddedPath) ? devPaddedPath : devFallbackPath)
-      : join(process.resourcesPath, 'icon.png')
-  }
-
-  const devPaddedPath = join(__dirname, '../public/icon-dock.png')
-  const devFallbackPath = join(__dirname, '../public/logo.png')
-  return isDev
-    ? (existsSync(devPaddedPath) ? devPaddedPath : devFallbackPath)
-    : join(process.resourcesPath, 'icon.png')
-}
-
-function getTrayIconPath(): string {
-  if (process.platform === 'darwin') {
-    const isDev = !!process.env.VITE_DEV_SERVER_URL
-    const iconName = configService?.get('appIcon') || 'default'
-    const devTrayPath = iconName === 'xinnian'
-      ? join(__dirname, '../public/xinnian-tray.png')
-      : join(__dirname, '../public/tray-mac.png')
-
-    if (isDev && existsSync(devTrayPath)) {
-      return devTrayPath
-    }
-  }
-
-  return getAppIconPath()
-}
-
-function getTrayImage() {
-  const iconPath = getTrayIconPath()
-  const image = loadNativeImageIfValid(iconPath, 'tray icon')
-
-  if (!image) {
-    return nativeImage.createEmpty()
-  }
-
-  if (process.platform === 'darwin') {
-    return image.resize({ height: 26 })
-  }
-
-  return image
-}
-
-/**
- * 创建系统托盘
- */
-function createTray(): Tray | null {
-  if (tray) return tray
-
-  try {
-    tray = new Tray(getTrayImage())
-  } catch (error) {
-    console.warn('[Icon] tray creation failed:', error)
-    return null
-  }
-
-  if (process.platform === 'darwin') {
-    tray.setIgnoreDoubleClickEvents(true)
-  }
-
-  const contextMenu = Menu.buildFromTemplate([
-    {
-      label: '显示主窗口',
-      click: () => {
-        if (mainWindow) {
-          if (mainWindow.isMinimized()) {
-            mainWindow.restore()
-          }
-          mainWindow.show()
-          mainWindow.focus()
-        }
-      }
-    },
-    { type: 'separator' },
-    {
-      label: '退出',
-      click: () => {
-        // 设置标志，允许真正退出
-        appWithQuitFlag.isQuitting = true
-        app.quit()
-      }
-    }
-  ])
-
-  tray.setToolTip('密语 CipherTalk')
-  tray.setContextMenu(contextMenu)
-
-  // 双击托盘图标显示窗口
-  tray.on('double-click', () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) {
-        mainWindow.restore()
-      }
-      mainWindow.show()
-      mainWindow.focus()
-    }
-  })
-
-  return tray
-}
-
-function createWindow() {
-  const win = new BrowserWindow({
-    width: 1400,
-    height: 900,
-    minWidth: 1000,
-    minHeight: 700,
-    ...getWindowIconOptions(),
-    webPreferences: {
-      preload: join(__dirname, 'preload.js'),
-      devTools: allowDevTools,
-      contextIsolation: true,
-      nodeIntegration: false,
-      webSecurity: false  // 允许加载本地文件
-    },
-    titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      color: '#00000000',
-      symbolColor: '#1a1a1a',
-      height: 40
-    },
-    show: false
-  })
-
-  // 初始化服务
-  configService = new ConfigService()
-  dbService = new DatabaseService()
-
-  logService = new LogService(configService)
-  syncPackagedReleaseAnnouncement()
-  mcpProxyService.setLogger(logService)
-  autoUpdater.logger = {
-    info(message: string) {
-      logService?.info('AppUpdate', message)
-      appUpdateService.noteUpdaterMessage(String(message), 'info')
-    },
-    warn(message: string) {
-      logService?.warn('AppUpdate', message)
-      appUpdateService.noteUpdaterMessage(String(message), 'warn')
-    },
-    error(message: string) {
-      logService?.error('AppUpdate', message)
-      appUpdateService.noteUpdaterMessage(String(message), 'error')
-    },
-    debug(message: string) {
-      logService?.debug('AppUpdate', message)
-      appUpdateService.noteUpdaterMessage(String(message), 'info')
-    }
-  }
-
-  // 记录应用启动日志
-  logService.info('App', '应用启动', { version: app.getVersion() })
-
-  // 初始化 Whisper GPU 组件目录
-  const cachePath = configService.get('cachePath')
-  if (cachePath) {
-    voiceTranscribeServiceWhisper.setGPUComponentsDir(cachePath)
-  }
-
-  // 窗口准备好后显示
-  win.once('ready-to-show', () => {
-    win.show()
-  })
-
-  // 监听窗口关闭事件
-  win.on('close', (event) => {
-    const updateInfo = appUpdateService.getCachedUpdateInfo()
-    if (updateInfo?.forceUpdate) {
-      appWithQuitFlag.isQuitting = true
-      return
-    }
-
-    if (isInstallingUpdate) {
-      appWithQuitFlag.isQuitting = true
-      return
-    }
-
-    // 如果是真正退出应用，不阻止
-    if (appWithQuitFlag.isQuitting) {
-      return
-    }
-
-    // 获取关闭行为配置
-    const closeToTray = configService?.get('closeToTray')
-
-    // 如果配置为关闭到托盘（默认为 true）
-    if (closeToTray !== false) {
-      event.preventDefault()
-      win.hide()
-
-      // 确保托盘已创建
-      if (!tray) {
-        createTray()
-      }
-
-      return
-    }
-
-    // 配置为直接退出时，需要显式退出应用。
-    // 否则主窗口关闭后托盘仍然存在，进程不会真正结束。
-    event.preventDefault()
-    appWithQuitFlag.isQuitting = true
-    app.quit()
-  })
-
-  // 开发环境加载 vite 服务器
-  if (process.env.VITE_DEV_SERVER_URL) {
-    win.loadURL(process.env.VITE_DEV_SERVER_URL)
-
-    // 开发环境下按 F12 或 Ctrl+Shift+I 打开开发者工具
-    win.webContents.on('before-input-event', (event, input) => {
-      if (input.key === 'F12' || (input.control && input.shift && input.key === 'I')) {
-        if (win.webContents.isDevToolsOpened()) {
-          win.webContents.closeDevTools()
-        } else {
-          win.webContents.openDevTools()
-        }
-        event.preventDefault()
-      }
-    })
-  } else {
-    win.loadFile(join(__dirname, '../dist/index.html'))
-  }
-
-
-  return win
-}
-
-/**
- * 创建独立的聊天窗口（仿微信风格）
- */
-function createChatWindow() {
-  // 如果已存在，聚焦到现有窗口
-  if (chatWindow && !chatWindow.isDestroyed()) {
-    if (chatWindow.isMinimized()) {
-      chatWindow.restore()
-    }
-    chatWindow.focus()
-    return chatWindow
-  }
-
-  const isDark = nativeTheme.shouldUseDarkColors
-
-  chatWindow = new BrowserWindow({
-    width: 1000,
-    height: 700,
-    minWidth: 800,
-    minHeight: 600,
-    ...getWindowIconOptions(),
-    webPreferences: {
-      preload: join(__dirname, 'preload.js'),
-      devTools: allowDevTools,
-      contextIsolation: true,
-      nodeIntegration: false,
-      webSecurity: false  // 允许加载本地文件
-    },
-    titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      color: '#00000000',
-      symbolColor: '#666666',
-      height: 40
-    },
-    show: false,
-    backgroundColor: isDark ? '#1A1A1A' : '#F0F0F0'
-  })
-
-  chatWindow.once('ready-to-show', () => {
-    chatWindow?.show()
-  })
-
-  // 获取主题参数
-  const themeParams = getThemeQueryParams()
-
-  // 加载聊天页面
-  if (process.env.VITE_DEV_SERVER_URL) {
-    chatWindow.loadURL(`${process.env.VITE_DEV_SERVER_URL}?${themeParams}#/chat-window`)
-
-    chatWindow.webContents.on('before-input-event', (event, input) => {
-      if (input.key === 'F12' || (input.control && input.shift && input.key === 'I')) {
-        if (chatWindow?.webContents.isDevToolsOpened()) {
-          chatWindow.webContents.closeDevTools()
-        } else {
-          chatWindow?.webContents.openDevTools()
-        }
-        event.preventDefault()
-      }
-    })
-  } else {
-    chatWindow.loadFile(join(__dirname, '../dist/index.html'), {
-      hash: '/chat-window',
-      query: { theme: configService?.get('theme') || 'cloud-dancer', mode: configService?.get('themeMode') || 'light' }
-    })
-  }
-
-  chatWindow.on('closed', () => {
-    chatWindow = null
-  })
-
-  return chatWindow
-}
-
-/**
- * 创建独立的群聊分析窗口
- */
-function createGroupAnalyticsWindow() {
-  // 如果已存在，聚焦到现有窗口
-  if (groupAnalyticsWindow && !groupAnalyticsWindow.isDestroyed()) {
-    if (groupAnalyticsWindow.isMinimized()) {
-      groupAnalyticsWindow.restore()
-    }
-    groupAnalyticsWindow.focus()
-    return groupAnalyticsWindow
-  }
-
-  const isDark = nativeTheme.shouldUseDarkColors
-
-  groupAnalyticsWindow = new BrowserWindow({
-    width: 1100,
-    height: 750,
-    minWidth: 900,
-    minHeight: 600,
-    ...getWindowIconOptions(),
-    webPreferences: {
-      preload: join(__dirname, 'preload.js'),
-      devTools: allowDevTools,
-      contextIsolation: true,
-      nodeIntegration: false,
-      webSecurity: false  // 允许加载本地文件
-    },
-    titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      color: '#00000000',
-      symbolColor: '#666666',
-      height: 40
-    },
-    show: false,
-    backgroundColor: isDark ? '#1A1A1A' : '#F0F0F0'
-  })
-
-  groupAnalyticsWindow.once('ready-to-show', () => {
-    groupAnalyticsWindow?.show()
-  })
-
-  // 获取主题参数
-  const themeParams = getThemeQueryParams()
-
-  // 加载群聊分析页面
-  if (process.env.VITE_DEV_SERVER_URL) {
-    groupAnalyticsWindow.loadURL(`${process.env.VITE_DEV_SERVER_URL}?${themeParams}#/group-analytics-window`)
-
-    groupAnalyticsWindow.webContents.on('before-input-event', (event, input) => {
-      if (input.key === 'F12' || (input.control && input.shift && input.key === 'I')) {
-        if (groupAnalyticsWindow?.webContents.isDevToolsOpened()) {
-          groupAnalyticsWindow.webContents.closeDevTools()
-        } else {
-          groupAnalyticsWindow?.webContents.openDevTools()
-        }
-        event.preventDefault()
-      }
-    })
-  } else {
-    groupAnalyticsWindow.loadFile(join(__dirname, '../dist/index.html'), {
-      hash: '/group-analytics-window',
-      query: { theme: configService?.get('theme') || 'cloud-dancer', mode: configService?.get('themeMode') || 'light' }
-    })
-  }
-
-  groupAnalyticsWindow.on('closed', () => {
-    groupAnalyticsWindow = null
-  })
-
-  return groupAnalyticsWindow
-}
-
-/**
- * 创建独立的朋友圈窗口
- */
-function createMomentsWindow(filterUsername?: string) {
-  // 如果已存在，聚焦到现有窗口并发送筛选
-  if (momentsWindow && !momentsWindow.isDestroyed()) {
-    if (momentsWindow.isMinimized()) {
-      momentsWindow.restore()
-    }
-    momentsWindow.focus()
-    if (filterUsername) {
-      momentsWindow.webContents.send('moments:filterUser', filterUsername)
-    }
-    return momentsWindow
-  }
-
-  const isDark = nativeTheme.shouldUseDarkColors
-
-  momentsWindow = new BrowserWindow({
-    width: 1200, // Widened from default
-    height: 800,
-    minWidth: 900,
-    minHeight: 600,
-    ...getWindowIconOptions(),
-    webPreferences: {
-      preload: join(__dirname, 'preload.js'),
-      devTools: allowDevTools,
-      contextIsolation: true,
-      nodeIntegration: false,
-      webSecurity: false  // 允许加载本地文件
-    },
-    titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      color: '#00000000',
-      symbolColor: '#666666',
-      height: 40
-    },
-    show: false,
-    backgroundColor: isDark ? '#1A1A1A' : '#F0F0F0'
-  })
-
-  momentsWindow.once('ready-to-show', () => {
-    momentsWindow?.show()
-  })
-
-  // 获取主题参数
-  const themeParams = getThemeQueryParams()
-
-  // 加载朋友圈页面
-  const filterParam = filterUsername ? `&filterUsername=${encodeURIComponent(filterUsername)}` : ''
-  if (process.env.VITE_DEV_SERVER_URL) {
-    momentsWindow.loadURL(`${process.env.VITE_DEV_SERVER_URL}?${themeParams}${filterParam}#/moments-window`)
-
-    momentsWindow.webContents.on('before-input-event', (event, input) => {
-      if (input.key === 'F12' || (input.control && input.shift && input.key === 'I')) {
-        if (momentsWindow?.webContents.isDevToolsOpened()) {
-          momentsWindow.webContents.closeDevTools()
-        } else {
-          momentsWindow?.webContents.openDevTools()
-        }
-        event.preventDefault()
-      }
-    })
-  } else {
-    const query: Record<string, string> = { theme: configService?.get('theme') || 'cloud-dancer', mode: configService?.get('themeMode') || 'light' }
-    if (filterUsername) query.filterUsername = filterUsername
-    momentsWindow.loadFile(join(__dirname, '../dist/index.html'), {
-      hash: '/moments-window',
-      query
-    })
-  }
-
-  momentsWindow.on('closed', () => {
-    momentsWindow = null
-  })
-
-  return momentsWindow
-}
-
-/**
- * 创建独立的聊天记录窗口
- */
-function createChatHistoryWindow(sessionId: string, messageId: number) {
-  // 如果已存在，聚焦到现有窗口
-  if (chatHistoryWindow && !chatHistoryWindow.isDestroyed()) {
-    if (chatHistoryWindow.isMinimized()) {
-      chatHistoryWindow.restore()
-    }
-    chatHistoryWindow.focus()
-
-    // 导航到新记录
-    const themeParams = getThemeQueryParams()
-    if (process.env.VITE_DEV_SERVER_URL) {
-      chatHistoryWindow.loadURL(`${process.env.VITE_DEV_SERVER_URL}?${themeParams}#/chat-history/${sessionId}/${messageId}`)
-    } else {
-      chatHistoryWindow.loadFile(join(__dirname, '../dist/index.html'), {
-        hash: `/chat-history/${sessionId}/${messageId}`,
-        query: { theme: configService?.get('theme') || 'cloud-dancer', mode: configService?.get('themeMode') || 'light' }
-      })
-    }
-    return chatHistoryWindow
-  }
-
-  const isDark = nativeTheme.shouldUseDarkColors
-
-  chatHistoryWindow = new BrowserWindow({
-    width: 600,
-    height: 800,
-    minWidth: 400,
-    minHeight: 500,
-    ...getWindowIconOptions(),
-    webPreferences: {
-      preload: join(__dirname, 'preload.js'),
-      devTools: allowDevTools,
-      contextIsolation: true,
-      nodeIntegration: false,
-      webSecurity: false  // 允许加载本地文件
-    },
-    titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      color: '#00000000',
-      symbolColor: isDark ? '#ffffff' : '#1a1a1a',
-      height: 40
-    },
-    show: false,
-    backgroundColor: isDark ? '#1A1A1A' : '#F0F0F0',
-    autoHideMenuBar: true
-  })
-
-  chatHistoryWindow.once('ready-to-show', () => {
-    chatHistoryWindow?.show()
-  })
-
-  const themeParams = getThemeQueryParams()
-  if (process.env.VITE_DEV_SERVER_URL) {
-    chatHistoryWindow.loadURL(`${process.env.VITE_DEV_SERVER_URL}?${themeParams}#/chat-history/${sessionId}/${messageId}`)
-
-    chatHistoryWindow.webContents.on('before-input-event', (event, input) => {
-      if (input.key === 'F12' || (input.control && input.shift && input.key === 'I')) {
-        chatHistoryWindow?.webContents.openDevTools()
-        event.preventDefault()
-      }
-    })
-  } else {
-    chatHistoryWindow.loadFile(join(__dirname, '../dist/index.html'), {
-      hash: `/chat-history/${sessionId}/${messageId}`,
-      query: { theme: configService?.get('theme') || 'cloud-dancer', mode: configService?.get('themeMode') || 'light' }
-    })
-  }
-
-  chatHistoryWindow.on('closed', () => {
-    chatHistoryWindow = null
-  })
-
-  return chatHistoryWindow
-}
-
-/**
- * 创建独立的年度报告窗口
- */
-function createAnnualReportWindow(year: number) {
-  // 如果已存在，关闭旧窗口
-  if (annualReportWindow && !annualReportWindow.isDestroyed()) {
-    annualReportWindow.close()
-    annualReportWindow = null
-  }
-
-  const isDark = nativeTheme.shouldUseDarkColors
-
-  annualReportWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
-    minWidth: 900,
-    minHeight: 650,
-    ...getWindowIconOptions(),
-    webPreferences: {
-      preload: join(__dirname, 'preload.js'),
-      devTools: allowDevTools,
-      contextIsolation: true,
-      nodeIntegration: false,
-      webSecurity: false  // 允许加载本地文件
-    },
-    titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      color: '#00000000',
-      symbolColor: isDark ? '#FFFFFF' : '#333333',
-      height: 40
-    },
-    show: false,
-    backgroundColor: isDark ? '#1A1A1A' : '#F9F8F6'
-  })
-
-  annualReportWindow.once('ready-to-show', () => {
-    annualReportWindow?.show()
-  })
-
-  // 获取主题参数
-  const themeParams = getThemeQueryParams()
-
-  // 加载年度报告页面，带年份参数
-  if (process.env.VITE_DEV_SERVER_URL) {
-    annualReportWindow.loadURL(`${process.env.VITE_DEV_SERVER_URL}?${themeParams}#/annual-report-window?year=${year}`)
-
-    annualReportWindow.webContents.on('before-input-event', (event, input) => {
-      if (input.key === 'F12' || (input.control && input.shift && input.key === 'I')) {
-        if (annualReportWindow?.webContents.isDevToolsOpened()) {
-          annualReportWindow.webContents.closeDevTools()
-        } else {
-          annualReportWindow?.webContents.openDevTools()
-        }
-        event.preventDefault()
-      }
-    })
-  } else {
-    annualReportWindow.loadFile(join(__dirname, '../dist/index.html'), {
-      hash: `/annual-report-window?year=${year}`,
-      query: { theme: configService?.get('theme') || 'cloud-dancer', mode: configService?.get('themeMode') || 'light' }
-    })
-  }
-
-  annualReportWindow.on('closed', () => {
-    annualReportWindow = null
-  })
-
-  return annualReportWindow
-}
-
-/**
- * 创建用户协议窗口
- */
-function createAgreementWindow() {
-  // 如果已存在，聚焦
-  if (agreementWindow && !agreementWindow.isDestroyed()) {
-    agreementWindow.focus()
-    return agreementWindow
-  }
-
-  const isDark = nativeTheme.shouldUseDarkColors
-
-  agreementWindow = new BrowserWindow({
-    width: 800,
-    height: 700,
-    minWidth: 600,
-    minHeight: 500,
-    ...getWindowIconOptions(),
-    webPreferences: {
-      preload: join(__dirname, 'preload.js'),
-      devTools: allowDevTools,
-      contextIsolation: true,
-      nodeIntegration: false,
-      webSecurity: false  // 允许加载本地文件
-    },
-    titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      color: '#00000000',
-      symbolColor: isDark ? '#FFFFFF' : '#333333',
-      height: 40
-    },
-    show: false,
-    backgroundColor: isDark ? '#1A1A1A' : '#FFFFFF'
-  })
-
-  agreementWindow.once('ready-to-show', () => {
-    agreementWindow?.show()
-  })
-
-  // 获取主题参数
-  const themeParams = getThemeQueryParams()
-
-  if (process.env.VITE_DEV_SERVER_URL) {
-    agreementWindow.loadURL(`${process.env.VITE_DEV_SERVER_URL}?${themeParams}#/agreement-window`)
-  } else {
-    agreementWindow.loadFile(join(__dirname, '../dist/index.html'), {
-      hash: '/agreement-window',
-      query: { theme: configService?.get('theme') || 'cloud-dancer', mode: configService?.get('themeMode') || 'light' }
-    })
-  }
-
-  agreementWindow.on('closed', () => {
-    agreementWindow = null
-  })
-
-  return agreementWindow
-}
-
-/**
- * 创建首次引导窗口（独立无边框透明窗口）
- */
-function createWelcomeWindow(mode: 'default' | 'add-account' = 'default') {
-  // 如果已存在，聚焦
-  if (welcomeWindow && !welcomeWindow.isDestroyed()) {
-    welcomeWindow.focus()
-    return welcomeWindow
-  }
-
-  welcomeWindow = new BrowserWindow({
-    width: 1100,
-    height: 760,
-    minWidth: 900,
-    minHeight: 640,
-    frame: false,
-    transparent: true,
-    backgroundColor: '#00000000',
-    hasShadow: false,
-    ...getWindowIconOptions(),
-    webPreferences: {
-      preload: join(__dirname, 'preload.js'),
-      devTools: allowDevTools,
-      contextIsolation: true,
-      nodeIntegration: false,
-      webSecurity: false  // 允许加载本地文件
-    },
-    show: false
-  })
-
-  welcomeWindow.once('ready-to-show', () => {
-    welcomeWindow?.show()
-  })
-
-  const welcomeHash = mode === 'add-account' ? '/welcome-window?mode=add-account' : '/welcome-window'
-
-  if (process.env.VITE_DEV_SERVER_URL) {
-    welcomeWindow.loadURL(`${process.env.VITE_DEV_SERVER_URL}#${welcomeHash}`)
-  } else {
-    welcomeWindow.loadFile(join(__dirname, '../dist/index.html'), { hash: welcomeHash })
-  }
-
-  welcomeWindow.on('closed', () => {
-    welcomeWindow = null
-  })
-
-  return welcomeWindow
-}
-
-/**
- * 创建购买窗口
- */
-function createPurchaseWindow() {
-  // 如果已存在，聚焦
-  if (purchaseWindow && !purchaseWindow.isDestroyed()) {
-    purchaseWindow.focus()
-    return purchaseWindow
-  }
-
-  purchaseWindow = new BrowserWindow({
-    width: 1000,
-    height: 700,
-    minWidth: 800,
-    minHeight: 600,
-    ...getWindowIconOptions(),
-    webPreferences: {
-      devTools: allowDevTools,
-      contextIsolation: true,
-      nodeIntegration: false,
-      webSecurity: false  // 允许加载本地文件
-    },
-    title: '获取激活码 - 密语',
-    show: false,
-    backgroundColor: '#FFFFFF',
-    autoHideMenuBar: true
-  })
-
-  purchaseWindow.once('ready-to-show', () => {
-    purchaseWindow?.show()
-  })
-
-  // 加载购买页面
-  purchaseWindow.loadURL('https://pay.ldxp.cn/shop/aiqiji')
-
-  purchaseWindow.on('closed', () => {
-    purchaseWindow = null
-  })
-
-  return purchaseWindow
-}
-
-function getImageViewerQueryParams(
-  imagePath: string,
-  liveVideoPath?: string,
-  options?: ImageViewerOpenOptions
-): string {
-  const themeParams = getThemeQueryParams()
-  const imageParam = `imagePath=${encodeURIComponent(imagePath)}`
-  const liveVideoParam = liveVideoPath ? `&liveVideoPath=${encodeURIComponent(liveVideoPath)}` : ''
-  const sessionParam = options?.sessionId ? `&sessionId=${encodeURIComponent(options.sessionId)}` : ''
-  const imageMd5Param = options?.imageMd5 ? `&imageMd5=${encodeURIComponent(options.imageMd5)}` : ''
-  const imageDatNameParam = options?.imageDatName ? `&imageDatName=${encodeURIComponent(options.imageDatName)}` : ''
-  return `${themeParams}&${imageParam}${liveVideoParam}${sessionParam}${imageMd5Param}${imageDatNameParam}`
-}
-
-/**
- * 创建独立的图片查看窗口
- */
-function createImageViewerWindow(
-  imagePath: string,
-  liveVideoPath?: string,
-  options?: ImageViewerOpenOptions
-) {
-  const win = new BrowserWindow({
-    width: 800,
-    height: 600,
-    minWidth: 400,
-    minHeight: 300,
-    ...getWindowIconOptions(),
-    webPreferences: {
-      preload: join(__dirname, 'preload.js'),
-      devTools: allowDevTools,
-      contextIsolation: true,
-      nodeIntegration: false,
-      webSecurity: false // 允许加载本地文件
-    },
-    titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      color: '#00000000',
-      symbolColor: '#ffffff',
-      height: 40
-    },
-    show: false,
-    backgroundColor: '#000000',
-    autoHideMenuBar: true
-  })
-
-  win.once('ready-to-show', () => {
-    win.show()
-  })
-
-  const queryParams = getImageViewerQueryParams(imagePath, liveVideoPath, options)
-
-  if (process.env.VITE_DEV_SERVER_URL) {
-    win.loadURL(`${process.env.VITE_DEV_SERVER_URL}#/image-viewer-window?${queryParams}`)
-
-    win.webContents.on('before-input-event', (event, input) => {
-      if (input.key === 'F12' || (input.control && input.shift && input.key === 'I')) {
-        if (win.webContents.isDevToolsOpened()) {
-          win.webContents.closeDevTools()
-        } else {
-          win.webContents.openDevTools()
-        }
-        event.preventDefault()
-      }
-    })
-  } else {
-    win.loadFile(join(__dirname, '../dist/index.html'), {
-      hash: `/image-viewer-window?${queryParams}`
-    })
-  }
-
-  return win
-}
-
-/**
- * 创建独立的视频播放窗口
- * 窗口大小会根据视频比例自动调整
- */
-function createVideoPlayerWindow(videoPath: string, videoWidth?: number, videoHeight?: number) {
-  // 获取屏幕尺寸
-  const { screen } = require('electron')
-  const primaryDisplay = screen.getPrimaryDisplay()
-  const { width: screenWidth, height: screenHeight } = primaryDisplay.workAreaSize
-
-  // 计算窗口尺寸，只有标题栏 40px，控制栏悬浮
-  let winWidth = 854
-  let winHeight = 520
-  const titleBarHeight = 40
-
-  if (videoWidth && videoHeight && videoWidth > 0 && videoHeight > 0) {
-    const aspectRatio = videoWidth / videoHeight
-
-    const maxWidth = Math.floor(screenWidth * 0.85)
-    const maxHeight = Math.floor(screenHeight * 0.85)
-
-    if (aspectRatio >= 1) {
-      // 横向视频
-      winWidth = Math.min(videoWidth, maxWidth)
-      winHeight = Math.floor(winWidth / aspectRatio) + titleBarHeight
-
-      if (winHeight > maxHeight) {
-        winHeight = maxHeight
-        winWidth = Math.floor((winHeight - titleBarHeight) * aspectRatio)
-      }
-    } else {
-      // 竖向视频
-      const videoDisplayHeight = Math.min(videoHeight, maxHeight - titleBarHeight)
-      winHeight = videoDisplayHeight + titleBarHeight
-      winWidth = Math.floor(videoDisplayHeight * aspectRatio)
-
-      if (winWidth < 300) {
-        winWidth = 300
-        winHeight = Math.floor(winWidth / aspectRatio) + titleBarHeight
-      }
-    }
-
-    winWidth = Math.max(winWidth, 360)
-    winHeight = Math.max(winHeight, 280)
-  }
-
-  const win = new BrowserWindow({
-    width: winWidth,
-    height: winHeight,
-    minWidth: 360,
-    minHeight: 280,
-    ...getWindowIconOptions(),
-    webPreferences: {
-      preload: join(__dirname, 'preload.js'),
-      devTools: allowDevTools,
-      contextIsolation: true,
-      nodeIntegration: false,
-      webSecurity: false
-    },
-    titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      color: '#1a1a1a',
-      symbolColor: '#ffffff',
-      height: 40
-    },
-    show: false,
-    backgroundColor: '#000000',
-    autoHideMenuBar: true
-  })
-
-  win.once('ready-to-show', () => {
-    win.show()
-  })
-
-  const themeParams = getThemeQueryParams()
-  const videoParam = `videoPath=${encodeURIComponent(videoPath)}`
-  const queryParams = `${themeParams}&${videoParam}`
-
-  if (process.env.VITE_DEV_SERVER_URL) {
-    win.loadURL(`${process.env.VITE_DEV_SERVER_URL}#/video-player-window?${queryParams}`)
-
-    win.webContents.on('before-input-event', (event, input) => {
-      if (input.key === 'F12' || (input.control && input.shift && input.key === 'I')) {
-        if (win.webContents.isDevToolsOpened()) {
-          win.webContents.closeDevTools()
-        } else {
-          win.webContents.openDevTools()
-        }
-        event.preventDefault()
-      }
-    })
-  } else {
-    win.loadFile(join(__dirname, '../dist/index.html'), {
-      hash: `/video-player-window?${queryParams}`
-    })
-  }
-
-  return win
-}
-
-/**
- * 创建内置浏览器窗口
- */
-function createBrowserWindow(url: string, title?: string) {
-  const win = new BrowserWindow({
-    width: 1200,
-    height: 800,
-    minWidth: 800,
-    minHeight: 600,
-    ...getWindowIconOptions(),
-    webPreferences: {
-      preload: join(__dirname, 'preload.js'),
-      devTools: allowDevTools,
-      contextIsolation: true,
-      nodeIntegration: false,
-      webSecurity: false,
-      webviewTag: true // 允许使用 <webview> 标签
-    },
-    titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      color: '#1a1a1a',
-      symbolColor: '#ffffff',
-      height: 40
-    },
-    show: false,
-    backgroundColor: '#ffffff',
-    title: title || '浏览器'
-  })
-
-  win.once('ready-to-show', () => {
-    win.show()
-  })
-
-  // 获取主题参数
-  const themeParams = getThemeQueryParams()
-  const urlParam = `url=${encodeURIComponent(url)}`
-  const titleParam = title ? `&title=${encodeURIComponent(title)}` : ''
-  const queryParams = `${themeParams}&${urlParam}${titleParam}`
-
-  if (process.env.VITE_DEV_SERVER_URL) {
-    win.loadURL(`${process.env.VITE_DEV_SERVER_URL}#/browser-window?${queryParams}`)
-
-    win.webContents.on('before-input-event', (event, input) => {
-      if (input.key === 'F12' || (input.control && input.shift && input.key === 'I')) {
-        if (win.webContents.isDevToolsOpened()) {
-          win.webContents.closeDevTools()
-        } else {
-          win.webContents.openDevTools()
-        }
-        event.preventDefault()
-      }
-    })
-  } else {
-    // 生产环境，加载 browser-window 路由
-    win.loadFile(join(__dirname, '../dist/index.html'), {
-      hash: `/browser-window?${queryParams}`
-    })
-  }
-
-  return win
-}
-
-/**
- * 创建 AI 摘要窗口
- */
-function createAISummaryWindow(sessionId: string, sessionName: string) {
-  // 如果已存在，关闭旧窗口
-  if (aiSummaryWindow && !aiSummaryWindow.isDestroyed()) {
-    aiSummaryWindow.close()
-    aiSummaryWindow = null
-  }
-
-  const isDark = nativeTheme.shouldUseDarkColors
-
-  aiSummaryWindow = new BrowserWindow({
-    width: 1100,
-    height: 760,
-    minWidth: 900,
-    minHeight: 600,
-    ...getWindowIconOptions(),
-    webPreferences: {
-      preload: join(__dirname, 'preload.js'),
-      devTools: allowDevTools,
-      contextIsolation: true,
-      nodeIntegration: false,
-      webSecurity: false  // 允许加载本地文件
-    },
-    // 使用自定义标题栏但保留原生窗口控件
-    frame: false,
-    titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      color: isDark ? '#2A2A2A' : '#F0F0F0',
-      symbolColor: isDark ? '#FFFFFF' : '#000000',
-      height: 40
-    },
-    show: false,
-    backgroundColor: isDark ? '#1A1A1A' : '#FFFFFF',
-    autoHideMenuBar: true
-  })
-
-  aiSummaryWindow.once('ready-to-show', () => {
-    aiSummaryWindow?.show()
-  })
-
-  // 获取主题参数
-  const themeParams = getThemeQueryParams()
-  const sessionIdParam = `sessionId=${encodeURIComponent(sessionId)}`
-  const sessionNameParam = `sessionName=${encodeURIComponent(sessionName)}`
-  const queryParams = `${themeParams}&${sessionIdParam}&${sessionNameParam}`
-
-  if (process.env.VITE_DEV_SERVER_URL) {
-    aiSummaryWindow.loadURL(`${process.env.VITE_DEV_SERVER_URL}?${queryParams}#/ai-summary-window`)
-
-    aiSummaryWindow.webContents.on('before-input-event', (event, input) => {
-      if (input.key === 'F12' || (input.control && input.shift && input.key === 'I')) {
-        if (aiSummaryWindow?.webContents.isDevToolsOpened()) {
-          aiSummaryWindow.webContents.closeDevTools()
-        } else {
-          aiSummaryWindow?.webContents.openDevTools()
-        }
-        event.preventDefault()
-      }
-    })
-  } else {
-    aiSummaryWindow.loadFile(join(__dirname, '../dist/index.html'), {
-      search: queryParams,
-      hash: '/ai-summary-window'
-    })
-  }
-
-  aiSummaryWindow.on('closed', () => {
-    aiSummaryWindow = null
-  })
-
-  return aiSummaryWindow
-}
-
 // 注册 IPC 处理器
 function registerIpcHandlers() {
-  // 配置相关
-  ipcMain.handle('config:get', async (_, key: string) => {
-    return configService?.get(key as any)
-  })
-
-  ipcMain.handle('config:set', async (_, key: string, value: any) => {
-    return configService?.set(key as any, value)
-  })
-
-  // TLD 缓存相关
-  ipcMain.handle('config:getTldCache', async () => {
-    return configService?.getTldCache()
-  })
-
-  ipcMain.handle('config:setTldCache', async (_, tlds: string[]) => {
-    return configService?.setTldCache(tlds)
-  })
-
-  ipcMain.handle('accounts:list', async () => {
-    return configService?.listAccounts() || []
-  })
-
-  ipcMain.handle('accounts:getActive', async () => {
-    return configService?.getActiveAccount() || null
-  })
-
-  ipcMain.handle('accounts:setActive', async (_, accountId: string) => {
-    return configService?.setActiveAccount(accountId) || null
-  })
-
-  ipcMain.handle('accounts:save', async (_, profile: any) => {
-    return configService?.saveAccount(profile) || null
-  })
-
-  ipcMain.handle('accounts:update', async (_, accountId: string, patch: any) => {
-    return configService?.updateAccount(accountId, patch) || null
-  })
-
-  ipcMain.handle('accounts:delete', async (_, accountId: string, deleteLocalData = false) => {
-    if (!configService) {
-      return { success: false, error: '配置服务未初始化' }
-    }
-
-    const deleted = configService.listAccounts().find((item) => item.id === accountId) || null
-    if (!deleted) {
-      return { success: false, error: '账号不存在' }
-    }
-
-    if (deleteLocalData) {
-      const cacheService = new (await import('./services/cacheService')).CacheService(configService)
-      const clearResult = await cacheService.clearAccountDatabases(deleted)
-      if (!clearResult.success) {
-        return { success: false, error: clearResult.error || '删除账号本地数据失败' }
-      }
-    }
-
-    const result = configService.deleteAccount(accountId)
-    return { success: true, deleted: result.deleted, nextActiveAccountId: result.nextActiveAccountId }
-  })
-
-  // ── Skill Manager ──
-  ipcMain.handle('skillManager:list', async () => {
-    return skillManagerService.listSkills()
-  })
-  ipcMain.handle('skillManager:readContent', async (_, skillName: string) => {
-    return skillManagerService.readSkillContent(skillName)
-  })
-  ipcMain.handle('skillManager:updateContent', async (_, skillName: string, content: string) => {
-    return skillManagerService.updateSkillContent(skillName, content)
-  })
-  ipcMain.handle('skillManager:exportZip', async (_, skillName: string) => {
-    return skillManagerService.exportSkillZip(skillName)
-  })
-  ipcMain.handle('skillManager:importZip', async (_, zipPath: string) => {
-    return skillManagerService.importSkillZip(zipPath)
-  })
-  ipcMain.handle('skillManager:delete', async (_, skillName: string) => {
-    return skillManagerService.deleteSkill(skillName)
-  })
-  ipcMain.handle('skillManager:create', async (_, skillName: string, content: string) => {
-    return skillManagerService.createSkill(skillName, content)
-  })
-
-  // ── MCP Client ──
-  ipcMain.handle('mcpClient:listConfigs', async () => {
-    return mcpClientService.listClientConfigs()
-  })
-  ipcMain.handle('mcpClient:saveConfig', async (_, name: string, config: any, overwrite?: boolean) => {
-    return mcpClientService.saveClientConfig(name, config, Boolean(overwrite))
-  })
-  ipcMain.handle('mcpClient:deleteConfig', async (_, name: string) => {
-    return mcpClientService.deleteClientConfig(name)
-  })
-  ipcMain.handle('mcpClient:connect', async (_, name: string) => {
-    return mcpClientService.connectToServer(name)
-  })
-  ipcMain.handle('mcpClient:disconnect', async (_, name: string) => {
-    return mcpClientService.disconnectFromServer(name)
-  })
-  ipcMain.handle('mcpClient:listTools', async (_, name: string) => {
-    return mcpClientService.listToolsFromServer(name)
-  })
-  ipcMain.handle('mcpClient:callTool', async (_, name: string, toolName: string, args: any) => {
-    return mcpClientService.callTool(name, toolName, args)
-  })
-  ipcMain.handle('mcpClient:listStatuses', async () => {
-    return mcpClientService.listAllServerStatuses()
-  })
-
-  // HTTP API 管理
-  ipcMain.handle('httpApi:getStatus', async () => {
-    return { success: true, status: httpApiService.getUiStatus() }
-  })
-
-  ipcMain.handle('httpApi:applySettings', async (_, payload: { enabled: boolean; port: number; token: string; listenMode: 'localhost' | 'lan' }) => {
-    try {
-      const enabled = Boolean(payload?.enabled)
-      const portRaw = Number(payload?.port)
-      const port = Number.isFinite(portRaw) ? Math.max(1, Math.min(65535, Math.floor(portRaw))) : 5031
-      const token = (payload?.token || '').trim()
-      const listenMode = payload?.listenMode === 'lan' ? 'lan' : 'localhost'
-
-      if (listenMode === 'lan' && !token) {
-        return { success: false, error: '局域网模式必须先配置访问密钥' }
-      }
-
-      configService?.set('httpApiEnabled', enabled)
-      configService?.set('httpApiPort', port)
-      configService?.set('httpApiToken', token)
-      configService?.set('httpApiListenMode', listenMode)
-
-      httpApiService.applySettings({ enabled, port, token, listenMode })
-      const restartResult = await httpApiService.restart()
-      if (!restartResult.success) {
-        return { success: false, error: restartResult.error || 'HTTP API 重启失败' }
-      }
-
-      return { success: true, status: httpApiService.getUiStatus() }
-    } catch (e) {
-      return { success: false, error: String(e) }
-    }
-  })
-
-  ipcMain.handle('httpApi:restart', async () => {
-    const result = await httpApiService.restart()
-    if (!result.success) {
-      return { success: false, error: result.error || 'HTTP API 重启失败' }
-    }
-    return { success: true, status: httpApiService.getUiStatus() }
-  })
-
-  // 数据库相关
-  ipcMain.handle('db:open', async (_, dbPath: string) => {
-    return dbService?.open(dbPath)
-  })
-
-  ipcMain.handle('db:query', async (_, sql: string, params?: any[]) => {
-    return dbService?.query(sql, params)
-  })
-
-  ipcMain.handle('db:close', async () => {
-    return dbService?.close()
-  })
-
-  // 解密相关
-  ipcMain.handle('decrypt:database', async (_, sourcePath: string, key: string, outputPath: string) => {
-    return wechatDecryptService.decryptDatabase(sourcePath, outputPath, key)
-  })
-
-  ipcMain.handle('decrypt:image', async (_, imagePath: string) => {
-    return null
-  })
-
-  // ... (其他 IPC)
-
   // 监听增量消息推送
   chatService.on('new-messages', (data) => {
     BrowserWindow.getAllWindows().forEach(win => {
@@ -1739,145 +422,6 @@ function registerIpcHandlers() {
         win.webContents.send('chat:new-messages', data)
       }
     })
-  })
-
-  // 文件对话框
-  ipcMain.handle('dialog:openFile', async (_, options) => {
-    const { dialog } = await import('electron')
-    return dialog.showOpenDialog(options)
-  })
-
-  ipcMain.handle('dialog:saveFile', async (_, options) => {
-    const { dialog } = await import('electron')
-    return dialog.showSaveDialog(options)
-  })
-
-  // 文件操作
-  ipcMain.handle('file:delete', async (_, filePath: string) => {
-    try {
-      const fs = await import('fs')
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath)
-        return { success: true }
-      } else {
-        return { success: false, error: '文件不存在' }
-      }
-    } catch (error: any) {
-      return { success: false, error: error.message }
-    }
-  })
-
-  ipcMain.handle('file:copy', async (_, sourcePath: string, destPath: string) => {
-    try {
-      const fs = await import('fs')
-      if (!fs.existsSync(sourcePath)) {
-        return { success: false, error: '源文件不存在' }
-      }
-      fs.copyFileSync(sourcePath, destPath)
-      return { success: true }
-    } catch (error: any) {
-      return { success: false, error: error.message }
-    }
-  })
-
-  ipcMain.handle('file:writeBase64', async (_, filePath: string, base64Data: string) => {
-    try {
-      const fs = await import('fs')
-      fs.writeFileSync(filePath, Buffer.from(base64Data, 'base64'))
-      return { success: true }
-    } catch (error: any) {
-      return { success: false, error: error.message }
-    }
-  })
-
-  ipcMain.handle('shell:openPath', async (_, path: string) => {
-    const { shell } = await import('electron')
-    return shell.openPath(path)
-  })
-
-  ipcMain.handle('shell:openExternal', async (_, url: string) => {
-    const { shell } = await import('electron')
-    return shell.openExternal(url)
-  })
-
-  ipcMain.handle('shell:showItemInFolder', async (_, fullPath: string) => {
-    const { shell } = await import('electron')
-    return shell.showItemInFolder(fullPath)
-  })
-
-  ipcMain.handle('app:getDownloadsPath', async () => {
-    return app.getPath('downloads')
-  })
-
-  ipcMain.handle('app:getVersion', async () => {
-    return app.getVersion()
-  })
-
-  ipcMain.handle('app:getPlatformInfo', async () => {
-    return getRuntimePlatformInfo()
-  })
-
-  ipcMain.handle('app:getMcpLaunchConfig', async () => {
-    return getMcpLaunchConfigForUi()
-  })
-
-  ipcMain.on('app:getMcpLaunchConfig:request', (event, payload: { requestId?: string } | undefined) => {
-    const requestId = payload?.requestId
-    if (!requestId) return
-    event.sender.send(`app:getMcpLaunchConfig:response:${requestId}`, getMcpLaunchConfigForUi())
-  })
-
-  ipcMain.handle('app:checkForUpdates', async () => {
-    return appUpdateService.checkForUpdates()
-  })
-
-  ipcMain.handle('app:getUpdateState', async () => {
-    return appUpdateService.getCachedUpdateInfo()
-  })
-
-  ipcMain.handle('app:getUpdateSourceInfo', async () => {
-    return {
-      primaryUpdateSource: 'github' as const,
-      githubRepository: appUpdateService.getGithubRepository(),
-      policySources: ['github', 'custom'] as const,
-      policyPrecedence: 'github' as const,
-      forceUpdatePolicyFallbackUrl: appUpdateService.getForceUpdatePolicyFallbackUrl()
-    }
-  })
-
-  ipcMain.handle('app:setAppIcon', async (_, iconName: string) => {
-    try {
-      const iconPath = process.platform === 'darwin' ? getDockIconPath() : getAppIconPath()
-
-      if (existsSync(iconPath)) {
-        const image = nativeImage.createFromPath(iconPath)
-
-        if (process.platform === 'darwin') {
-          if (!image.isEmpty()) {
-            app.dock?.setIcon(image)
-          }
-        } else {
-          BrowserWindow.getAllWindows().forEach(win => {
-            win.setIcon(image)
-          })
-        }
-
-        // 尝试更新桌面快捷方式图标 (不阻塞主线程)
-        shortcutService.updateDesktopShortcutIcon(iconPath).catch(err => {
-          console.error('更新快捷方式失败:', err)
-        })
-
-        if (tray) {
-          tray.setImage(getTrayImage())
-        }
-
-        return { success: true }
-      }
-      return { success: false, error: 'Icon not found' }
-    } catch (e) {
-      console.error('设置图标失败:', e)
-      return { success: false, error: String(e) }
-    }
   })
 
   ipcMain.handle('app:downloadAndInstall', async (event) => {
@@ -1973,150 +517,8 @@ function registerIpcHandlers() {
     }
   })
 
-  // 窗口控制
-  ipcMain.on('window:splashReady', () => {
-    splashReady = true
-  })
-
-  // 查询启动时是否已经成功连接数据库（一次性查询，查询后重置）  // 注册获取启动时数据库连接状态的处理器
-  ipcMain.handle('app:getStartupDbConnected', () => {
-    const connected = startupDbConnected
-    // 重置标志，防止后续重复查询
-    startupDbConnected = false
-    return connected
-  })
-
-  ipcMain.on('window:minimize', (event) => {
-    BrowserWindow.fromWebContents(event.sender)?.minimize()
-  })
-
-  ipcMain.on('window:maximize', (event) => {
-    const win = BrowserWindow.fromWebContents(event.sender)
-    if (win?.isMaximized()) {
-      win.unmaximize()
-    } else {
-      win?.maximize()
-    }
-  })
-
-  ipcMain.on('window:close', (event) => {
-    BrowserWindow.fromWebContents(event.sender)?.close()
-  })
-
-  // 打开图片查看窗口
-  ipcMain.handle(
-    'window:openImageViewerWindow',
-    (
-      _,
-      imagePath: string,
-      liveVideoPath?: string,
-      imageList?: ImageViewerListItem[],
-      options?: ImageViewerOpenOptions
-    ) => {
-      const win = createImageViewerWindow(imagePath, liveVideoPath, options)
-      if (imageList && imageList.length > 1) {
-        const currentIndex = imageList.findIndex(item => item.imagePath === imagePath)
-        win.webContents.once('did-finish-load', () => {
-          if (!win.isDestroyed()) {
-            win.webContents.send('imageViewer:setImageList', {
-              imageList,
-              currentIndex: currentIndex >= 0 ? currentIndex : 0
-            })
-          }
-        })
-      }
-    }
-  )
-
-  // 打开视频播放窗口
-  ipcMain.handle('window:openVideoPlayerWindow', (_, videoPath: string, videoWidth?: number, videoHeight?: number) => {
-    createVideoPlayerWindow(videoPath, videoWidth, videoHeight)
-  })
-
-  // 根据视频尺寸调整窗口大小
-  ipcMain.handle('window:resizeToFitVideo', (event, videoWidth: number, videoHeight: number) => {
-    const win = BrowserWindow.fromWebContents(event.sender)
-    if (!win || !videoWidth || !videoHeight) return
-
-    const { screen } = require('electron')
-    const primaryDisplay = screen.getPrimaryDisplay()
-    const { width: screenWidth, height: screenHeight } = primaryDisplay.workAreaSize
-
-    // 只有标题栏 40px，控制栏悬浮在视频上
-    const titleBarHeight = 40
-    const aspectRatio = videoWidth / videoHeight
-
-    const maxWidth = Math.floor(screenWidth * 0.85)
-    const maxHeight = Math.floor(screenHeight * 0.85)
-
-    let winWidth: number
-    let winHeight: number
-
-    if (aspectRatio >= 1) {
-      // 横向视频 - 以宽度为基准
-      winWidth = Math.min(videoWidth, maxWidth)
-      winHeight = Math.floor(winWidth / aspectRatio) + titleBarHeight
-
-      if (winHeight > maxHeight) {
-        winHeight = maxHeight
-        winWidth = Math.floor((winHeight - titleBarHeight) * aspectRatio)
-      }
-    } else {
-      // 竖向视频 - 以高度为基准
-      const videoDisplayHeight = Math.min(videoHeight, maxHeight - titleBarHeight)
-      winHeight = videoDisplayHeight + titleBarHeight
-      winWidth = Math.floor(videoDisplayHeight * aspectRatio)
-
-      // 确保宽度不会太窄
-      if (winWidth < 300) {
-        winWidth = 300
-        winHeight = Math.floor(winWidth / aspectRatio) + titleBarHeight
-      }
-    }
-
-    // 调整窗口大小并居中
-    win.setSize(winWidth, winHeight)
-    win.center()
-  })
-
-
-
-  // 打开内置浏览器窗口
-  ipcMain.handle('window:openBrowserWindow', (_, url: string, title?: string) => {
-    createBrowserWindow(url, title)
-  })
-
-  // 打开 AI 摘要窗口
-  ipcMain.handle('window:openAISummaryWindow', (_, sessionId: string, sessionName: string) => {
-    createAISummaryWindow(sessionId, sessionName)
-    return true
-  })
-
-  // 打开聊天记录窗口
-  ipcMain.handle('window:openChatHistoryWindow', (_, sessionId: string, messageId: number) => {
-    createChatHistoryWindow(sessionId, messageId)
-    return true
-  })
-
-  // 获取单条消息
   ipcMain.handle('chat:getMessage', async (_, sessionId: string, localId: number) => {
     return chatService.getMessageByLocalId(sessionId, localId)
-  })
-
-  // 更新窗口控件主题色
-  ipcMain.on('window:setTitleBarOverlay', (event, options: { symbolColor: string }) => {
-    const win = BrowserWindow.fromWebContents(event.sender)
-    if (win) {
-      try {
-        win.setTitleBarOverlay({
-          color: '#00000000',
-          symbolColor: options.symbolColor,
-          height: 40
-        })
-      } catch (e) {
-        // 忽略错误 - 某些窗口（如启动屏）没有启用 titleBarOverlay
-      }
-    }
   })
 
   ipcMain.handle('systemAuth:getStatus', async () => {
@@ -3261,66 +1663,6 @@ function registerIpcHandlers() {
     return groupAnalyticsService.getGroupMediaStats(chatroomId, startTime, endTime)
   })
 
-  // 打开独立聊天窗口
-  ipcMain.handle('window:openChatWindow', async () => {
-    createChatWindow()
-    return true
-  })
-
-  // 打开朋友圈窗口
-  ipcMain.handle('window:openMomentsWindow', async (_event, filterUsername?: string) => {
-    createMomentsWindow(filterUsername)
-    return true
-  })
-
-  // 打开群聊分析窗口
-  ipcMain.handle('window:openGroupAnalyticsWindow', async () => {
-    createGroupAnalyticsWindow()
-    return true
-  })
-
-  // 打开年度报告窗口
-  ipcMain.handle('window:openAnnualReportWindow', async (_, year: number) => {
-    createAnnualReportWindow(year)
-    return true
-  })
-
-  // 打开协议窗口
-  ipcMain.handle('window:openAgreementWindow', async () => {
-    createAgreementWindow()
-    return true
-  })
-
-  // 打开购买窗口
-  ipcMain.handle('window:openPurchaseWindow', async () => {
-    createPurchaseWindow()
-    return true
-  })
-
-  // 打开引导窗口
-  ipcMain.handle('window:openWelcomeWindow', async (_, mode?: 'default' | 'add-account') => {
-    createWelcomeWindow(mode || 'default')
-    return true
-  })
-
-  // 完成引导（关闭引导窗口，显示主窗口）
-  ipcMain.handle('window:completeWelcome', async () => {
-    if (welcomeWindow && !welcomeWindow.isDestroyed()) {
-      welcomeWindow.close()
-    }
-
-    // 如果主窗口还不存在，创建它
-    if (!mainWindow || mainWindow.isDestroyed()) {
-      mainWindow = createWindow()
-    } else {
-      // 如果主窗口已存在，显示并聚焦
-      mainWindow.show()
-      mainWindow.focus()
-    }
-
-    return true
-  })
-
   // 年度报告相关
   ipcMain.handle('annualReport:getAvailableYears', async () => {
     return annualReportService.getAvailableYears()
@@ -3328,68 +1670,6 @@ function registerIpcHandlers() {
 
   ipcMain.handle('annualReport:generateReport', async (_, year: number) => {
     return annualReportService.generateReport(year)
-  })
-
-  // 检查聊天窗口是否打开
-  ipcMain.handle('window:isChatWindowOpen', async () => {
-    return chatWindow !== null && !chatWindow.isDestroyed()
-  })
-
-  // 关闭聊天窗口
-  ipcMain.handle('window:closeChatWindow', async () => {
-    if (chatWindow && !chatWindow.isDestroyed()) {
-      chatWindow.close()
-      chatWindow = null
-    }
-    return true
-  })
-
-  // 调整窗口大小以适应内容
-  ipcMain.handle('window:resizeContent', async (event, width: number, height: number) => {
-    const win = BrowserWindow.fromWebContents(event.sender)
-    if (win) {
-      // 获取当前屏幕的工作区大小
-      const { screen } = require('electron')
-      // 获取窗口所在的屏幕
-      const currentScreen = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
-      const workArea = currentScreen.workAreaSize
-
-      // 限制窗口大小不超过屏幕的 85%
-      const maxWidth = Math.floor(workArea.width * 0.85)
-      const maxHeight = Math.floor(workArea.height * 0.85)
-
-      let targetWidth = width
-      let targetHeight = height
-
-      // 保持宽高比进行缩放
-      if (targetWidth > maxWidth || targetHeight > maxHeight) {
-        const ratio = Math.min(maxWidth / targetWidth, maxHeight / targetHeight)
-        targetWidth = Math.floor(targetWidth * ratio)
-        targetHeight = Math.floor(targetHeight * ratio)
-      }
-
-      // 确保最小尺寸
-      const finalWidth = Math.max(targetWidth, 400)
-      const finalHeight = Math.max(targetHeight, 300)
-
-      win.setSize(finalWidth, finalHeight)
-      win.center() // 居中显示
-    }
-    return true
-  })
-
-  // 接收渲染进程的拖动指令
-  ipcMain.on('window:move', (event, { x, y }) => {
-    const win = BrowserWindow.fromWebContents(event.sender)
-    if (win && !win.isDestroyed()) {
-      const bounds = win.getBounds()
-      win.setBounds({
-        x: bounds.x + x,
-        y: bounds.y + y,
-        width: bounds.width,
-        height: bounds.height
-      })
-    }
   })
 
   // 激活相关
@@ -4830,96 +3110,6 @@ function registerIpcHandlers() {
   })
 }
 
-// 主窗口引用
-let mainWindow: BrowserWindow | null = null
-// 启动屏窗口引用
-let splashWindow: BrowserWindow | null = null
-// 启动屏就绪状态
-let splashReady = false
-// 启动时是否已成功连接数据库（用于通知主窗口跳过重复连接）
-let startupDbConnected = false
-
-/**
- * 创建启动屏窗口
- */
-function createSplashWindow(): BrowserWindow {
-  const splash = new BrowserWindow({
-    width: 420,
-    height: 320,
-    ...getWindowIconOptions(),
-    frame: false,
-    transparent: true, // 启用透明，让 CSS 圆角生效
-    alwaysOnTop: true,
-    resizable: false,
-    skipTaskbar: true, // 不显示在任务栏
-    hasShadow: false, // Windows 上透明窗口需要禁用阴影
-    show: true, // 直接显示窗口
-    webPreferences: {
-      preload: join(__dirname, 'preload.js'),
-      devTools: allowDevTools,
-      contextIsolation: true,
-      nodeIntegration: false,
-      webSecurity: false  // 允许加载本地文件
-    },
-    backgroundColor: '#00000000' // 完全透明的背景色
-  })
-
-  splash.center()
-
-  // 加载启动屏页面
-  const splashUrl = process.env.VITE_DEV_SERVER_URL
-    ? `${process.env.VITE_DEV_SERVER_URL}#/splash`
-    : null
-
-  // 监听页面加载完成
-  splash.webContents.on('did-finish-load', () => {
-    // 启动屏页面加载完成
-  })
-
-  splash.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
-    // 启动屏页面加载失败
-  })
-
-  // 加载页面（服务器已在 checkAndConnectOnStartup 中确保就绪）
-  if (process.env.VITE_DEV_SERVER_URL) {
-    splash.loadURL(splashUrl!).then(() => {
-      // 启动屏页面加载成功
-    }).catch(err => {
-      // loadURL 错误
-    })
-  } else {
-    splash.loadFile(join(__dirname, '../dist/index.html'), {
-      hash: '/splash'
-    }).catch(err => {
-      // loadFile 错误
-    })
-  }
-
-  return splash
-}
-
-/**
- * 优雅地关闭启动屏（带动画效果）
- */
-async function closeSplashWindow(): Promise<void> {
-  if (!splashWindow || splashWindow.isDestroyed()) {
-    splashWindow = null
-    return
-  }
-
-  // 通知渲染进程播放淡出动画
-  splashWindow.webContents.send('splash:fadeOut')
-
-  // 等待动画完成（300ms）
-  await new Promise(resolve => setTimeout(resolve, 350))
-
-  // 关闭窗口
-  if (splashWindow && !splashWindow.isDestroyed()) {
-    splashWindow.close()
-    splashWindow = null
-  }
-}
-
 /**
  * 检查是否需要显示启动屏并连接数据库
  */
@@ -4937,7 +3127,7 @@ async function checkAndConnectOnStartup(): Promise<boolean> {
   // 如果配置不完整，打开引导窗口而不是主窗口
   if (!wxid || !dbPath || !decryptKey) {
     // 创建引导窗口
-    createWelcomeWindow()
+    ctx.getWindowManager().openWelcomeWindow()
     return false
   }
 
@@ -4967,7 +3157,7 @@ async function checkAndConnectOnStartup(): Promise<boolean> {
       // 服务器未就绪，跳过启动屏，直接连接数据库
       try {
         const result = await chatService.connect()
-        startupDbConnected = result.success
+        ctx.setStartupDbConnected(result.success)
         return result.success
       } catch (e) {
         return false
@@ -4977,26 +3167,26 @@ async function checkAndConnectOnStartup(): Promise<boolean> {
   }
 
   // 生产环境：配置完整，显示启动屏
-  splashWindow = createSplashWindow()
-  splashReady = false
+  ctx.getWindowManager().createSplashWindow()
+  ctx.setSplashReady(false)
 
   // 创建连接 Promise，等待启动屏加载完成后再执行
   return new Promise<boolean>(async (resolve) => {
     // 等待启动屏加载完成（通过 IPC 通知）
     const checkReady = setInterval(() => {
-      if (splashReady) {
+      if (ctx.getSplashReady()) {
         clearInterval(checkReady)
         // 启动屏已加载完成，开始连接数据库
         chatService.connect().then(async (result) => {
           // 优雅地关闭启动屏（带动画）
-          await closeSplashWindow()
+          await ctx.getWindowManager().closeSplashWindow()
           // 记录启动时连接状态
-          startupDbConnected = result.success
+          ctx.setStartupDbConnected(result.success)
           resolve(result.success)
         }).catch(async (e) => {
           console.error('启动时连接数据库失败:', e)
           // 优雅地关闭启动屏
-          await closeSplashWindow()
+          await ctx.getWindowManager().closeSplashWindow()
           resolve(false)
         })
       }
@@ -5005,10 +3195,11 @@ async function checkAndConnectOnStartup(): Promise<boolean> {
     // 超时保护：30秒后强制关闭启动屏（开发环境可能需要更长时间）
     setTimeout(async () => {
       clearInterval(checkReady)
-      if (splashWindow && !splashWindow.isDestroyed()) {
-        await closeSplashWindow()
+      const currentSplashWindow = ctx.getSplashWindow()
+      if (currentSplashWindow && !currentSplashWindow.isDestroyed()) {
+        await ctx.getWindowManager().closeSplashWindow()
       }
-      if (!splashReady) {
+      if (!ctx.getSplashReady()) {
         resolve(false)
       }
     }, 30000)
@@ -5056,15 +3247,7 @@ app.whenReady().then(async () => {
     configService = new ConfigService()
   }
 
-  if (process.platform === 'darwin') {
-    const dockIconPath = getDockIconPath()
-    if (existsSync(dockIconPath)) {
-      const dockIcon = nativeImage.createFromPath(dockIconPath)
-      if (!dockIcon.isEmpty()) {
-        app.dock?.setIcon(dockIcon)
-      }
-    }
-  }
+  ctx.getWindowManager().setDockIcon()
 
   if (!configService.get('mcpProxyToken')) {
     configService.set('mcpProxyToken', randomBytes(24).toString('hex'))
@@ -5080,6 +3263,7 @@ app.whenReady().then(async () => {
     return net.fetch(`file:///${filePath}`)
   })
 
+  registerModularIpcHandlers(ctx)
   registerIpcHandlers()
 
   // 监听增量更新事件
@@ -5184,10 +3368,10 @@ app.whenReady().then(async () => {
   // 如果配置不完整，checkAndConnectOnStartup 会创建引导窗口
   if (shouldShowSplash !== false || configService?.get('myWxid')) {
     // 创建主窗口（但不立即显示）
-    mainWindow = createWindow()
+    ctx.getWindowManager().createMainWindow()
     
     // 创建系统托盘
-    createTray()
+    ctx.getWindowManager().createTray()
   }
 
   // 如果显示了启动屏，主窗口会在启动屏关闭后自动显示（通过 ready-to-show 事件）
@@ -5198,8 +3382,8 @@ app.whenReady().then(async () => {
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      mainWindow = createWindow()
-      createTray()
+      ctx.getWindowManager().createMainWindow()
+      ctx.getWindowManager().createTray()
     }
   })
 })
@@ -5231,8 +3415,5 @@ app.on('before-quit', () => {
   configService?.close()
   
   // 销毁托盘
-  if (tray) {
-    tray.destroy()
-    tray = null
-  }
+  ctx.getWindowManager().destroyTray()
 })
