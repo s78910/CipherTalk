@@ -125,6 +125,23 @@ export class ImageDecryptService {
       }
     }
 
+    const datCached = await this.resolveCachedOutputByDatPathHint(payload, cacheKey)
+    if (datCached) {
+      const { existing, key } = datCached
+      this.cacheResolvedPaths(key, payload.imageMd5, payload.imageDatName, existing)
+      const localPath = this.filePathToUrl(existing)
+      const isThumb = this.isThumbnailPath(existing)
+      const hasUpdate = isThumb ? (this.updateFlags.get(key) ?? false) : false
+      if (isThumb) {
+        this.triggerUpdateCheck(payload, key, existing)
+      } else {
+        this.updateFlags.delete(key)
+      }
+      const liveVideoPath = isThumb ? undefined : this.checkLiveVideoCache(existing)
+      this.emitCacheResolved(payload, key, localPath)
+      return { success: true, localPath, hasUpdate, liveVideoPath }
+    }
+
     // 3. 后台启动完整索引（不阻塞当前请求）
     if (!this.cacheIndexed && !this.cacheIndexing) {
       void this.ensureCacheIndexed()
@@ -183,6 +200,36 @@ export class ImageDecryptService {
     } finally {
       this.pending.delete(cacheKey)
     }
+  }
+
+  private async resolveCachedOutputByDatPathHint(
+    payload: ImageLookupPayload,
+    cacheKey: string
+  ): Promise<{ existing: string; key: string } | null> {
+    const wxid = this.configService.get('myWxid')
+    const dbPath = this.configService.get('dbPath')
+    if (!wxid || !dbPath) return null
+
+    const accountDir = this.resolveAccountDir(dbPath, wxid)
+    if (!accountDir) return null
+
+    const diagnostics: ResolveDatDiagnostics = {}
+    const datPath = await this.resolveDatPath(
+      accountDir,
+      payload.imageMd5,
+      payload.imageDatName,
+      payload.sessionId,
+      payload.createTime,
+      { allowThumbnail: true, skipSearchFallback: true },
+      diagnostics
+    )
+    if (!datPath) return null
+
+    const existing = this.findCachedOutputByDatPath(datPath, payload.sessionId, false)
+    if (!existing) return null
+
+    const key = payload.imageDatName || basename(datPath) || cacheKey
+    return { existing, key }
   }
 
   private async decryptImageInternal(
@@ -760,11 +807,12 @@ export class ImageDecryptService {
     imageDatName?: string,
     sessionId?: string,
     createTime?: number,
-    options?: { allowThumbnail?: boolean; skipResolvedCache?: boolean },
+    options?: { allowThumbnail?: boolean; skipResolvedCache?: boolean; skipSearchFallback?: boolean },
     diagnostics?: ResolveDatDiagnostics
   ): Promise<string | null> {
     const allowThumbnail = options?.allowThumbnail ?? true
     const skipResolvedCache = options?.skipResolvedCache ?? false
+    const skipSearchFallback = options?.skipSearchFallback ?? false
 
     // 优先通过 hardlink.db 查询
     if (imageMd5) {
@@ -946,24 +994,26 @@ export class ImageDecryptService {
       }
     }
 
-    // 只有在 hardlink 完全没有记录时才搜索文件夹
-    const datPath = await this.searchDatFile(accountDir, imageDatName, allowThumbnail)
-    if (datPath) {
-      diagnostics && (diagnostics.source = 'search')
-      this.cacheSessionDatRoot(accountDir, sessionId, datPath)
-      this.resolvedCache.set(imageDatName, datPath)
-      this.cacheDatPath(accountDir, imageDatName, datPath)
-      return datPath
-    }
-    const normalized = this.normalizeDatBase(imageDatName)
-    if (normalized !== imageDatName.toLowerCase()) {
-      const normalizedPath = await this.searchDatFile(accountDir, normalized, allowThumbnail)
-      if (normalizedPath) {
-        diagnostics && (diagnostics.source = 'search_normalized')
-        this.cacheSessionDatRoot(accountDir, sessionId, normalizedPath)
-        this.resolvedCache.set(imageDatName, normalizedPath)
-        this.cacheDatPath(accountDir, imageDatName, normalizedPath)
-        return normalizedPath
+    if (!skipSearchFallback) {
+      // 只有在 hardlink 完全没有记录时才搜索文件夹
+      const datPath = await this.searchDatFile(accountDir, imageDatName, allowThumbnail, false, createTime)
+      if (datPath) {
+        diagnostics && (diagnostics.source = 'search')
+        this.cacheSessionDatRoot(accountDir, sessionId, datPath)
+        this.resolvedCache.set(imageDatName, datPath)
+        this.cacheDatPath(accountDir, imageDatName, datPath)
+        return datPath
+      }
+      const normalized = this.normalizeDatBase(imageDatName)
+      if (normalized !== imageDatName.toLowerCase()) {
+        const normalizedPath = await this.searchDatFile(accountDir, normalized, allowThumbnail, false, createTime)
+        if (normalizedPath) {
+          diagnostics && (diagnostics.source = 'search_normalized')
+          this.cacheSessionDatRoot(accountDir, sessionId, normalizedPath)
+          this.resolvedCache.set(imageDatName, normalizedPath)
+          this.cacheDatPath(accountDir, imageDatName, normalizedPath)
+          return normalizedPath
+        }
       }
     }
     return null
@@ -1208,7 +1258,8 @@ export class ImageDecryptService {
     accountDir: string,
     datName: string,
     allowThumbnail = true,
-    thumbOnly = false
+    thumbOnly = false,
+    createTime?: number
   ): Promise<string | null> {
     const key = `${accountDir}|${datName}`
     const cached = this.resolvedCache.get(key)
@@ -1222,7 +1273,7 @@ export class ImageDecryptService {
     // 优化1：快速概率性查找
     // 包含：1. 基于文件名的前缀猜测 (旧版)
     //       2. 基于日期的最近月份扫描 (新版无索引时)
-    const fastHit = await this.fastProbabilisticSearch(root, datName)
+    const fastHit = await this.fastProbabilisticSearch(root, datName, createTime)
     if (fastHit) {
       this.resolvedCache.set(key, fastHit)
       return fastHit
@@ -1242,7 +1293,7 @@ export class ImageDecryptService {
    * 包含：1. 微信旧版结构 filename.substr(0, 2)/...
    *       2. 微信新版结构 msg/attach/{hash}/{YYYY-MM}/Img/filename
    */
-  private async fastProbabilisticSearch(root: string, datName: string): Promise<string | null> {
+  private async fastProbabilisticSearch(root: string, datName: string, createTime?: number): Promise<string | null> {
     const { promises: fs } = require('fs')
     const { join } = require('path')
 
@@ -1284,13 +1335,7 @@ export class ImageDecryptService {
 
         if (sessionDirs.length === 0) return null
 
-        const now = new Date()
-        const months: string[] = []
-        for (let i = 0; i < 2; i++) {
-          const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
-          const mStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-          months.push(mStr)
-        }
+        const months = this.buildDatSearchMonthHints(createTime)
 
         const targetNames = [datName]
         if (baseName !== lowerName) {
@@ -1657,6 +1702,23 @@ export class ImageDecryptService {
 
     const now = new Date()
     for (let i = 0; i < 3; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
+      add(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`)
+    }
+
+    return months
+  }
+
+  private buildDatSearchMonthHints(createTime?: number): string[] {
+    const months: string[] = []
+    const add = (month: string) => {
+      if (month && !months.includes(month)) months.push(month)
+    }
+
+    add(this.resolveYearMonthFromCreateTime(createTime))
+
+    const now = new Date()
+    for (let i = 0; i < 2; i++) {
       const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
       add(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`)
     }

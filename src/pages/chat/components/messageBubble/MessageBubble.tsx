@@ -112,6 +112,23 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat, h
     }) + ' ' + date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
   }
 
+  const detectImageMimeFromBase64 = useCallback((base64: string): string => {
+    try {
+      const head = window.atob(base64.slice(0, 48))
+      const bytes = new Uint8Array(head.length)
+      for (let i = 0; i < head.length; i++) {
+        bytes[i] = head.charCodeAt(i)
+      }
+      if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) return 'image/png'
+      if (bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) return 'image/jpeg'
+      if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) return 'image/gif'
+      if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) {
+        return 'image/webp'
+      }
+    } catch { }
+    return 'image/jpeg'
+  }, [])
+
   // 获取头像首字母
   const getAvatarLetter = (name: string): string => {
     if (!name) return '?'
@@ -173,15 +190,7 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat, h
           force: forceUpdate
         })
 
-        // 先检查错误情况
-        if (!result.success) {
-
-          setImageError(true)
-          return
-        }
-
-        // 成功情况
-        if (result.localPath) {
+        if (result.success && result.localPath) {
           imageDataUrlCache.set(imageCacheKey, result.localPath)
           setImageLocalPath(result.localPath)
           if ((result as any).liveVideoPath) setImageLiveVideoPath((result as any).liveVideoPath)
@@ -191,13 +200,34 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat, h
           return (result as any).liveVideoPath as string | undefined
         }
       }
+
+      const fallback = await window.electronAPI.chat.getImageData(session.username, String(message.localId), message.createTime)
+      if (fallback.success && fallback.data) {
+        const dataUrl = `data:${detectImageMimeFromBase64(fallback.data)};base64,${fallback.data}`
+        imageDataUrlCache.set(imageCacheKey, dataUrl)
+        setImageLocalPath(dataUrl)
+        setImageHasUpdate(false)
+        setImageError(false)
+        return
+      }
+
       setImageError(true)
     } catch {
       setImageError(true)
     } finally {
       setImageLoading(false)
     }
-  }, [isImage, imageLoading, message.imageMd5, message.imageDatName, session.username, imageCacheKey])
+  }, [
+    isImage,
+    imageLoading,
+    message.imageMd5,
+    message.imageDatName,
+    message.localId,
+    message.createTime,
+    session.username,
+    imageCacheKey,
+    detectImageMimeFromBase64
+  ])
 
   // 点击图片解密
   const handleImageClick = useCallback(() => {
@@ -208,7 +238,7 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat, h
     imageClickTimerRef.current = window.setTimeout(() => {
       setImageClicked(false)
     }, 800)
-    void requestImageDecrypt()
+    void requestImageDecrypt(true)
   }, [requestImageDecrypt])
 
   // 清理定时器
@@ -671,10 +701,9 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat, h
     }
   }, [isEmoji, message.emojiCdnUrl, message.emojiMd5, message.productId, emojiLocalPath, emojiLoading, emojiError])
 
-  // 自动尝试从缓存解析图片，如果没有缓存则自动解密（仅在可见时触发，5秒超时）
+  // 自动尝试从缓存解析图片，如果没有缓存则自动解密（仅在可见时触发）
   useEffect(() => {
     if (!isImage) return
-    if (!message.imageMd5 && !message.imageDatName) return
     if (!isVisible) return  // 只有可见时才加载
 
     // 如果是新一轮全局同步且之前没成功，允许重试
@@ -688,16 +717,10 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat, h
     imageUpdateCheckedRef.current = imageCacheKey
 
     let cancelled = false
-    let timeoutId: number | null = null
 
     const doDecrypt = async () => {
       if (cancelled) return
       setImageLoading(true)
-
-      // 设置 5 秒超时
-      const timeoutPromise = new Promise<{ timeout: true }>((resolve) => {
-        timeoutId = window.setTimeout(() => resolve({ timeout: true }), 5000)
-      })
 
       const decryptPromise = (async () => {
         if (cancelled) return { cancelled: true }
@@ -735,24 +758,26 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat, h
         } catch {
           // 解密失败
         }
+
+        if (cancelled) return { cancelled: true }
+
+        try {
+          const fallback = await window.electronAPI.chat.getImageData(session.username, String(message.localId), message.createTime)
+          if (cancelled) return { cancelled: true }
+          if (fallback.success && fallback.data) {
+            const dataUrl = `data:${detectImageMimeFromBase64(fallback.data)};base64,${fallback.data}`
+            return { success: true, localPath: dataUrl }
+          }
+        } catch {
+          // 兜底失败
+        }
+
         return { failed: true }
       })()
 
-      const result = await Promise.race([decryptPromise, timeoutPromise])
-
-      if (timeoutId) {
-        window.clearTimeout(timeoutId)
-        timeoutId = null
-      }
+      const result = await decryptPromise
 
       if (cancelled) return
-
-      if ('timeout' in result) {
-        // 超时，显示手动解密按钮
-        setImageError(true)
-        setImageLoading(false)
-        return
-      }
 
       if ('cancelled' in result) return
 
@@ -775,9 +800,20 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat, h
 
     return () => {
       cancelled = true
-      if (timeoutId) window.clearTimeout(timeoutId)
     }
-  }, [isImage, message.imageMd5, message.imageDatName, isVisible, imageCacheKey, imageLocalPath, session.username, syncVersion])
+  }, [
+    isImage,
+    message.imageMd5,
+    message.imageDatName,
+    message.localId,
+    message.createTime,
+    isVisible,
+    imageCacheKey,
+    imageLocalPath,
+    session.username,
+    syncVersion,
+    detectImageMimeFromBase64
+  ])
 
   // 若已显示缩略图且检测到高清图可用，循环尝试升级（防止首轮时机过早）
   useEffect(() => {
@@ -811,7 +847,7 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat, h
 
   const recoverBrokenImagePath = useCallback(async () => {
     if (!isImage) return
-    if ((!message.imageMd5 && !message.imageDatName) || !session.username) return
+    if (!session.username) return
     if (imageRecoveringRef.current) return
 
     const failedPath = imageLocalPath || '__empty__'
@@ -859,6 +895,20 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat, h
         // keep error state
       }
 
+      try {
+        const fallback = await window.electronAPI.chat.getImageData(session.username, String(message.localId), message.createTime)
+        if (fallback.success && fallback.data) {
+          const dataUrl = `data:${detectImageMimeFromBase64(fallback.data)};base64,${fallback.data}`
+          imageDataUrlCache.set(imageCacheKey, dataUrl)
+          setImageLocalPath(dataUrl)
+          setImageHasUpdate(false)
+          setImageError(false)
+          return
+        }
+      } catch {
+        // keep error state
+      }
+
       setImageError(true)
     } finally {
       setImageLoading(false)
@@ -868,10 +918,13 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat, h
     isImage,
     message.imageMd5,
     message.imageDatName,
+    message.localId,
+    message.createTime,
     session.username,
     imageLocalPath,
     imageHasUpdate,
-    imageCacheKey
+    imageCacheKey,
+    detectImageMimeFromBase64
   ])
 
   // 自动检查转写缓存
@@ -1040,7 +1093,7 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat, h
   // 渲染消息内容
   const renderContent = () => {
     // 带引用的消息 (经典模式)
-    if (hasQuote && quoteStyle === 'default') {
+    if (!isImage && hasQuote && quoteStyle === 'default') {
       return (
         <div className="bubble-content">
           <div className="quoted-message" onClick={(quotedImageLocalPath || quotedEmojiLocalPath) ? (e) => { e.stopPropagation(); window.electronAPI.window.openImageViewerWindow((quotedImageLocalPath || quotedEmojiLocalPath)!) } : undefined} style={(quotedImageLocalPath || quotedEmojiLocalPath) ? { cursor: 'pointer' } : undefined}>

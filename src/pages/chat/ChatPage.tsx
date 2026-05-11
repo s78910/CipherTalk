@@ -1673,6 +1673,7 @@ function ChatPage(_props: ChatPageProps) {
           sessionId: session.username,
           imageMd5: images[i].imageMd5,
           imageDatName: images[i].imageDatName,
+          createTime: images[i].createTime,
           force: false
         })
         if (r?.success) success++

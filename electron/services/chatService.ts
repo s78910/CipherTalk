@@ -3,12 +3,14 @@ import * as fs from 'fs'
 import * as path from 'path'
 import * as https from 'https'
 import * as http from 'http'
+import { fileURLToPath } from 'url'
 import * as fzstd from 'fzstd'
 import { ConfigService } from './config'
 import { getAppPath, getDocumentsPath, getExePath, isElectronPackaged } from './runtimePaths'
 import { dbAdapter } from './dbAdapter'
 import { findMessageDbPaths, getDbStoragePath } from './dbStoragePaths'
 import { wcdbService } from './wcdbService'
+import { imageDecryptService } from './imageDecryptService'
 
 export interface ChatSession {
   username: string
@@ -5116,6 +5118,65 @@ class ChatService extends EventEmitter {
     }
 
     return { success: false, error: 'Message not found' }
+  }
+
+  /**
+   * 获取图片数据（base64）。
+   * 与 WeFlow 一致，作为聊天页图片渲染的 localId 兜底通道。
+   */
+  async getImageData(sessionId: string, msgId: string, createTime?: number): Promise<{ success: boolean; data?: string; error?: string }> {
+    try {
+      const localId = parseInt(msgId, 10)
+      if (isNaN(localId)) {
+        return { success: false, error: '无效的消息ID' }
+      }
+
+      const msgResult = await this.getMessageByLocalId(sessionId, localId)
+      if (!msgResult.success || !msgResult.message) {
+        return { success: false, error: '未找到消息' }
+      }
+
+      const msg = msgResult.message
+      if (msg.localType !== 3) {
+        return { success: false, error: '该消息不是图片' }
+      }
+
+      const payload = {
+        sessionId,
+        imageMd5: msg.imageMd5 || undefined,
+        imageDatName: msg.imageDatName || String(msg.localId),
+        createTime: createTime || msg.createTime,
+        force: false
+      }
+
+      let result = await imageDecryptService.resolveCachedImage(payload)
+      if (!result.success || !result.localPath) {
+        result = await imageDecryptService.decryptImage(payload)
+      }
+
+      if (!result.success || !result.localPath) {
+        return { success: false, error: result.error || '图片解密失败' }
+      }
+
+      if (result.localPath.startsWith('data:')) {
+        const base64Data = result.localPath.split(',')[1]
+        return base64Data ? { success: true, data: base64Data } : { success: false, error: '图片数据为空' }
+      }
+
+      const filePath = result.localPath.startsWith('file:')
+        ? fileURLToPath(result.localPath)
+        : result.localPath
+
+      if (!fs.existsSync(filePath)) {
+        return { success: false, error: '图片缓存文件不存在' }
+      }
+
+      const imageData = fs.readFileSync(filePath)
+      return { success: true, data: imageData.toString('base64') }
+    } catch (e) {
+      console.error('ChatService: getImageData 失败:', e)
+      return { success: false, error: String(e) }
+    }
   }
 
   /**

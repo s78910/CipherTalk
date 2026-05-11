@@ -568,6 +568,11 @@ export interface ElectronAPI {
       images?: { imageMd5?: string; imageDatName?: string; createTime?: number }[];
       error?: string
     }>
+    getImageData: (sessionId: string, msgId: string, createTime?: number) => Promise<{
+      success: boolean
+      data?: string
+      error?: string
+    }>
     getContact: (username: string) => Promise<Contact | null>
     getContactAvatar: (username: string) => Promise<{ avatarUrl?: string; displayName?: string } | null>
     resolveTransferDisplayNames: (chatroomId: string, payerUsername: string, receiverUsername: string) => Promise<{ payerName: string; receiverName: string }>

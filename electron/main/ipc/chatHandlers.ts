@@ -139,6 +139,10 @@ export function registerChatHandlers(ctx: MainProcessContext): void {
     return chatService.getAllImageMessages(sessionId)
   })
 
+  ipcMain.handle('chat:getImageData', async (_, sessionId: string, msgId: string, createTime?: number) => {
+    return chatService.getImageData(sessionId, msgId, createTime)
+  })
+
   ipcMain.handle('chat:getContact', async (_, username: string) => {
     return chatService.getContact(username)
   })
