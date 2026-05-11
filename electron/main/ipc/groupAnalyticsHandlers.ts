@@ -27,6 +27,14 @@ export function registerGroupAnalyticsHandlers(ctx: MainProcessContext): void {
     return groupAnalyticsService.getGroupMediaStats(chatroomId, startTime, endTime)
   })
 
+  ipcMain.handle('groupAnalytics:getGroupEvents', async (_, chatroomId: string, startTime?: number, endTime?: number) => {
+    return groupAnalyticsService.getGroupEvents(chatroomId, startTime, endTime)
+  })
+
+  ipcMain.handle('groupAnalytics:getGroupMessageBreakdown', async (_, chatroomId: string, startTime?: number, endTime?: number) => {
+    return groupAnalyticsService.getGroupMessageBreakdown(chatroomId, startTime, endTime)
+  })
+
   // 年度报告相关
 
 }

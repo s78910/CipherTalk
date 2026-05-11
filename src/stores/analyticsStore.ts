@@ -10,10 +10,20 @@ interface ChatStatistics {
   otherMessages: number
   sentMessages: number
   receivedMessages: number
+  unknownMessages?: number
   firstMessageTime: number | null
   lastMessageTime: number | null
   activeDays: number
   messageTypeCounts: Record<number, number>
+  errors?: StatsPartialError[]
+  partialFailureCount?: number
+}
+
+interface StatsPartialError {
+  dbName?: string
+  dbPath?: string
+  tableName?: string
+  message: string
 }
 
 interface ContactRanking {
@@ -23,12 +33,16 @@ interface ContactRanking {
   messageCount: number
   sentCount: number
   receivedCount: number
+  unknownCount?: number
   lastMessageTime: number | null
 }
 
 interface TimeDistribution {
   hourlyDistribution: Record<number, number>
+  weekdayDistribution?: Record<number, number>
   monthlyDistribution: Record<string, number>
+  errors?: StatsPartialError[]
+  partialFailureCount?: number
 }
 
 interface AnalyticsState {

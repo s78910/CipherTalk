@@ -1,6 +1,17 @@
 import { ConfigService } from './config'
 import { dbAdapter } from './dbAdapter'
 import { findMessageDbPaths } from './dbStoragePaths'
+import { resolveContactNames } from './contactNameResolver'
+import {
+  extractExactMessageTableHash,
+  getMessageTableColumns,
+  getMessageTableHash,
+  getMyRowId,
+  hasName2IdTable,
+  listExactMessageTables,
+} from './messageDbScanner'
+import { MAIN_MEDIA_TYPE_NAMES, StatsPartialError, SYSTEM_USERNAME_CONTAINS, SYSTEM_USERNAME_EXACT, SYSTEM_USERNAME_PREFIXES, TEXT_LOCAL_TYPES } from './statsConstants'
+import { buildMessageStatsWhere, normalizeTimeRange, recordStatsError, toLocalDateKey, toLocalMonthKey } from './statsSqlHelpers'
 
 export interface ChatStatistics {
   totalMessages: number
@@ -12,16 +23,21 @@ export interface ChatStatistics {
   otherMessages: number
   sentMessages: number
   receivedMessages: number
+  unknownMessages?: number
   firstMessageTime: number | null
   lastMessageTime: number | null
   activeDays: number
   messageTypeCounts: Record<number, number>
+  errors?: StatsPartialError[]
+  partialFailureCount?: number
 }
 
 export interface TimeDistribution {
   hourlyDistribution: Record<number, number>
   weekdayDistribution: Record<number, number>
   monthlyDistribution: Record<string, number>
+  errors?: StatsPartialError[]
+  partialFailureCount?: number
 }
 
 export interface ContactRanking {
@@ -31,6 +47,7 @@ export interface ContactRanking {
   messageCount: number
   sentCount: number
   receivedCount: number
+  unknownCount?: number
   lastMessageTime: number | null
 }
 
@@ -41,9 +58,6 @@ type TimeRangeFilter = {
 
 class AnalyticsService {
   private configService: ConfigService
-  private myRowIdCache: Map<string, number | null> = new Map()
-  private messageTableCache: Map<string, string[]> = new Map()
-  private hasName2IdCache: Map<string, boolean> = new Map()
 
   constructor() {
     this.configService = new ConfigService()
@@ -62,119 +76,18 @@ class AnalyticsService {
     return trimmed
   }
 
-  private async getMessageTables(dbPath: string): Promise<string[]> {
-    const cached = this.messageTableCache.get(dbPath)
-    if (cached) return cached
-    try {
-      const rows = await dbAdapter.all<{ name: string }>(
-        'message',
-        dbPath,
-        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'Msg_%'"
-      )
-      const result = rows.map(t => t.name)
-      this.messageTableCache.set(dbPath, result)
-      return result
-    } catch {
-      this.messageTableCache.set(dbPath, [])
-      return []
-    }
-  }
-
-  private async hasName2IdTable(dbPath: string): Promise<boolean> {
-    if (this.hasName2IdCache.has(dbPath)) return this.hasName2IdCache.get(dbPath)!
-    try {
-      const row = await dbAdapter.get<any>(
-        'message',
-        dbPath,
-        "SELECT name FROM sqlite_master WHERE type='table' AND name = 'Name2Id'"
-      )
-      const result = !!row
-      this.hasName2IdCache.set(dbPath, result)
-      return result
-    } catch {
-      this.hasName2IdCache.set(dbPath, false)
-      return false
-    }
-  }
-
-  private async getMyRowId(dbPath: string, myWxid: string): Promise<number | null> {
-    const cacheKey = `${dbPath}:${myWxid}`
-    if (this.myRowIdCache.has(cacheKey)) return this.myRowIdCache.get(cacheKey)!
-    try {
-      let row = await dbAdapter.get<any>(
-        'message',
-        dbPath,
-        'SELECT rowid FROM Name2Id WHERE user_name = ?',
-        [myWxid]
-      )
-      if (!row) {
-        const cleanedWxid = this.cleanAccountDirName(myWxid)
-        if (cleanedWxid !== myWxid) {
-          row = await dbAdapter.get<any>(
-            'message',
-            dbPath,
-            'SELECT rowid FROM Name2Id WHERE user_name = ?',
-            [cleanedWxid]
-          )
-        }
-      }
-      const rowId = row?.rowid ?? null
-      this.myRowIdCache.set(cacheKey, rowId)
-      return rowId
-    } catch {
-      this.myRowIdCache.set(cacheKey, null)
-      return null
-    }
-  }
-
-  private toTimestampSeconds(value?: number | null): number | undefined {
-    if (!value || !Number.isFinite(value) || value <= 0) return undefined
-    return value >= 1_000_000_000_000 ? Math.floor(value / 1000) : Math.floor(value)
-  }
-
-  private normalizeTimeRange(startTime?: number, endTime?: number): TimeRangeFilter {
-    const startTimeSec = this.toTimestampSeconds(startTime)
-    const endTimeSec = this.toTimestampSeconds(endTime)
-    if (startTimeSec && endTimeSec && startTimeSec > endTimeSec) {
-      return { startTimeSec: endTimeSec, endTimeSec: startTimeSec }
-    }
-    return { startTimeSec, endTimeSec }
-  }
-
-  private buildTimeWhereClause(range: TimeRangeFilter, columnName: string = 'create_time'): string {
-    const clauses: string[] = []
-    if (range.startTimeSec) clauses.push(`${columnName} >= ${range.startTimeSec}`)
-    if (range.endTimeSec) clauses.push(`${columnName} <= ${range.endTimeSec}`)
-    return clauses.length > 0 ? ` WHERE ${clauses.join(' AND ')}` : ''
-  }
-
-  /**
-   * 判断是否为私聊会话（排除群聊、公众号、系统账号等）
-   */
   private isPrivateSession(username: string, cleanedWxid: string): boolean {
-    if (!username) return false
-    if (username.toLowerCase() === cleanedWxid.toLowerCase()) return false
-    if (username.includes('@chatroom')) return false
-    if (username === 'filehelper') return false
-    if (username.startsWith('gh_')) return false
-    const excludeList = [
-      'weixin', 'qqmail', 'fmessage', 'medianote', 'floatbottle',
-      'newsapp', 'brandsessionholder', 'brandservicesessionholder',
-      'notifymessage', 'opencustomerservicemsg', 'notification_messages',
-      'userexperience_alarm', 'helper_folders', 'placeholder_foldgroup',
-      '@helper_folders', '@placeholder_foldgroup'
-    ]
-    for (const prefix of excludeList) {
-      if (username.startsWith(prefix) || username === prefix) return false
-    }
-    if (username.includes('@kefu.openim') || username.includes('@openim')) return false
-    if (username.includes('service_')) return false
+    const u = String(username || '').trim()
+    if (!u) return false
+    const lower = u.toLowerCase()
+    if (lower === cleanedWxid.toLowerCase()) return false
+    if (lower.includes('@chatroom')) return false
+    if (SYSTEM_USERNAME_EXACT.has(lower)) return false
+    if (SYSTEM_USERNAME_PREFIXES.some(prefix => lower.startsWith(prefix))) return false
+    if (SYSTEM_USERNAME_CONTAINS.some(part => lower.includes(part))) return false
     return true
   }
 
-  /**
-   * 获取私聊会话列表
-   */
   private async getPrivateSessions(cleanedWxid: string): Promise<string[]> {
     const sessions = await dbAdapter.all<{ username: string }>(
       'session',
@@ -182,6 +95,42 @@ class AnalyticsService {
       'SELECT username FROM SessionTable'
     )
     return sessions.map(s => s.username).filter(u => this.isPrivateSession(u, cleanedWxid))
+  }
+
+  private buildPrivateHashMap(usernames: string[]): Map<string, string> {
+    const map = new Map<string, string>()
+    for (const username of usernames) map.set(getMessageTableHash(username), username)
+    return map
+  }
+
+  private async getDirectionSelect(dbPath: string, tableName: string, cleanedWxid: string): Promise<{ select: string; params: unknown[] }> {
+    const columns = await getMessageTableColumns(dbPath, tableName)
+    const hasName2Id = await hasName2IdTable(dbPath)
+    const myRowId = hasName2Id ? await getMyRowId(dbPath, [cleanedWxid]) : null
+    if (hasName2Id && myRowId !== null && columns.hasRealSenderId) {
+      return {
+        select: `
+          SUM(CASE WHEN real_sender_id = ? THEN 1 ELSE 0 END) as sent_count,
+          SUM(CASE WHEN real_sender_id IS NOT NULL AND real_sender_id != ? THEN 1 ELSE 0 END) as received_count,
+          SUM(CASE WHEN real_sender_id IS NULL THEN 1 ELSE 0 END) as unknown_count
+        `,
+        params: [myRowId, myRowId],
+      }
+    }
+    if (columns.hasIsSend) {
+      return {
+        select: `
+          SUM(CASE WHEN is_send = 1 THEN 1 ELSE 0 END) as sent_count,
+          SUM(CASE WHEN is_send = 0 THEN 1 ELSE 0 END) as received_count,
+          SUM(CASE WHEN is_send IS NULL OR is_send NOT IN (0, 1) THEN 1 ELSE 0 END) as unknown_count
+        `,
+        params: [],
+      }
+    }
+    return {
+      select: '0 as sent_count, 0 as received_count, COUNT(*) as unknown_count',
+      params: [],
+    }
   }
 
   async getOverallStatistics(startTime?: number, endTime?: number): Promise<{ success: boolean; data?: ChatStatistics; error?: string }> {
@@ -194,12 +143,8 @@ class AnalyticsService {
       if (dbFiles.length === 0) return { success: false, error: '未找到消息数据库' }
 
       const privateUsernames = await this.getPrivateSessions(cleanedWxid)
-
-      const crypto = require('crypto')
-      const getTableHash = (username: string) => crypto.createHash('md5').update(username).digest('hex')
-      const timeRange = this.normalizeTimeRange(startTime, endTime)
-      const timeWhere = this.buildTimeWhereClause(timeRange)
-      const privateTableHashes = new Set(privateUsernames.map(u => getTableHash(u)))
+      const tableHashToUsername = this.buildPrivateHashMap(privateUsernames)
+      const timeRange = normalizeTimeRange(startTime, endTime)
 
       let totalMessages = 0
       let textMessages = 0
@@ -207,120 +152,110 @@ class AnalyticsService {
       let voiceMessages = 0
       let videoMessages = 0
       let emojiMessages = 0
-      let otherMessages = 0
       let sentMessages = 0
       let receivedMessages = 0
+      let unknownMessages = 0
       let firstMessageTime: number | null = null
       let lastMessageTime: number | null = null
       const messageTypeCounts: Record<number, number> = {}
       const activeDatesSet = new Set<string>()
+      const errors: StatsPartialError[] = []
 
       for (const dbPath of dbFiles) {
-        const hasName2Id = await this.hasName2IdTable(dbPath)
-        const myRowId = hasName2Id ? await this.getMyRowId(dbPath, cleanedWxid) : null
-        const tables = await this.getMessageTables(dbPath)
+        let tables: string[] = []
+        try {
+          tables = await listExactMessageTables(dbPath)
+        } catch (e) {
+          recordStatsError(errors, e, { dbPath, prefix: '[AnalyticsService]' })
+          continue
+        }
 
         for (const tableName of tables) {
-          const tableHash = tableName.replace('Msg_', '')
-          if (!privateTableHashes.has(tableHash)) continue
+          const tableHash = extractExactMessageTableHash(tableName)
+          if (!tableHash || !tableHashToUsername.has(tableHash)) continue
 
           try {
-            let statsQuery: string
-            if (hasName2Id && myRowId !== null) {
-              statsQuery = `
-                SELECT
-                  COUNT(*) as total,
-                  SUM(CASE WHEN local_type = 1 OR local_type = 244813135921 THEN 1 ELSE 0 END) as text_count,
-                  SUM(CASE WHEN local_type = 3 THEN 1 ELSE 0 END) as image_count,
-                  SUM(CASE WHEN local_type = 34 THEN 1 ELSE 0 END) as voice_count,
-                  SUM(CASE WHEN local_type = 43 THEN 1 ELSE 0 END) as video_count,
-                  SUM(CASE WHEN local_type = 47 THEN 1 ELSE 0 END) as emoji_count,
-                  SUM(CASE WHEN real_sender_id = ${myRowId} THEN 1 ELSE 0 END) as sent_count,
-                  SUM(CASE WHEN real_sender_id != ${myRowId} THEN 1 ELSE 0 END) as received_count,
-                  MIN(create_time) as first_time,
-                  MAX(create_time) as last_time
-                FROM "${tableName}"${timeWhere}
-              `
-            } else {
-              statsQuery = `
-                SELECT
-                  COUNT(*) as total,
-                  SUM(CASE WHEN local_type = 1 OR local_type = 244813135921 THEN 1 ELSE 0 END) as text_count,
-                  SUM(CASE WHEN local_type = 3 THEN 1 ELSE 0 END) as image_count,
-                  SUM(CASE WHEN local_type = 34 THEN 1 ELSE 0 END) as voice_count,
-                  SUM(CASE WHEN local_type = 43 THEN 1 ELSE 0 END) as video_count,
-                  SUM(CASE WHEN local_type = 47 THEN 1 ELSE 0 END) as emoji_count,
-                  SUM(CASE WHEN is_send = 1 THEN 1 ELSE 0 END) as sent_count,
-                  SUM(CASE WHEN is_send = 0 OR is_send IS NULL THEN 1 ELSE 0 END) as received_count,
-                  MIN(create_time) as first_time,
-                  MAX(create_time) as last_time
-                FROM "${tableName}"${timeWhere}
-              `
-            }
-
-            const stats = await dbAdapter.get<any>('message', dbPath, statsQuery)
+            const columns = await getMessageTableColumns(dbPath, tableName)
+            const where = buildMessageStatsWhere({ range: timeRange, contentColumn: columns.contentColumn || undefined })
+            const direction = await this.getDirectionSelect(dbPath, tableName, cleanedWxid)
+            const statsQuery = `
+              SELECT
+                COUNT(*) as total,
+                SUM(CASE WHEN local_type IN (${TEXT_LOCAL_TYPES.map(() => '?').join(',')}) THEN 1 ELSE 0 END) as text_count,
+                SUM(CASE WHEN local_type = 3 THEN 1 ELSE 0 END) as image_count,
+                SUM(CASE WHEN local_type = 34 THEN 1 ELSE 0 END) as voice_count,
+                SUM(CASE WHEN local_type = 43 THEN 1 ELSE 0 END) as video_count,
+                SUM(CASE WHEN local_type = 47 THEN 1 ELSE 0 END) as emoji_count,
+                ${direction.select},
+                MIN(create_time) as first_time,
+                MAX(create_time) as last_time
+              FROM "${tableName}" ${where.sql}
+            `
+            const params = [...TEXT_LOCAL_TYPES, ...direction.params, ...where.params]
+            const stats = await dbAdapter.get<any>('message', dbPath, statsQuery, params)
 
             if (stats && stats.total > 0) {
-              totalMessages += stats.total
-              textMessages += stats.text_count || 0
-              imageMessages += stats.image_count || 0
-              voiceMessages += stats.voice_count || 0
-              videoMessages += stats.video_count || 0
-              emojiMessages += stats.emoji_count || 0
-              sentMessages += stats.sent_count || 0
-              receivedMessages += stats.received_count || 0
+              totalMessages += Number(stats.total || 0)
+              textMessages += Number(stats.text_count || 0)
+              imageMessages += Number(stats.image_count || 0)
+              voiceMessages += Number(stats.voice_count || 0)
+              videoMessages += Number(stats.video_count || 0)
+              emojiMessages += Number(stats.emoji_count || 0)
+              sentMessages += Number(stats.sent_count || 0)
+              receivedMessages += Number(stats.received_count || 0)
+              unknownMessages += Number(stats.unknown_count || 0)
 
-              if (stats.first_time) {
-                if (!firstMessageTime || stats.first_time < firstMessageTime) firstMessageTime = stats.first_time
-              }
-              if (stats.last_time) {
-                if (!lastMessageTime || stats.last_time > lastMessageTime) lastMessageTime = stats.last_time
-              }
+              if (stats.first_time && (!firstMessageTime || stats.first_time < firstMessageTime)) firstMessageTime = stats.first_time
+              if (stats.last_time && (!lastMessageTime || stats.last_time > lastMessageTime)) lastMessageTime = stats.last_time
 
-              const dates = await dbAdapter.all<{ day: string }>(
+              const dates = await dbAdapter.all<{ create_time: number }>(
                 'message',
                 dbPath,
-                `SELECT DISTINCT date(create_time, 'unixepoch', 'localtime') as day FROM "${tableName}"${timeWhere}`
+                `SELECT create_time FROM "${tableName}" ${where.sql}`,
+                where.params
               )
-              for (const { day } of dates) {
-                if (day) activeDatesSet.add(day)
+              for (const { create_time } of dates) {
+                if (create_time > 0) activeDatesSet.add(toLocalDateKey(create_time))
               }
 
               const typeCounts = await dbAdapter.all<{ local_type: number; count: number }>(
                 'message',
                 dbPath,
-                `SELECT local_type, COUNT(*) as count FROM "${tableName}"${timeWhere ? timeWhere : ''} GROUP BY local_type`
+                `SELECT local_type, COUNT(*) as count FROM "${tableName}" ${where.sql} GROUP BY local_type`,
+                where.params
               )
               for (const { local_type, count } of typeCounts) {
                 messageTypeCounts[local_type] = (messageTypeCounts[local_type] || 0) + count
               }
             }
           } catch (e) {
-            // skip
+            recordStatsError(errors, e, { dbPath, tableName, prefix: '[AnalyticsService]' })
           }
         }
       }
 
-      otherMessages = totalMessages - textMessages - imageMessages - voiceMessages - videoMessages - emojiMessages
-
-      return {
-        success: true,
-        data: {
-          totalMessages,
-          textMessages,
-          imageMessages,
-          voiceMessages,
-          videoMessages,
-          emojiMessages,
-          otherMessages: Math.max(0, otherMessages),
-          sentMessages,
-          receivedMessages,
-          firstMessageTime,
-          lastMessageTime,
-          activeDays: activeDatesSet.size,
-          messageTypeCounts
-        }
+      const otherMessages = totalMessages - textMessages - imageMessages - voiceMessages - videoMessages - emojiMessages
+      const data: ChatStatistics = {
+        totalMessages,
+        textMessages,
+        imageMessages,
+        voiceMessages,
+        videoMessages,
+        emojiMessages,
+        otherMessages: Math.max(0, otherMessages),
+        sentMessages,
+        receivedMessages,
+        unknownMessages,
+        firstMessageTime,
+        lastMessageTime,
+        activeDays: activeDatesSet.size,
+        messageTypeCounts,
       }
+      if (errors.length > 0) {
+        data.errors = errors
+        data.partialFailureCount = errors.length
+      }
+      return { success: true, data }
     } catch (e) {
       return { success: false, error: String(e) }
     }
@@ -336,124 +271,61 @@ class AnalyticsService {
       if (dbFiles.length === 0) return { success: false, error: '未找到消息数据库' }
 
       const privateUsernames = await this.getPrivateSessions(cleanedWxid)
-
+      const tableHashToUsername = this.buildPrivateHashMap(privateUsernames)
+      const timeRange = normalizeTimeRange(startTime, endTime)
       const contactStats: Map<string, {
         messageCount: number
         sentCount: number
         receivedCount: number
+        unknownCount: number
         lastMessageTime: number | null
       }> = new Map()
-
-      const crypto = require('crypto')
-      const getTableHash = (username: string) => crypto.createHash('md5').update(username).digest('hex')
-      const timeRange = this.normalizeTimeRange(startTime, endTime)
-      const timeWhere = this.buildTimeWhereClause(timeRange)
-
-      const tableHashToUsername = new Map<string, string>()
-      for (const username of privateUsernames) {
-        tableHashToUsername.set(getTableHash(username), username)
-      }
+      const errors: StatsPartialError[] = []
 
       for (const dbPath of dbFiles) {
-        const hasName2Id = await this.hasName2IdTable(dbPath)
-        const myRowId = hasName2Id ? await this.getMyRowId(dbPath, cleanedWxid) : null
-        const tables = await this.getMessageTables(dbPath)
+        let tables: string[] = []
+        try {
+          tables = await listExactMessageTables(dbPath)
+        } catch (e) {
+          recordStatsError(errors, e, { dbPath, prefix: '[AnalyticsService]' })
+          continue
+        }
 
         for (const tableName of tables) {
-          const tableHash = tableName.startsWith('Msg_') ? tableName.slice(4) : tableName.replace('Msg_', '')
-          const username = tableHashToUsername.get(tableHash)
+          const tableHash = extractExactMessageTableHash(tableName)
+          const username = tableHash ? tableHashToUsername.get(tableHash) : undefined
           if (!username) continue
 
           try {
-            let statsQuery: string
-            if (hasName2Id && myRowId !== null) {
-              statsQuery = `
-                SELECT
-                  COUNT(*) as total,
-                  SUM(CASE WHEN real_sender_id = ${myRowId} THEN 1 ELSE 0 END) as sent_count,
-                  SUM(CASE WHEN real_sender_id != ${myRowId} THEN 1 ELSE 0 END) as received_count,
-                  MAX(create_time) as last_time
-                FROM "${tableName}"${timeWhere}
-              `
-            } else {
-              statsQuery = `
-                SELECT
-                  COUNT(*) as total,
-                  SUM(CASE WHEN is_send = 1 THEN 1 ELSE 0 END) as sent_count,
-                  SUM(CASE WHEN is_send = 0 OR is_send IS NULL THEN 1 ELSE 0 END) as received_count,
-                  MAX(create_time) as last_time
-                FROM "${tableName}"${timeWhere}
-              `
-            }
-
-            const stats = await dbAdapter.get<any>('message', dbPath, statsQuery)
-
+            const columns = await getMessageTableColumns(dbPath, tableName)
+            const where = buildMessageStatsWhere({ range: timeRange, contentColumn: columns.contentColumn || undefined })
+            const direction = await this.getDirectionSelect(dbPath, tableName, cleanedWxid)
+            const statsQuery = `
+              SELECT
+                COUNT(*) as total,
+                ${direction.select},
+                MAX(create_time) as last_time
+              FROM "${tableName}" ${where.sql}
+            `
+            const stats = await dbAdapter.get<any>('message', dbPath, statsQuery, [...direction.params, ...where.params])
             if (stats && stats.total > 0) {
-              const existing = contactStats.get(username)
-              if (existing) {
-                existing.messageCount += stats.total
-                existing.sentCount += stats.sent_count || 0
-                existing.receivedCount += stats.received_count || 0
-                if (stats.last_time && (!existing.lastMessageTime || stats.last_time > existing.lastMessageTime)) {
-                  existing.lastMessageTime = stats.last_time
-                }
-              } else {
-                contactStats.set(username, {
-                  messageCount: stats.total,
-                  sentCount: stats.sent_count || 0,
-                  receivedCount: stats.received_count || 0,
-                  lastMessageTime: stats.last_time || null
-                })
+              const existing = contactStats.get(username) || { messageCount: 0, sentCount: 0, receivedCount: 0, unknownCount: 0, lastMessageTime: null }
+              existing.messageCount += Number(stats.total || 0)
+              existing.sentCount += Number(stats.sent_count || 0)
+              existing.receivedCount += Number(stats.received_count || 0)
+              existing.unknownCount += Number(stats.unknown_count || 0)
+              if (stats.last_time && (!existing.lastMessageTime || stats.last_time > existing.lastMessageTime)) {
+                existing.lastMessageTime = stats.last_time
               }
+              contactStats.set(username, existing)
             }
-          } catch {
+          } catch (e) {
+            recordStatsError(errors, e, { dbPath, tableName, prefix: '[AnalyticsService]' })
           }
         }
       }
 
-      // 查询联系人信息（昵称 / 头像）
-      const contactInfo: Map<string, { displayName: string; avatarUrl?: string }> = new Map()
-      const usernames = Array.from(contactStats.keys())
-
-      if (usernames.length > 0) {
-        // 检查 contact 表结构
-        const columns = await dbAdapter.all<{ name: string }>(
-          'contact',
-          '',
-          'PRAGMA table_info(contact)'
-        )
-        const columnNames = columns.map(c => c.name)
-        const hasBigHeadUrl = columnNames.includes('big_head_url')
-        const hasSmallHeadUrl = columnNames.includes('small_head_url')
-
-        const selectCols = ['username', 'nick_name', 'remark']
-        if (hasBigHeadUrl) selectCols.push('big_head_url')
-        if (hasSmallHeadUrl) selectCols.push('small_head_url')
-        const placeholders = usernames.map(() => '?').join(',')
-
-        const contacts = await dbAdapter.all<{
-          username: string; nick_name?: string; remark?: string;
-          big_head_url?: string; small_head_url?: string
-        }>(
-          'contact',
-          '',
-          `SELECT ${selectCols.join(', ')} FROM contact WHERE username IN (${placeholders})`,
-          usernames
-        )
-
-        for (const contact of contacts) {
-          const avatarUrl = (hasBigHeadUrl && contact.big_head_url)
-            ? contact.big_head_url
-            : (hasSmallHeadUrl && contact.small_head_url)
-              ? contact.small_head_url
-              : undefined
-          contactInfo.set(contact.username, {
-            displayName: contact.remark || contact.nick_name || contact.username,
-            avatarUrl
-          })
-        }
-      }
-
+      const contactInfo = await resolveContactNames(Array.from(contactStats.keys()))
       const rankings: ContactRanking[] = Array.from(contactStats.entries())
         .map(([username, stats]) => {
           const info = contactInfo.get(username)
@@ -464,16 +336,14 @@ class AnalyticsService {
             messageCount: stats.messageCount,
             sentCount: stats.sentCount,
             receivedCount: stats.receivedCount,
+            unknownCount: stats.unknownCount,
             lastMessageTime: stats.lastMessageTime
           }
         })
-        .sort((a, b) => {
-          const messageCountDelta = b.messageCount - a.messageCount
-          if (messageCountDelta !== 0) return messageCountDelta
-          return (b.lastMessageTime || 0) - (a.lastMessageTime || 0)
-        })
+        .sort((a, b) => b.messageCount - a.messageCount || (b.lastMessageTime || 0) - (a.lastMessageTime || 0))
         .slice(0, limit)
 
+      if (errors.length > 0) console.warn('[AnalyticsService] 联系人排名存在部分失败:', errors.length)
       return { success: true, data: rankings }
     } catch (e) {
       return { success: false, error: String(e) }
@@ -487,14 +357,10 @@ class AnalyticsService {
 
       const cleanedWxid = this.cleanAccountDirName(wxid)
       const privateUsernames = await this.getPrivateSessions(cleanedWxid)
-
-      const crypto = require('crypto')
-      const getTableHash = (username: string) => crypto.createHash('md5').update(username).digest('hex')
-      const privateTableHashes = new Set(privateUsernames.map(u => getTableHash(u)))
-      const timeRange = this.normalizeTimeRange(startTime, endTime)
-      const timeWhere = this.buildTimeWhereClause(timeRange)
-
+      const tableHashToUsername = this.buildPrivateHashMap(privateUsernames)
+      const timeRange = normalizeTimeRange(startTime, endTime)
       const dbFiles = findMessageDbPaths()
+      const errors: StatsPartialError[] = []
 
       const hourlyDistribution: Record<number, number> = {}
       const weekdayDistribution: Record<number, number> = {}
@@ -503,60 +369,56 @@ class AnalyticsService {
       for (let i = 1; i <= 7; i++) weekdayDistribution[i] = 0
 
       for (const dbPath of dbFiles) {
-        const tables = await this.getMessageTables(dbPath)
+        let tables: string[] = []
+        try {
+          tables = await listExactMessageTables(dbPath)
+        } catch (e) {
+          recordStatsError(errors, e, { dbPath, prefix: '[AnalyticsService]' })
+          continue
+        }
 
         for (const tableName of tables) {
-          const tableHash = tableName.replace('Msg_', '')
-          if (!privateTableHashes.has(tableHash)) continue
+          const tableHash = extractExactMessageTableHash(tableName)
+          if (!tableHash || !tableHashToUsername.has(tableHash)) continue
 
           try {
-            const hourly = await dbAdapter.all<{ hour: number; count: number }>(
+            const columns = await getMessageTableColumns(dbPath, tableName)
+            const where = buildMessageStatsWhere({ range: timeRange, contentColumn: columns.contentColumn || undefined })
+            const rows = await dbAdapter.all<{ create_time: number }>(
               'message',
               dbPath,
-              `SELECT CAST(strftime('%H', create_time, 'unixepoch', 'localtime') AS INTEGER) as hour, COUNT(*) as count FROM "${tableName}"${timeWhere} GROUP BY hour`
+              `SELECT create_time FROM "${tableName}" ${where.sql}`,
+              where.params
             )
-            for (const { hour, count } of hourly) {
-              hourlyDistribution[hour] = (hourlyDistribution[hour] || 0) + count
-            }
-
-            const weekday = await dbAdapter.all<{ dow: number; count: number }>(
-              'message',
-              dbPath,
-              `SELECT CAST(strftime('%w', create_time, 'unixepoch', 'localtime') AS INTEGER) as dow, COUNT(*) as count FROM "${tableName}"${timeWhere} GROUP BY dow`
-            )
-            for (const { dow, count } of weekday) {
-              const weekdayNum = dow === 0 ? 7 : dow
-              weekdayDistribution[weekdayNum] = (weekdayDistribution[weekdayNum] || 0) + count
-            }
-
-            const monthly = await dbAdapter.all<{ month: string; count: number }>(
-              'message',
-              dbPath,
-              `SELECT strftime('%Y-%m', create_time, 'unixepoch', 'localtime') as month, COUNT(*) as count FROM "${tableName}"${timeWhere} GROUP BY month`
-            )
-            for (const { month, count } of monthly) {
-              if (month) monthlyDistribution[month] = (monthlyDistribution[month] || 0) + count
+            for (const row of rows) {
+              if (!row.create_time) continue
+              const d = new Date(row.create_time * 1000)
+              const hour = d.getHours()
+              const weekday = d.getDay() === 0 ? 7 : d.getDay()
+              hourlyDistribution[hour] = (hourlyDistribution[hour] || 0) + 1
+              weekdayDistribution[weekday] = (weekdayDistribution[weekday] || 0) + 1
+              const month = toLocalMonthKey(row.create_time)
+              monthlyDistribution[month] = (monthlyDistribution[month] || 0) + 1
             }
           } catch (e) {
-            // skip
+            recordStatsError(errors, e, { dbPath, tableName, prefix: '[AnalyticsService]' })
           }
-
         }
       }
 
-      return {
-        success: true,
-        data: { hourlyDistribution, weekdayDistribution, monthlyDistribution }
+      const data: TimeDistribution = { hourlyDistribution, weekdayDistribution, monthlyDistribution }
+      if (errors.length > 0) {
+        data.errors = errors
+        data.partialFailureCount = errors.length
       }
+      return { success: true, data }
     } catch (e) {
       return { success: false, error: String(e) }
     }
   }
 
   close() {
-    this.myRowIdCache.clear()
-    this.messageTableCache.clear()
-    this.hasName2IdCache.clear()
+    // 共享 messageDbScanner 缓存由账号切换入口统一清理。
   }
 }
 

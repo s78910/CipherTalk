@@ -77,6 +77,13 @@ export interface HttpApiStatusPayload {
   lastError: string
 }
 
+export interface StatsPartialError {
+  dbName?: string
+  dbPath?: string
+  tableName?: string
+  message: string
+}
+
 export interface ElectronAPI {
   window: {
     minimize: () => void
@@ -724,10 +731,13 @@ export interface ElectronAPI {
         otherMessages: number
         sentMessages: number
         receivedMessages: number
+        unknownMessages?: number
         firstMessageTime: number | null
         lastMessageTime: number | null
         activeDays: number
         messageTypeCounts: Record<number, number>
+        errors?: StatsPartialError[]
+        partialFailureCount?: number
       }
       error?: string
     }>
@@ -740,6 +750,7 @@ export interface ElectronAPI {
         messageCount: number
         sentCount: number
         receivedCount: number
+        unknownCount?: number
         lastMessageTime: number | null
       }>
       error?: string
@@ -750,6 +761,8 @@ export interface ElectronAPI {
         hourlyDistribution: Record<number, number>
         weekdayDistribution: Record<number, number>
         monthlyDistribution: Record<string, number>
+        errors?: StatsPartialError[]
+        partialFailureCount?: number
       }
       error?: string
     }>
@@ -793,7 +806,7 @@ export interface ElectronAPI {
       }
       error?: string
     }>
-    getGroupMediaStats: (chatroomId: string, startTime?: number, endTime?: number) => Promise<{
+      getGroupMediaStats: (chatroomId: string, startTime?: number, endTime?: number) => Promise<{
       success: boolean
       data?: {
         typeCounts: Array<{
@@ -802,6 +815,43 @@ export interface ElectronAPI {
           count: number
         }>
         total: number
+        appSubtypes?: Array<{
+          type: number
+          name: string
+          count: number
+        }>
+        errors?: StatsPartialError[]
+        partialFailureCount?: number
+      }
+      error?: string
+    }>
+    getGroupEvents: (chatroomId: string, startTime?: number, endTime?: number) => Promise<{
+      success: boolean
+      data?: {
+        mentions: Array<{
+          member: { username: string; displayName: string; avatarUrl?: string }
+          count: number
+        }>
+        systemEvents: Array<{ type: 'join' | 'leave' | 'other'; content: string; createTime: number }>
+        firstSpeaker: { username: string; displayName: string; avatarUrl?: string } | null
+        averageMessageLength: number
+        errors?: StatsPartialError[]
+        partialFailureCount?: number
+      }
+      error?: string
+    }>
+    getGroupMessageBreakdown: (chatroomId: string, startTime?: number, endTime?: number) => Promise<{
+      success: boolean
+      data?: {
+        mediaStats: {
+          typeCounts: Array<{ type: number; name: string; count: number }>
+          total: number
+          appSubtypes?: Array<{ type: number; name: string; count: number }>
+        }
+        firstSpeaker: { username: string; displayName: string; avatarUrl?: string } | null
+        averageMessageLength: number
+        errors?: StatsPartialError[]
+        partialFailureCount?: number
       }
       error?: string
     }>
@@ -831,6 +881,8 @@ export interface ElectronAPI {
           displayName: string
           avatarUrl?: string
           messageCount: number
+          bucket?: string
+          label?: string
         }>
         peakDay: {
           date: string
@@ -853,6 +905,13 @@ export interface ElectronAPI {
           percentage: number
         } | null
         selfAvatarUrl?: string
+        daysCovered?: number
+        errors?: StatsPartialError[]
+        partialFailureCount?: number
+        mutualFriend?: { displayName: string; avatarUrl?: string; sentCount: number; receivedCount: number; ratio: number } | null
+        socialInitiative?: { initiatedChats: number; receivedChats: number; initiativeRate: number } | null
+        responseSpeed?: { avgResponseTime: number; fastestFriend: string; fastestTime: number } | null
+        topPhrases?: { phrase: string; count: number }[]
       }
       error?: string
     }>

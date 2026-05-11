@@ -57,12 +57,16 @@ interface NewYearReportProps {
       displayName: string
       avatarUrl?: string
       messageCount: number
+      bucket?: string
+      label?: string
     }>
     peakDay: { date: string; messageCount: number; topFriend?: string; topFriendCount?: number } | null
     longestStreak: { friendName: string; days: number; startDate: string; endDate: string } | null
     activityHeatmap: { data: number[][] }
     midnightKing: { displayName: string; count: number; percentage: number } | null
     selfAvatarUrl?: string
+    daysCovered?: number
+    partialFailureCount?: number
     mutualFriend?: { displayName: string; avatarUrl?: string; sentCount: number; receivedCount: number; ratio: number } | null
     socialInitiative?: { initiatedChats: number; receivedChats: number; initiativeRate: number } | null
     responseSpeed?: { avgResponseTime: number; fastestFriend: string; fastestTime: number } | null
