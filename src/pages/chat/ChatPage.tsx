@@ -88,6 +88,7 @@ function ChatPage(_props: ChatPageProps) {
   const lastUpdateTimeRef = useRef<number>(0)
   const updateTimerRef = useRef<NodeJS.Timeout | null>(null)
   const updateStatusTimerRef = useRef<NodeJS.Timeout | null>(null)
+  const wcdbChangeTimerRef = useRef<NodeJS.Timeout | null>(null)
   const vectorProgressRenderRef = useRef<{ lastAt: number; percent: number }>({ lastAt: 0, percent: -1 })
   const isUserOperatingRef = useRef<boolean>(false) // 标记用户是否正在操作
   const [currentOffset, setCurrentOffset] = useState(0)
@@ -655,7 +656,8 @@ function ChatPage(_props: ChatPageProps) {
   const loadSessions = async () => {
     setLoadingSessions(true)
     try {
-      const result = await window.electronAPI.chat.getSessions()
+      const sessionLimit = Math.max(300, useChatStore.getState().sessions.length || 0)
+      const result = await window.electronAPI.chat.getSessions(0, sessionLimit)
       if (result.success && result.sessions) {
         // 智能合并更新，避免闪烁
         setSessions((prevSessions: ChatSession[]) => {
@@ -1067,6 +1069,101 @@ function ChatPage(_props: ChatPageProps) {
       }
     }
   }, [])
+
+  // WeFlow 风格实时更新：wcdb 变化事件只做触发器，实际数据通过会话/消息接口增量读取
+  useEffect(() => {
+    const onChange = window.electronAPI.wcdb?.onChange
+    if (typeof onChange !== 'function') return
+
+    let pendingSessionRefresh = false
+    let pendingMessageRefresh = false
+
+    const flushRealtimeUpdate = async () => {
+      wcdbChangeTimerRef.current = null
+      const shouldRefreshSessions = pendingSessionRefresh
+      const shouldRefreshMessages = pendingMessageRefresh
+      pendingSessionRefresh = false
+      pendingMessageRefresh = false
+
+      try {
+        setLastIncrementalUpdateTime(Date.now())
+
+        if (shouldRefreshSessions) {
+          const currentSessions = useChatStore.getState().sessions
+          const sessionLimit = Math.max(300, currentSessions.length || 0)
+          const result = await window.electronAPI.chat.getSessions(0, sessionLimit)
+          if (result.success && result.sessions) {
+            setSessions((prevSessions: ChatSession[]) => {
+              if (prevSessions.length === 0) return result.sessions!
+              const oldSessionsMap = new Map(prevSessions.map(s => [s.username, s]))
+              return result.sessions!.map(newSession => {
+                const oldSession = oldSessionsMap.get(newSession.username)
+                if (!oldSession) return newSession
+                const hasChanges =
+                  oldSession.summary !== newSession.summary ||
+                  oldSession.lastTimestamp !== newSession.lastTimestamp ||
+                  oldSession.unreadCount !== newSession.unreadCount ||
+                  oldSession.displayName !== newSession.displayName ||
+                  oldSession.avatarUrl !== newSession.avatarUrl
+                return hasChanges ? newSession : oldSession
+              })
+            })
+          }
+        }
+
+        const currentId = currentSessionIdRef.current
+        if (!currentId || (!shouldRefreshMessages && !shouldRefreshSessions)) return
+
+        const currentMessages = useChatStore.getState().messages || []
+        const lastMsg = currentMessages[currentMessages.length - 1]
+        const minTime = Number(lastMsg?.createTime || 0)
+        const listEl = messageListRef.current
+        let isNearBottom = false
+        if (listEl) {
+          const { scrollTop, scrollHeight, clientHeight } = listEl
+          isNearBottom = scrollHeight - scrollTop - clientHeight < 300
+        }
+
+        const messagesResult = await window.electronAPI.chat.getNewMessages(currentId, minTime, 1000)
+        if (!messagesResult.success || !messagesResult.messages || messagesResult.messages.length === 0) return
+
+        const latestMessages = useChatStore.getState().messages || []
+        const existingKeys = new Set(latestMessages.map(m => `${m.serverId}-${m.localId}-${m.createTime}-${m.sortSeq}`))
+        const uniqueNewMessages = messagesResult.messages
+          .filter(msg => !existingKeys.has(`${msg.serverId}-${msg.localId}-${msg.createTime}-${msg.sortSeq}`))
+          .sort((a, b) => a.createTime - b.createTime || a.localId - b.localId)
+
+        if (uniqueNewMessages.length === 0) return
+        appendMessages(uniqueNewMessages, false)
+        incrementSyncVersion()
+        if (isNearBottom) {
+          requestAnimationFrame(() => scrollToBottom(true))
+        }
+      } catch (e) {
+        console.error('[ChatPage] wcdb 实时刷新失败:', e)
+      }
+    }
+
+    const remove = onChange((payload) => {
+      const table = String(payload?.table || '').toLowerCase()
+      if (table === 'session' || table === 'contact') pendingSessionRefresh = true
+      if (table === 'message' || table === 'unknown' || table.startsWith('msg')) pendingMessageRefresh = true
+      if (!pendingSessionRefresh && !pendingMessageRefresh) return
+
+      if (wcdbChangeTimerRef.current) clearTimeout(wcdbChangeTimerRef.current)
+      wcdbChangeTimerRef.current = setTimeout(() => {
+        void flushRealtimeUpdate()
+      }, 450)
+    })
+
+    return () => {
+      remove?.()
+      if (wcdbChangeTimerRef.current) {
+        clearTimeout(wcdbChangeTimerRef.current)
+        wcdbChangeTimerRef.current = null
+      }
+    }
+  }, [appendMessages, incrementSyncVersion, scrollToBottom, setSessions])
 
   // Scroll to bottom after initial message render
   useEffect(() => {

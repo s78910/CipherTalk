@@ -9,10 +9,66 @@ import { existsSync } from 'fs'
 import { join } from 'path'
 import { Worker } from 'worker_threads'
 import { app } from 'electron'
+import { ConfigService } from './config'
 
 type WorkerRequest = { id: number; type: string; payload?: any }
 type WorkerResponse = { id: number; result?: any; error?: string; type?: string; payload?: any }
 type Pending = { resolve: (value: any) => void; reject: (reason: any) => void }
+type OpenPayload = { dbPath: string; hexKey: string; wxid: string }
+
+const PARAMS_UNSUPPORTED = 'native 未支持参数化查询'
+
+function bufferToHex(buffer: Buffer): string {
+  return Array.from(buffer)
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('')
+}
+
+function sqlLiteral(value: any): string {
+  if (value === null || value === undefined) return 'NULL'
+  if (typeof value === 'object' && value && typeof value.type === 'string' && 'value' in value) {
+    return sqlLiteral(value.value)
+  }
+  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : 'NULL'
+  if (typeof value === 'bigint') return value.toString()
+  if (typeof value === 'boolean') return value ? '1' : '0'
+  if (Buffer.isBuffer(value)) return `X'${bufferToHex(value)}'`
+  if (value instanceof Uint8Array) return `X'${bufferToHex(Buffer.from(value))}'`
+  return `'${String(value).replace(/'/g, "''")}'`
+}
+
+function inlineParams(sql: string, params: any[]): string {
+  let index = 0
+  let out = ''
+  let quote: '"' | "'" | '`' | null = null
+
+  for (let i = 0; i < sql.length; i++) {
+    const ch = sql[i]
+    if (quote) {
+      out += ch
+      if (ch === quote) {
+        if (sql[i + 1] === quote) out += sql[++i]
+        else quote = null
+      }
+      continue
+    }
+    if (ch === "'" || ch === '"' || ch === '`') {
+      quote = ch
+      out += ch
+      continue
+    }
+    if (ch === '?' && index < params.length) {
+      out += sqlLiteral(params[index++])
+      continue
+    }
+    out += ch
+  }
+
+  if (index !== params.length) {
+    throw new Error(`参数数量不匹配: expected ${index}, got ${params.length}`)
+  }
+  return out
+}
 
 const WORKER_FILE = 'wcdbWorker.js'
 const RESTART_DELAY_MS = 2000
@@ -22,6 +78,8 @@ export class WcdbService extends EventEmitter {
   private pending = new Map<number, Pending>()
   private seq = 0
   private initPromise: Promise<void> | null = null
+  private openPromise: Promise<boolean> | null = null
+  private lastOpenPayload: OpenPayload | null = null
   private restartTimer: NodeJS.Timeout | null = null
   private shuttingDown = false
 
@@ -31,10 +89,17 @@ export class WcdbService extends EventEmitter {
   }
 
   async open(dbPath: string, hexKey: string, wxid: string): Promise<boolean> {
-    return this.call<boolean>('open', { dbPath, hexKey, wxid })
+    const payload = { dbPath, hexKey, wxid }
+    this.lastOpenPayload = payload
+    this.openPromise = this.call<boolean>('open', payload)
+      .finally(() => {
+        this.openPromise = null
+      })
+    return this.openPromise
   }
 
   close(): void {
+    this.lastOpenPayload = null
     // 没有 worker 时无需冷启动，直接返回（与旧同步实现行为一致）
     if (!this.worker) return
     const w = this.worker
@@ -44,6 +109,8 @@ export class WcdbService extends EventEmitter {
 
   shutdown(): void {
     this.shuttingDown = true
+    this.lastOpenPayload = null
+    this.openPromise = null
     const w = this.worker
     this.worker = null
     this.initPromise = null
@@ -59,15 +126,68 @@ export class WcdbService extends EventEmitter {
   }
 
   async execQuery(kind: string, path: string, sql: string): Promise<{ success: boolean; rows?: any[]; error?: string }> {
-    return this.call('execQuery', { kind, path, sql })
+    return this.callWithAutoOpen('execQuery', { kind, path, sql })
   }
 
   async execQueryWithParams(kind: string, path: string, sql: string, params?: any[]): Promise<{ success: boolean; rows?: any[]; error?: string }> {
-    return this.call('execQueryWithParams', { kind, path, sql, params })
+    if (!params || params.length === 0) {
+      return this.execQuery(kind, path, sql)
+    }
+    const result = await this.callWithAutoOpen('execQueryWithParams', { kind, path, sql, params })
+    if (result.success || !result.error?.includes(PARAMS_UNSUPPORTED)) {
+      return result
+    }
+    return this.execQuery(kind, path, inlineParams(sql, params))
   }
 
   async getSnsTimeline(limit: number, offset: number, usernames?: string[], keyword?: string, startTime?: number, endTime?: number): Promise<{ success: boolean; timeline?: any[]; error?: string }> {
-    return this.call('getSnsTimeline', { limit, offset, usernames, keyword, startTime, endTime })
+    return this.callWithAutoOpen('getSnsTimeline', { limit, offset, usernames, keyword, startTime, endTime })
+  }
+
+  async getNativeMessages(sessionId: string, limit: number, offset: number): Promise<{ success: boolean; rows?: any[]; error?: string }> {
+    return this.callWithAutoOpen('getNativeMessages', { sessionId, limit, offset })
+  }
+
+  async openMessageCursor(
+    sessionId: string,
+    batchSize: number,
+    ascending: boolean,
+    beginTimestamp: number,
+    endTimestamp: number
+  ): Promise<{ success: boolean; cursor?: number; error?: string }> {
+    return this.callWithAutoOpen('openMessageCursor', { sessionId, batchSize, ascending, beginTimestamp, endTimestamp })
+  }
+
+  async openMessageCursorLite(
+    sessionId: string,
+    batchSize: number,
+    ascending: boolean,
+    beginTimestamp: number,
+    endTimestamp: number
+  ): Promise<{ success: boolean; cursor?: number; error?: string }> {
+    return this.callWithAutoOpen('openMessageCursorLite', { sessionId, batchSize, ascending, beginTimestamp, endTimestamp })
+  }
+
+  async fetchMessageBatch(cursor: number): Promise<{ success: boolean; rows?: any[]; hasMore?: boolean; error?: string }> {
+    return this.callWithAutoOpen('fetchMessageBatch', { cursor })
+  }
+
+  async closeMessageCursor(cursor: number): Promise<{ success: boolean; error?: string }> {
+    return this.callWithAutoOpen('closeMessageCursor', { cursor })
+  }
+
+  async getNewMessages(sessionId: string, minTime: number, limit: number = 1000): Promise<{ success: boolean; rows?: any[]; error?: string }> {
+    const openRes = await this.openMessageCursor(sessionId, limit, true, minTime, 0)
+    if (!openRes.success || !openRes.cursor) {
+      return { success: false, error: openRes.error || '创建游标失败' }
+    }
+    try {
+      const batch = await this.fetchMessageBatch(openRes.cursor)
+      if (!batch.success) return { success: false, error: batch.error || '获取批次失败' }
+      return { success: true, rows: batch.rows || [] }
+    } finally {
+      await this.closeMessageCursor(openRes.cursor).catch(() => undefined)
+    }
   }
 
   async setMonitor(): Promise<boolean> {
@@ -223,6 +343,54 @@ export class WcdbService extends EventEmitter {
         reject(new Error(`postMessage 失败: ${e?.message || String(e)}`))
       }
     })
+  }
+
+  private async callWithAutoOpen<T extends { success?: boolean; error?: string }>(type: string, payload: any): Promise<T> {
+    let result = await this.call<T>(type, payload)
+    if (!this.isUninitializedResult(result)) return result
+
+    const reopened = await this.ensureOpen()
+    if (!reopened) return result
+
+    result = await this.call<T>(type, payload)
+    return result
+  }
+
+  private isUninitializedResult(result: any): boolean {
+    return result?.success === false && typeof result?.error === 'string' && result.error.includes('WCDB 未初始化')
+  }
+
+  private async ensureOpen(): Promise<boolean> {
+    if (this.openPromise) return this.openPromise
+
+    let payload = this.lastOpenPayload
+    if (!payload) {
+      payload = this.readConfiguredOpenPayload()
+      if (payload) this.lastOpenPayload = payload
+    }
+    if (!payload) return false
+
+    this.openPromise = this.call<boolean>('open', payload)
+      .finally(() => {
+        this.openPromise = null
+      })
+    return this.openPromise
+  }
+
+  private readConfiguredOpenPayload(): OpenPayload | null {
+    let configService: ConfigService | null = null
+    try {
+      configService = new ConfigService()
+      const dbPath = String(configService.get('dbPath') || '').trim()
+      const hexKey = String(configService.get('decryptKey') || '').trim()
+      const wxid = String(configService.get('myWxid') || '').trim()
+      if (!dbPath || !hexKey || !wxid) return null
+      return { dbPath, hexKey, wxid }
+    } catch {
+      return null
+    } finally {
+      try { configService?.close() } catch { /* ignore */ }
+    }
   }
 
   /**

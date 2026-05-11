@@ -4,7 +4,7 @@ import { existsSync, readdirSync, statSync, watch } from 'fs'
 import type { FSWatcher } from 'fs'
 import { ConfigService } from './config'
 
-const DEBOUNCE_MS = 350
+const DEBOUNCE_MS = 120
 
 export type ChangeTable = 'Session' | 'Message' | 'Contact' | 'Sns' | 'Unknown'
 
@@ -16,10 +16,10 @@ export interface MonitorChangePayload {
 
 function classifyByFileName(fileName: string): ChangeTable {
   const lower = fileName.toLowerCase()
-  if (lower === 'session.db-wal') return 'Session'
-  if (/^(msg|message)_.*\.db-wal$/.test(lower)) return 'Message'
-  if (lower === 'contact.db-wal') return 'Contact'
-  if (lower === 'sns.db-wal') return 'Sns'
+  if (/^session\.db-(wal|shm)$/.test(lower)) return 'Session'
+  if (/^(msg|message)_.*\.db-(wal|shm)$/.test(lower)) return 'Message'
+  if (/^contact\.db-(wal|shm)$/.test(lower)) return 'Contact'
+  if (/^sns\.db-(wal|shm)$/.test(lower)) return 'Sns'
   return 'Unknown'
 }
 
@@ -77,7 +77,7 @@ export class MonitorBridge extends EventEmitter {
   }
 
   async start(): Promise<boolean> {
-    if (this.watcher || this.nativeMode) return true
+    if (this.watcher) return true
 
     let configService: ConfigService | null = null
     try {
@@ -97,7 +97,7 @@ export class MonitorBridge extends EventEmitter {
         if (!filename) return
         const name = typeof filename === 'string' ? filename : String(filename)
         const baseName = basename(name)
-        if (!baseName.toLowerCase().endsWith('.db-wal')) return
+        if (!/\.db-(wal|shm)$/i.test(baseName)) return
         this.scheduleEmit(baseName, join(resolved, name))
       })
 
@@ -125,7 +125,7 @@ export class MonitorBridge extends EventEmitter {
     const timer = setTimeout(() => {
       this.timers.delete(key)
       const table = classifyByFileName(baseName)
-      const dbPath = walFullPath.replace(/\.db-wal$/i, '.db')
+      const dbPath = walFullPath.replace(/\.db-(wal|shm)$/i, '.db')
       const payload: MonitorChangePayload = { table, dbPath, walPath: walFullPath }
       this.emit('change', payload)
     }, DEBOUNCE_MS)
@@ -147,7 +147,7 @@ export class MonitorBridge extends EventEmitter {
       console.warn('[MonitorBridge] switchToNativePipe: 无效的 wcdbService 引用')
       return
     }
-    this.stop()
+    void this.start()
     if (this.nativeRef === wcdbServiceRef && this.nativeHandler) return
     if (this.nativeRef && this.nativeHandler && typeof this.nativeRef.off === 'function') {
       try { this.nativeRef.off('change', this.nativeHandler) } catch { /* ignore */ }
@@ -174,4 +174,3 @@ export class MonitorBridge extends EventEmitter {
 }
 
 export const monitorBridge = new MonitorBridge()
-

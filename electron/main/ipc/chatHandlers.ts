@@ -96,6 +96,14 @@ export function registerChatHandlers(ctx: MainProcessContext): void {
     return result
   })
 
+  ipcMain.handle('chat:getNewMessages', async (_, sessionId: string, minTime: number, limit?: number) => {
+    const result = await chatService.getNewMessages(sessionId, minTime, limit)
+    if (!result.success) {
+      ctx.getLogService()?.warn('Chat', '获取新增消息失败', { sessionId, minTime, error: result.error })
+    }
+    return result
+  })
+
   ipcMain.handle('chat:getAllVoiceMessages', async (_, sessionId: string) => {
     const result = await chatService.getAllVoiceMessages(sessionId)
 

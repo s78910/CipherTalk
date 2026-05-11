@@ -432,6 +432,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       cursorLocalId?: number
     ) =>
       ipcRenderer.invoke('chat:getMessagesAfter', sessionId, cursorSortSeq, limit, cursorCreateTime, cursorLocalId),
+    getNewMessages: (sessionId: string, minTime: number, limit?: number) =>
+      ipcRenderer.invoke('chat:getNewMessages', sessionId, minTime, limit),
     getAllVoiceMessages: (sessionId: string) =>
       ipcRenderer.invoke('chat:getAllVoiceMessages', sessionId),
     getAllImageMessages: (sessionId: string) =>
