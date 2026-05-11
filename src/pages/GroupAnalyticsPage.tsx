@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Users, BarChart3, Clock, Image, Loader2, RefreshCw, User, Medal, Search, X, ChevronLeft, Copy, Check } from 'lucide-react'
+import { Users, BarChart3, Clock, Image, Loader2, RefreshCw, User, Medal, Search, X, ChevronLeft, Copy, Check, AtSign, FileText } from 'lucide-react'
 import ReactECharts from 'echarts-for-react'
 import DateRangePicker from '../components/DateRangePicker'
 import ChatBackground from '../components/ChatBackground'
@@ -23,7 +23,22 @@ interface GroupMessageRank {
   messageCount: number
 }
 
-type AnalysisFunction = 'members' | 'ranking' | 'activeHours' | 'mediaStats'
+interface GroupEvents {
+  mentions: Array<{ member: GroupMember; count: number }>
+  systemEvents: Array<{ type: 'join' | 'leave' | 'other'; content: string; createTime: number }>
+  firstSpeaker: GroupMember | null
+  averageMessageLength: number
+  partialFailureCount?: number
+}
+
+interface GroupMessageBreakdown {
+  mediaStats: { typeCounts: Array<{ type: number; name: string; count: number }>; total: number; appSubtypes?: Array<{ type: number; name: string; count: number }> }
+  firstSpeaker: GroupMember | null
+  averageMessageLength: number
+  partialFailureCount?: number
+}
+
+type AnalysisFunction = 'members' | 'ranking' | 'activeHours' | 'mediaStats' | 'events' | 'breakdown'
 
 function GroupAnalyticsPage() {
   const [groups, setGroups] = useState<GroupChatInfo[]>([])
@@ -38,6 +53,8 @@ function GroupAnalyticsPage() {
   const [rankings, setRankings] = useState<GroupMessageRank[]>([])
   const [activeHours, setActiveHours] = useState<Record<number, number>>({})
   const [mediaStats, setMediaStats] = useState<{ typeCounts: Array<{ type: number; name: string; count: number }>; total: number } | null>(null)
+  const [groupEvents, setGroupEvents] = useState<GroupEvents | null>(null)
+  const [messageBreakdown, setMessageBreakdown] = useState<GroupMessageBreakdown | null>(null)
   const [functionLoading, setFunctionLoading] = useState(false)
 
   // 成员详情弹框
@@ -146,7 +163,11 @@ function GroupAnalyticsPage() {
 
     // 计算时间戳
     const startTime = startDate ? Math.floor(new Date(startDate).getTime() / 1000) : undefined
-    const endTime = endDate ? Math.floor(new Date(endDate + 'T23:59:59').getTime() / 1000) : undefined
+    const endTime = endDate ? (() => {
+      const d = new Date(endDate + 'T00:00:00')
+      d.setDate(d.getDate() + 1)
+      return Math.floor(d.getTime() / 1000)
+    })() : undefined
 
     try {
       switch (func) {
@@ -168,6 +189,16 @@ function GroupAnalyticsPage() {
         case 'mediaStats': {
           const result = await window.electronAPI.groupAnalytics.getGroupMediaStats(selectedGroup.username, startTime, endTime)
           if (result.success && result.data) setMediaStats(result.data)
+          break
+        }
+        case 'events': {
+          const result = await window.electronAPI.groupAnalytics.getGroupEvents(selectedGroup.username, startTime, endTime)
+          if (result.success && result.data) setGroupEvents(result.data)
+          break
+        }
+        case 'breakdown': {
+          const result = await window.electronAPI.groupAnalytics.getGroupMessageBreakdown(selectedGroup.username, startTime, endTime)
+          if (result.success && result.data) setMessageBreakdown(result.data)
           break
         }
       }
@@ -393,6 +424,14 @@ function GroupAnalyticsPage() {
           <Image size={32} />
           <span>媒体内容统计</span>
         </div>
+        <div className="function-card" onClick={() => handleFunctionSelect('events')}>
+          <AtSign size={32} />
+          <span>群事件洞察</span>
+        </div>
+        <div className="function-card" onClick={() => handleFunctionSelect('breakdown')}>
+          <FileText size={32} />
+          <span>消息细分</span>
+        </div>
       </div>
     </div>
   )
@@ -404,6 +443,8 @@ function GroupAnalyticsPage() {
         case 'ranking': return '群聊发言排行'
         case 'activeHours': return '群聊活跃时段'
         case 'mediaStats': return '媒体内容统计'
+        case 'events': return '群事件洞察'
+        case 'breakdown': return '消息细分'
         default: return ''
       }
     }
@@ -499,6 +540,54 @@ function GroupAnalyticsPage() {
                         <span>{formatNumber(mediaStats.total)} 条</span>
                       </div>
                     </div>
+                  </div>
+                </div>
+              )}
+              {selectedFunction === 'events' && groupEvents && (
+                <div className="media-stats">
+                  {!!groupEvents.partialFailureCount && <p>部分数据库读取失败（{groupEvents.partialFailureCount} 个分片）</p>}
+                  <div className="media-legend">
+                    <div className="legend-total">
+                      <span>首位发言人</span>
+                      <span>{groupEvents.firstSpeaker?.displayName || '暂无'}</span>
+                    </div>
+                    <div className="legend-total">
+                      <span>平均文本长度</span>
+                      <span>{groupEvents.averageMessageLength} 字</span>
+                    </div>
+                    {groupEvents.mentions.slice(0, 10).map(item => (
+                      <div key={item.member.username} className="legend-item">
+                        <span className="legend-name">@{item.member.displayName}</span>
+                        <span className="legend-count">{formatNumber(item.count)} 次</span>
+                      </div>
+                    ))}
+                    {groupEvents.systemEvents.slice(-10).reverse().map((event, index) => (
+                      <div key={`${event.createTime}-${index}`} className="legend-item">
+                        <span className="legend-name">{event.type === 'join' ? '入群' : '退群'}</span>
+                        <span className="legend-count">{event.content}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {selectedFunction === 'breakdown' && messageBreakdown && (
+                <div className="media-stats">
+                  {!!messageBreakdown.partialFailureCount && <p>部分数据库读取失败（{messageBreakdown.partialFailureCount} 个分片）</p>}
+                  <div className="media-legend">
+                    <div className="legend-total">
+                      <span>首位发言人</span>
+                      <span>{messageBreakdown.firstSpeaker?.displayName || '暂无'}</span>
+                    </div>
+                    <div className="legend-total">
+                      <span>平均文本长度</span>
+                      <span>{messageBreakdown.averageMessageLength} 字</span>
+                    </div>
+                    {(messageBreakdown.mediaStats.appSubtypes || []).map(item => (
+                      <div key={item.type} className="legend-item">
+                        <span className="legend-name">{item.name}</span>
+                        <span className="legend-count">{formatNumber(item.count)} 条</span>
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}

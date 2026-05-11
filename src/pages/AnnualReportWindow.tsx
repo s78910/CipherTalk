@@ -56,6 +56,8 @@ interface MonthlyTopFriend {
   displayName: string
   avatarUrl?: string
   messageCount: number
+  bucket?: string
+  label?: string
 }
 
 interface AnnualReportData {
@@ -69,6 +71,8 @@ interface AnnualReportData {
   activityHeatmap: { data: number[][] }
   midnightKing: { displayName: string; count: number; percentage: number } | null
   selfAvatarUrl?: string
+  daysCovered?: number
+  partialFailureCount?: number
   mutualFriend?: { displayName: string; avatarUrl?: string; sentCount: number; receivedCount: number; ratio: number } | null
   socialInitiative?: { initiatedChats: number; receivedChats: number; initiativeRate: number } | null
   responseSpeed?: { avgResponseTime: number; fastestFriend: string; fastestTime: number } | null
@@ -908,8 +912,8 @@ function AnnualReportWindow() {
             <p className="hero-desc">根据12个月的聊天习惯<br />每个月陪你最多的人</p>
             <div className="monthly-orbit">
               {monthlyTopFriends.map((m, i) => (
-                <div key={m.month} className="monthly-item" style={{ '--i': i } as React.CSSProperties}>
-                  <div className="month-label">{m.month}月</div>
+                <div key={m.bucket || m.month} className="monthly-item" style={{ '--i': i } as React.CSSProperties}>
+                  <div className="month-label">{m.label || `${m.month}月`}</div>
                   <Avatar url={m.avatarUrl} name={m.displayName} size="sm" />
                   <div className="month-name">{m.displayName}</div>
                 </div>

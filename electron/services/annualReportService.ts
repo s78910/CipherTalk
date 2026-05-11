@@ -1,7 +1,18 @@
 import { ConfigService } from './config'
 import { dbAdapter } from './dbAdapter'
-import { findMessageDbPaths, findSessionDbPath, findDbByName } from './dbStoragePaths'
-import * as crypto from 'crypto'
+import { findMessageDbPaths } from './dbStoragePaths'
+import { resolveContactNames } from './contactNameResolver'
+import {
+  extractExactMessageTableHash,
+  getMessageTableColumns,
+  getMessageTableHash,
+  getMyRowId,
+  hasName2IdTable,
+  listExactMessageTables,
+} from './messageDbScanner'
+import { CHINESE_STOP_WORDS, StatsPartialError, SYSTEM_USERNAME_CONTAINS, SYSTEM_USERNAME_EXACT, SYSTEM_USERNAME_PREFIXES, TEXT_LOCAL_TYPES } from './statsConstants'
+import { buildMessageStatsWhere, normalizeTimeRange, recordStatsError, toLocalDateParts, utcDateFromLocalKey } from './statsSqlHelpers'
+import { cut_for_search } from 'jieba-wasm'
 
 export interface TopContact {
   username: string
@@ -17,6 +28,8 @@ export interface MonthlyTopFriend {
   displayName: string
   avatarUrl?: string
   messageCount: number
+  bucket?: string
+  label?: string
 }
 
 export interface ChatPeakDay {
@@ -27,7 +40,7 @@ export interface ChatPeakDay {
 }
 
 export interface ActivityHeatmap {
-  data: number[][] // 7x24 矩阵，weekday x hour
+  data: number[][]
 }
 
 export interface AnnualReportData {
@@ -50,23 +63,25 @@ export interface AnnualReportData {
     percentage: number
   } | null
   selfAvatarUrl?: string
-  // 新增字段
+  daysCovered?: number
+  errors?: StatsPartialError[]
+  partialFailureCount?: number
   mutualFriend: {
     displayName: string
     avatarUrl?: string
     sentCount: number
     receivedCount: number
-    ratio: number // 接近1表示双向奔赴
+    ratio: number
   } | null
   socialInitiative: {
-    initiatedChats: number // 主动发起的对话数
-    receivedChats: number // 被动回复的对话数
-    initiativeRate: number // 主动率百分比
+    initiatedChats: number
+    receivedChats: number
+    initiativeRate: number
   } | null
   responseSpeed: {
-    avgResponseTime: number // 平均回复时间（秒）
-    fastestFriend: string // 回复最快的好友
-    fastestTime: number // 最快回复时间
+    avgResponseTime: number
+    fastestFriend: string
+    fastestTime: number
   } | null
   topPhrases: {
     phrase: string
@@ -76,27 +91,6 @@ export interface AnnualReportData {
 
 class AnnualReportService {
   private configService: ConfigService
-  private readonly systemAccounts = new Set([
-    'medianote',
-    'floatbottle',
-    'qmessage',
-    'qqmail',
-    'fmessage',
-    'weixin',
-    'newsapp',
-    'notification_messages',
-    'weixinreminder',
-    'masssendapp',
-    'qqsync',
-    'facebookapp',
-    'feedsapp',
-    'voip',
-    'blogapp',
-    'gmailapp',
-    'linkedinplugin',
-    'appbrand_notify_message',
-    'appbrandcustomerservicemsg'
-  ])
 
   constructor() {
     this.configService = new ConfigService()
@@ -105,134 +99,104 @@ class AnnualReportService {
   private cleanAccountDirName(dirName: string): string {
     const trimmed = dirName.trim()
     if (!trimmed) return trimmed
-
-    // wxid_ 开头的标准格式: wxid_xxx_yyyy -> wxid_xxx
     if (trimmed.toLowerCase().startsWith('wxid_')) {
       const match = trimmed.match(/^(wxid_[a-zA-Z0-9]+)/i)
       if (match) return match[1]
       return trimmed
     }
-
-    // 自定义微信号格式: xxx_yyyy (4位后缀) -> xxx
-    // 例如: xiangchao1985_b29d -> xiangchao1985
     const suffixMatch = trimmed.match(/^(.+)_([a-zA-Z0-9]{4})$/)
     if (suffixMatch) return suffixMatch[1]
-
     return trimmed
   }
 
-  private getTableHash(username: string): string {
-    return crypto.createHash('md5').update(username).digest('hex')
-  }
-
   private shouldExcludeAnnualSession(username: string): boolean {
-    if (!username) return true
-    const u = username.toLowerCase().trim()
+    const u = String(username || '').toLowerCase().trim()
     if (!u) return true
-
-    // 群聊、公众号、文件传输助手
     if (u.includes('@chatroom')) return true
-    if (u.startsWith('gh_')) return true
-    if (u === 'filehelper') return true
-
-    // 已知系统账号
-    if (this.systemAccounts.has(u)) return true
-
-    // 邮箱/提醒类
-    if (u.includes('qqmail') || u.includes('mail')) return true
+    if (SYSTEM_USERNAME_EXACT.has(u)) return true
+    if (SYSTEM_USERNAME_PREFIXES.some(prefix => u.startsWith(prefix))) return true
+    if (SYSTEM_USERNAME_CONTAINS.some(part => u.includes(part))) return true
     if (u.includes('reminder') || u.includes('notify')) return true
-
     return false
   }
 
-  private extractTableHash(tableName: string): string | null {
-    const match = tableName.match(/msg_([0-9a-f]{32})/i)
-    if (match?.[1]) return match[1].toLowerCase()
-    return null
-  }
+  private segmentPhrase(content: string): string[] {
+    const cleaned = String(content || '')
+      .trim()
+      .toLowerCase()
+      .replace(/<[^>]+>/g, '')
+      .replace(/https?:\/\/\S+/g, '')
+      .replace(/[\p{P}\p{S}]+/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (!cleaned || cleaned.length < 2) return []
 
-  private hasName2IdTable(dbPath: string): Promise<boolean> {
-    return dbAdapter.get<{ name: string }>(
-      'message',
-      dbPath,
-      "SELECT name FROM sqlite_master WHERE type='table' AND name = 'Name2Id'"
-    ).then(row => !!row).catch(() => false)
-  }
-
-  private myRowIdCache: Map<string, number | null> = new Map()
-
-  private async getMyRowId(dbPath: string, myWxid: string): Promise<number | null> {
-    const cacheKey = `${dbPath}:${myWxid}`
-    if (this.myRowIdCache.has(cacheKey)) {
-      return this.myRowIdCache.get(cacheKey)!
-    }
+    let words: string[] = []
     try {
-      const row = await dbAdapter.get<{ rowid: number }>(
-        'message',
-        dbPath,
-        'SELECT rowid FROM Name2Id WHERE user_name = ?',
-        [myWxid]
-      )
-      const rowId = row?.rowid ?? null
-      this.myRowIdCache.set(cacheKey, rowId)
-      return rowId
+      words = cut_for_search(cleaned, true)
     } catch {
-      this.myRowIdCache.set(cacheKey, null)
-      return null
+      const segmenter = typeof Intl !== 'undefined' && 'Segmenter' in Intl
+        ? new (Intl as any).Segmenter('zh-CN', { granularity: 'word' })
+        : null
+      words = segmenter
+        ? Array.from(segmenter.segment(cleaned)).map((part: any) => part.segment)
+        : cleaned.split(/\s+/)
     }
+
+    return words
+      .map(word => String(word).trim())
+      .filter(word => word.length >= 2 && word.length <= 12)
+      .filter(word => !/^\d+$/.test(word))
+      .filter(word => !CHINESE_STOP_WORDS.has(word))
+  }
+
+  private resolveDirection(row: any, myRowId: number | null, hasRealSenderId: boolean, hasIsSend: boolean): 'sent' | 'received' | 'unknown' {
+    if (hasRealSenderId && myRowId !== null) {
+      if (row.real_sender_id === null || row.real_sender_id === undefined) return 'unknown'
+      return Number(row.real_sender_id) === myRowId ? 'sent' : 'received'
+    }
+    if (hasIsSend) {
+      if (Number(row.is_send) === 1) return 'sent'
+      if (Number(row.is_send) === 0) return 'received'
+    }
+    return 'unknown'
   }
 
   async getAvailableYears(): Promise<{ success: boolean; data?: number[]; error?: string }> {
     try {
       const wxid = this.configService.get('myWxid')
-      if (!wxid) {
-        return { success: false, error: '未配置微信ID' }
-      }
-
-      const dbFiles = findMessageDbPaths()
-
-      if (dbFiles.length === 0) {
-        return { success: false, error: '未找到消息数据库' }
-      }
+      if (!wxid) return { success: false, error: '未配置微信ID' }
 
       const years = new Set<number>()
-
-      for (const dbPath of dbFiles) {
-        let tables: { name: string }[]
+      for (const dbPath of findMessageDbPaths()) {
+        let tables: string[] = []
         try {
-          tables = await dbAdapter.all<{ name: string }>(
-            'message',
-            dbPath,
-            "SELECT name FROM sqlite_master WHERE type='table' AND lower(name) LIKE 'msg_%'"
-          )
+          tables = await listExactMessageTables(dbPath)
         } catch {
           continue
         }
-
-        for (const { name: tableName } of tables) {
+        for (const tableName of tables) {
           try {
             const result = await dbAdapter.get<{ min_time: number; max_time: number }>(
               'message',
               dbPath,
               `SELECT MIN(create_time) as min_time, MAX(create_time) as max_time
-              FROM "${tableName}" WHERE create_time > 0`
+               FROM "${tableName}" WHERE create_time > 0`
             )
-
             if (result?.min_time && result?.max_time) {
               const minYear = new Date(result.min_time * 1000).getFullYear()
               const maxYear = new Date(result.max_time * 1000).getFullYear()
               for (let y = minYear; y <= maxYear; y++) {
-                if (y >= 2010 && y <= new Date().getFullYear()) {
-                  years.add(y)
-                }
+                if (y >= 2010 && y <= new Date().getFullYear()) years.add(y)
               }
             }
-          } catch { /* skip */ }
+          } catch {
+            // skip malformed shard
+          }
         }
       }
 
-      const sortedYears = Array.from(years).sort((a, b) => b - a)
-      return { success: true, data: sortedYears }
+      return { success: true, data: Array.from(years).sort((a, b) => b - a) }
     } catch (e) {
       return { success: false, error: String(e) }
     }
@@ -241,283 +205,154 @@ class AnnualReportService {
   async generateReport(year: number): Promise<{ success: boolean; data?: AnnualReportData; error?: string }> {
     try {
       const wxid = this.configService.get('myWxid')
-      if (!wxid) {
-        return { success: false, error: '未配置微信ID' }
-      }
+      if (!wxid) return { success: false, error: '未配置微信ID' }
 
       const cleanedWxid = this.cleanAccountDirName(wxid)
       const dbFiles = findMessageDbPaths()
-
-      if (dbFiles.length === 0) {
-        return { success: false, error: '未找到消息数据库' }
-      }
-
-      // 获取私聊会话列表
-      const sessionDbPath = findSessionDbPath()
-      if (!sessionDbPath) {
-        return { success: false, error: '未找到 session.db' }
-      }
+      if (dbFiles.length === 0) return { success: false, error: '未找到消息数据库' }
 
       const sessions = await dbAdapter.all<{ username: string }>(
         'session',
         '',
-        `SELECT username FROM SessionTable
-        WHERE username NOT LIKE '%@chatroom'
-        AND username != 'filehelper'
-        AND username NOT LIKE 'gh_%'`
+        'SELECT username FROM SessionTable'
       )
-
-      // 过滤掉自己（同时匹配原始wxid和清理后的wxid）
       const wxidLower = wxid.toLowerCase()
       const cleanedWxidLower = cleanedWxid.toLowerCase()
       const privateUsernames = sessions
         .map(s => s.username)
         .filter(u => {
-          const uLower = u.toLowerCase()
-          return uLower !== wxidLower && uLower !== cleanedWxidLower && !this.shouldExcludeAnnualSession(u)
+          const lower = String(u || '').toLowerCase()
+          return lower !== wxidLower && lower !== cleanedWxidLower && !this.shouldExcludeAnnualSession(u)
         })
 
-      // 构建 hash -> username 映射
       const hashToUsername = new Map<string, string>()
-      for (const username of privateUsernames) {
-        hashToUsername.set(this.getTableHash(username).toLowerCase(), username)
-      }
+      for (const username of privateUsernames) hashToUsername.set(getMessageTableHash(username), username)
 
       const isAllTime = year <= 0
       const reportYear = isAllTime ? 0 : year
-      const startTime = isAllTime ? 0 : Math.floor(new Date(year, 0, 1).getTime() / 1000)
-      const endTime = isAllTime ? Math.floor(Date.now() / 1000) : Math.floor(new Date(year, 11, 31, 23, 59, 59).getTime() / 1000)
+      const startTime = isAllTime ? undefined : Math.floor(new Date(year, 0, 1).getTime() / 1000)
+      const endTime = isAllTime ? undefined : Math.floor(new Date(year + 1, 0, 1).getTime() / 1000)
+      const range = normalizeTimeRange(startTime, endTime)
 
-      // 统计数据
       let totalMessages = 0
-      const contactStats = new Map<string, { sent: number; received: number }>()
-      const monthlyStats = new Map<string, Map<number, number>>()
+      const contactStats = new Map<string, { sent: number; received: number; unknown: number }>()
+      const monthlyStats = new Map<string, Map<string, number>>()
       const dailyStats = new Map<string, number>()
       const dailyContactStats = new Map<string, Map<string, number>>()
       const heatmapData: number[][] = Array.from({ length: 7 }, () => Array(24).fill(0))
       const midnightStats = new Map<string, number>()
-      
-      // 新增统计数据
-      const conversationStarts = new Map<string, { initiated: number; received: number }>() // 对话发起统计
-      const responseTimeStats = new Map<string, number[]>() // 回复时间统计
-      const phraseCount = new Map<string, number>() // 常用语统计
-      let lastMessageTime = new Map<string, { time: number; isSent: boolean }>() // 用于计算回复时间
-      
-      // 火花统计：每个会话的活跃日期集合
+      const conversationStarts = new Map<string, { initiated: number; received: number }>()
+      const responseTimeStats = new Map<string, number[]>()
+      const phraseCount = new Map<string, number>()
+      const lastMessageTime = new Map<string, { time: number; isSent: boolean }>()
       const sessionActiveDays = new Map<string, Set<string>>()
+      const allActiveDays = new Set<string>()
+      const errors: StatsPartialError[] = []
 
-      let tablesProcessed = 0
-
-      // 遍历所有消息数据库
       for (const dbPath of dbFiles) {
-        const hasName2Id = await this.hasName2IdTable(dbPath)
-        const myRowId = hasName2Id ? await this.getMyRowId(dbPath, cleanedWxid) : null
-
-        let tables: { name: string }[]
+        const hasName2Id = await hasName2IdTable(dbPath)
+        const myRowId = hasName2Id ? await getMyRowId(dbPath, [cleanedWxid, wxid]) : null
+        let tables: string[] = []
         try {
-          tables = await dbAdapter.all<{ name: string }>(
-            'message',
-            dbPath,
-            "SELECT name FROM sqlite_master WHERE type='table' AND lower(name) LIKE 'msg_%'"
-          )
-        } catch {
+          tables = await listExactMessageTables(dbPath)
+        } catch (e) {
+          recordStatsError(errors, e, { dbPath, prefix: '[AnnualReportService]' })
           continue
         }
 
-        for (const { name: tableName } of tables) {
-          // 从表名提取 hash，查找对应的 sessionId
-          const tableHash = this.extractTableHash(tableName)
-          if (!tableHash) continue
-          const sessionId = hashToUsername.get(tableHash)
-          if (!sessionId) continue // 不是私聊表
-
-          tablesProcessed++
+        for (const tableName of tables) {
+          const tableHash = extractExactMessageTableHash(tableName)
+          const sessionId = tableHash ? hashToUsername.get(tableHash) : undefined
+          if (!sessionId) continue
 
           try {
-            // 必须有 Name2Id 表和 myRowId 才能正确判断发送者
-            if (!hasName2Id || myRowId === null) {
-              // 没有 Name2Id 表，无法判断发送者，跳过此表
-              continue
-            }
-
-            // 检查表是否有内容字段（按优先级尝试多个字段名）
-            const columns = await dbAdapter.all<{ name: string }>(
+            const columns = await getMessageTableColumns(dbPath, tableName)
+            const where = buildMessageStatsWhere({ range, contentColumn: columns.contentColumn || undefined })
+            const selectFields = [
+              'create_time',
+              'local_type',
+              columns.hasRealSenderId ? 'real_sender_id' : 'NULL as real_sender_id',
+              columns.hasIsSend ? 'is_send' : 'NULL as is_send',
+              columns.contentColumn ? `"${columns.contentColumn}" as msg_content` : 'NULL as msg_content',
+            ].join(', ')
+            const messages = await dbAdapter.all<any>(
               'message',
               dbPath,
-              `PRAGMA table_info("${tableName}")`
+              `SELECT ${selectFields}
+               FROM "${tableName}"
+               ${where.sql}
+               ORDER BY create_time ASC`,
+              where.params
             )
-            const columnNames = columns.map(c => c.name.toLowerCase())
-            
-            // 内容字段候选列表（按优先级排序）
-            const contentCandidates = ['display_content', 'message_content', 'content', 'msg_content', 'WCDB_CT_message_content']
-            let contentColumn: string | null = null
-            for (const candidate of contentCandidates) {
-              if (columnNames.includes(candidate.toLowerCase())) {
-                contentColumn = candidate
-                break
-              }
-            }
 
-            const selectFields = `
-              create_time, 
-              CASE WHEN real_sender_id = ${myRowId} THEN 1 ELSE 0 END as is_sent,
-              strftime('%Y-%m-%d', create_time, 'unixepoch', 'localtime') as day,
-              CAST(strftime('%m', create_time, 'unixepoch', 'localtime') AS INTEGER) as month,
-              CAST(strftime('%H', create_time, 'unixepoch', 'localtime') AS INTEGER) as hour,
-              CAST(strftime('%w', create_time, 'unixepoch', 'localtime') AS INTEGER) as weekday,
-              local_type
-              ${contentColumn ? `, "${contentColumn}" as msg_content` : ''}
-            `
-
-            const query = `
-              SELECT ${selectFields}
-              FROM "${tableName}"
-              WHERE create_time >= ? AND create_time <= ?
-              ORDER BY create_time ASC
-            `
-
-            const messages = await dbAdapter.all<{
-              create_time: number; is_sent: number; day: string; month: number; hour: number; weekday: number;
-              local_type: number; msg_content?: string | null
-            }>('message', dbPath, query, [startTime, endTime])
-
-            // 用于计算对话发起和回复时间
             let lastMsg = lastMessageTime.get(sessionId)
-            const CONVERSATION_GAP = 3600 // 1小时内算同一对话
+            const CONVERSATION_GAP = 3600
 
             for (const msg of messages) {
+              const createTime = Number(msg.create_time || 0)
+              if (createTime <= 0) continue
+              const direction = this.resolveDirection(msg, myRowId, columns.hasRealSenderId && hasName2Id, columns.hasIsSend)
+              const isSent = direction === 'sent'
+              const parts = toLocalDateParts(createTime)
+              const monthBucket = isAllTime ? parts.monthKey : String(parts.month)
+
               totalMessages++
+              allActiveDays.add(parts.day)
 
-              // 联系人统计
-              if (!contactStats.has(sessionId)) {
-                contactStats.set(sessionId, { sent: 0, received: 0 })
-              }
-              const stats = contactStats.get(sessionId)!
-              if (msg.is_sent === 1) {
-                stats.sent++
-              } else {
-                stats.received++
-              }
+              const stats = contactStats.get(sessionId) || { sent: 0, received: 0, unknown: 0 }
+              stats[direction]++
+              contactStats.set(sessionId, stats)
 
-              // 对话发起统计
-              if (!conversationStarts.has(sessionId)) {
-                conversationStarts.set(sessionId, { initiated: 0, received: 0 })
-              }
-              const convStats = conversationStarts.get(sessionId)!
-              
-              if (!lastMsg || (msg.create_time - lastMsg.time) > CONVERSATION_GAP) {
-                // 新对话开始
-                if (msg.is_sent === 1) {
-                  convStats.initiated++
-                } else {
-                  convStats.received++
-                }
-              } else if (lastMsg.isSent !== (msg.is_sent === 1)) {
-                // 回复时间统计（对方发消息后我回复）
-                if (msg.is_sent === 1 && !lastMsg.isSent) {
-                  const responseTime = msg.create_time - lastMsg.time
-                  if (responseTime > 0 && responseTime < 86400) { // 24小时内的回复
-                    if (!responseTimeStats.has(sessionId)) {
-                      responseTimeStats.set(sessionId, [])
-                    }
-                    responseTimeStats.get(sessionId)!.push(responseTime)
-                  }
+              const convStats = conversationStarts.get(sessionId) || { initiated: 0, received: 0 }
+              if (!lastMsg || (createTime - lastMsg.time) > CONVERSATION_GAP) {
+                if (isSent) convStats.initiated++
+                else convStats.received++
+              } else if (lastMsg.isSent !== isSent && isSent && !lastMsg.isSent) {
+                const responseTime = createTime - lastMsg.time
+                if (responseTime > 0 && responseTime < 86400) {
+                  const times = responseTimeStats.get(sessionId) || []
+                  times.push(responseTime)
+                  responseTimeStats.set(sessionId, times)
                 }
               }
-              
-              lastMsg = { time: msg.create_time, isSent: msg.is_sent === 1 }
+              conversationStarts.set(sessionId, convStats)
+              lastMsg = { time: createTime, isSent }
               lastMessageTime.set(sessionId, lastMsg)
 
-              // 常用语统计（只统计文本消息，local_type 1 和 244813135921 都是文本消息）
-              if ((msg.local_type === 1 || msg.local_type === 244813135921) && msg.msg_content && msg.is_sent === 1) {
-                const content = String(msg.msg_content)
-                  .trim()
-                  .toLowerCase()
-                  .replace(/[\p{P}\p{S}]+$/gu, '');
-                // 过滤掉系统消息、链接等
-                if (content.length >= 2 && content.length <= 20 && 
-                    !content.includes('http') && 
-                    !content.includes('<') &&
-                    !content.startsWith('[') &&
-                    !content.startsWith('<?xml')) {
-                  phraseCount.set(content, (phraseCount.get(content) || 0) + 1)
+              if (TEXT_LOCAL_TYPES.includes(Number(msg.local_type) as any) && msg.msg_content && isSent) {
+                for (const phrase of this.segmentPhrase(msg.msg_content)) {
+                  phraseCount.set(phrase, (phraseCount.get(phrase) || 0) + 1)
                 }
               }
 
-              // 月度统计
-              if (!monthlyStats.has(sessionId)) {
-                monthlyStats.set(sessionId, new Map())
-              }
-              const monthMap = monthlyStats.get(sessionId)!
-              monthMap.set(msg.month, (monthMap.get(msg.month) || 0) + 1)
+              const monthMap = monthlyStats.get(sessionId) || new Map<string, number>()
+              monthMap.set(monthBucket, (monthMap.get(monthBucket) || 0) + 1)
+              monthlyStats.set(sessionId, monthMap)
 
-              // 日统计
-              dailyStats.set(msg.day, (dailyStats.get(msg.day) || 0) + 1)
-              if (!dailyContactStats.has(msg.day)) {
-                dailyContactStats.set(msg.day, new Map())
-              }
-              const dayContactMap = dailyContactStats.get(msg.day)!
+              dailyStats.set(parts.day, (dailyStats.get(parts.day) || 0) + 1)
+              const dayContactMap = dailyContactStats.get(parts.day) || new Map<string, number>()
               dayContactMap.set(sessionId, (dayContactMap.get(sessionId) || 0) + 1)
+              dailyContactStats.set(parts.day, dayContactMap)
 
-              // 火花统计：收集每个会话的活跃日期
-              if (!sessionActiveDays.has(sessionId)) {
-                sessionActiveDays.set(sessionId, new Set())
-              }
-              sessionActiveDays.get(sessionId)!.add(msg.day)
+              const activeDays = sessionActiveDays.get(sessionId) || new Set<string>()
+              activeDays.add(parts.day)
+              sessionActiveDays.set(sessionId, activeDays)
 
-              // 热力图 (weekday: 0=周日, 1-6=周一到周六)
-              const weekdayIndex = msg.weekday === 0 ? 6 : msg.weekday - 1
-              heatmapData[weekdayIndex][msg.hour]++
-
-              // 深夜统计 (0-5点)
-              if (msg.hour >= 0 && msg.hour < 6) {
+              const weekdayIndex = parts.weekday === 0 ? 6 : parts.weekday - 1
+              heatmapData[weekdayIndex][parts.hour]++
+              if (parts.hour >= 0 && parts.hour < 6) {
                 midnightStats.set(sessionId, (midnightStats.get(sessionId) || 0) + 1)
               }
             }
-          } catch {
-            // skip error
+          } catch (e) {
+            recordStatsError(errors, e, { dbPath, tableName, prefix: '[AnnualReportService]' })
           }
         }
       }
 
-      // 获取联系人信息
-      const contactDbPath = findDbByName('contact.db')
-      const contactInfoMap = new Map<string, { displayName: string; avatarUrl?: string }>()
-      let selfAvatarUrl: string | undefined
+      const contactInfoMap = await resolveContactNames(Array.from(contactStats.keys()).concat([cleanedWxid, wxid]))
+      const selfAvatarUrl = contactInfoMap.get(cleanedWxid)?.avatarUrl || contactInfoMap.get(wxid)?.avatarUrl
 
-      if (contactDbPath) {
-        try {
-          // 获取自己的头像
-          try {
-            const self = await dbAdapter.get<{ small_head_url?: string }>(
-              'contact',
-              '',
-              'SELECT small_head_url FROM contact WHERE username = ?',
-              [cleanedWxid]
-            )
-            selfAvatarUrl = self?.small_head_url
-          } catch { /* skip */ }
-
-          for (const sessionId of Array.from(contactStats.keys())) {
-            try {
-              const contact = await dbAdapter.get<{ nick_name?: string; remark?: string; small_head_url?: string }>(
-                'contact',
-                '',
-                'SELECT nick_name, remark, small_head_url FROM contact WHERE username = ?',
-                [sessionId]
-              )
-              if (contact) {
-                contactInfoMap.set(sessionId, {
-                  displayName: contact.remark || contact.nick_name || sessionId,
-                  avatarUrl: contact.small_head_url
-                })
-              }
-            } catch { /* skip */ }
-          }
-        } catch { /* skip */ }
-      }
-
-      // 构建年度挚友 (Top 10)
       const coreFriends: TopContact[] = Array.from(contactStats.entries())
         .map(([sessionId, stats]) => {
           const info = contactInfoMap.get(sessionId)
@@ -525,52 +360,50 @@ class AnnualReportService {
             username: sessionId,
             displayName: info?.displayName || sessionId,
             avatarUrl: info?.avatarUrl,
-            messageCount: stats.sent + stats.received,
+            messageCount: stats.sent + stats.received + stats.unknown,
             sentCount: stats.sent,
             receivedCount: stats.received
           }
         })
         .sort((a, b) => b.messageCount - a.messageCount)
-        .slice(0, 3)
+        .slice(0, 10)
 
-      // 构建月度好友
       const monthlyTopFriends: MonthlyTopFriend[] = []
-      for (let month = 1; month <= 12; month++) {
+      const monthBuckets = isAllTime
+        ? Array.from(new Set(Array.from(monthlyStats.values()).flatMap(m => Array.from(m.keys())))).sort()
+        : Array.from({ length: 12 }, (_, i) => String(i + 1))
+      for (const bucket of monthBuckets) {
         let maxCount = 0
         let topSessionId = ''
-        const sessionIds = Array.from(monthlyStats.keys())
-        for (const sessionId of sessionIds) {
-          const monthMap = monthlyStats.get(sessionId)!
-          const count = monthMap.get(month) || 0
+        for (const [sessionId, monthMap] of monthlyStats.entries()) {
+          const count = monthMap.get(bucket) || 0
           if (count > maxCount) {
             maxCount = count
             topSessionId = sessionId
           }
         }
         const info = contactInfoMap.get(topSessionId)
+        const month = isAllTime ? Number(bucket.slice(5, 7)) || 0 : Number(bucket)
         monthlyTopFriends.push({
           month,
+          bucket,
+          label: isAllTime ? bucket : `${month}月`,
           displayName: info?.displayName || (topSessionId ? topSessionId : '暂无'),
           avatarUrl: info?.avatarUrl,
           messageCount: maxCount
         })
       }
 
-      // 找出巅峰日
       let peakDay: ChatPeakDay | null = null
       let maxDayCount = 0
-      const days = Array.from(dailyStats.keys())
-      for (const day of days) {
-        const count = dailyStats.get(day)!
+      for (const [day, count] of dailyStats.entries()) {
         if (count > maxDayCount) {
           maxDayCount = count
           const dayContactMap = dailyContactStats.get(day)
           let topFriend = ''
           let topFriendCount = 0
           if (dayContactMap) {
-            const contactIds = Array.from(dayContactMap.keys())
-            for (const sessionId of contactIds) {
-              const c = dayContactMap.get(sessionId)!
+            for (const [sessionId, c] of dayContactMap.entries()) {
               if (c > topFriendCount) {
                 topFriendCount = c
                 topFriend = contactInfoMap.get(sessionId)?.displayName || sessionId
@@ -581,15 +414,11 @@ class AnnualReportService {
         }
       }
 
-      // 找出深夜好友
       let midnightKing: AnnualReportData['midnightKing'] = null
-      const totalMidnight = Array.from(midnightStats.values()).reduce((a: number, b: number) => a + b, 0)
-      if (totalMidnight > 0) {
+      if (totalMessages > 0 && midnightStats.size > 0) {
         let maxMidnight = 0
         let midnightSessionId = ''
-        const midnightIds = Array.from(midnightStats.keys())
-        for (const sessionId of midnightIds) {
-          const count = midnightStats.get(sessionId)!
+        for (const [sessionId, count] of midnightStats.entries()) {
           if (count > maxMidnight) {
             maxMidnight = count
             midnightSessionId = sessionId
@@ -599,84 +428,59 @@ class AnnualReportService {
         midnightKing = {
           displayName: info?.displayName || midnightSessionId,
           count: maxMidnight,
-          percentage: Math.round((maxMidnight / totalMidnight) * 1000) / 10
+          percentage: Math.round((maxMidnight / totalMessages) * 1000) / 10
         }
       }
 
-      // 计算最长连续聊天（基于 sessionActiveDays 中收集的活跃日期）
       let longestStreak: AnnualReportData['longestStreak'] = null
       let bestStreakDays = 0
       let bestStreakSessionId = ''
-      let bestStreakStart: Date | null = null
-      let bestStreakEnd: Date | null = null
-
-      for (const [sessionId, activeDaysSet] of Array.from(sessionActiveDays.entries())) {
-        if (activeDaysSet.size < 2) continue // 至少需要2天才能形成连续
-
-        // 将日期字符串转换为 Date 对象并排序
-        const sortedDates = Array.from(activeDaysSet)
-          .map(dateStr => new Date(dateStr + 'T00:00:00'))
-          .sort((a, b) => a.getTime() - b.getTime())
-
-        // 计算最长连续天数
+      let bestStart = ''
+      let bestEnd = ''
+      for (const [sessionId, activeDaysSet] of sessionActiveDays.entries()) {
+        const sortedKeys = Array.from(activeDaysSet).sort()
+        if (sortedKeys.length < 2) continue
         let currentStreak = 1
-        let currentStart = sortedDates[0]
+        let currentStart = sortedKeys[0]
         let maxStreak = 1
-        let maxStart = sortedDates[0]
-        let maxEnd = sortedDates[0]
-
-        for (let i = 1; i < sortedDates.length; i++) {
-          const prevDate = sortedDates[i - 1]
-          const currDate = sortedDates[i]
-          const diffDays = Math.round((currDate.getTime() - prevDate.getTime()) / (24 * 60 * 60 * 1000))
-
+        let maxStart = sortedKeys[0]
+        let maxEnd = sortedKeys[0]
+        for (let i = 1; i < sortedKeys.length; i++) {
+          const prev = utcDateFromLocalKey(sortedKeys[i - 1])
+          const curr = utcDateFromLocalKey(sortedKeys[i])
+          const diffDays = Math.round((curr.getTime() - prev.getTime()) / 86400000)
           if (diffDays === 1) {
-            // 连续的一天
             currentStreak++
           } else {
-            // 不连续，重新开始计数
             currentStreak = 1
-            currentStart = currDate
+            currentStart = sortedKeys[i]
           }
-
           if (currentStreak > maxStreak) {
             maxStreak = currentStreak
             maxStart = currentStart
-            maxEnd = currDate
+            maxEnd = sortedKeys[i]
           }
         }
-
         if (maxStreak > bestStreakDays) {
           bestStreakDays = maxStreak
           bestStreakSessionId = sessionId
-          bestStreakStart = maxStart
-          bestStreakEnd = maxEnd
+          bestStart = maxStart
+          bestEnd = maxEnd
         }
       }
-
-      // 构建最终结果
-      if (bestStreakSessionId && bestStreakDays > 0 && bestStreakStart && bestStreakEnd) {
-        const info = contactInfoMap.get(bestStreakSessionId)
-        const formatDate = (d: Date) => {
-          const y = d.getFullYear()
-          const m = String(d.getMonth() + 1).padStart(2, '0')
-          const day = String(d.getDate()).padStart(2, '0')
-          return `${y}-${m}-${day}`
-        }
+      if (bestStreakSessionId && bestStreakDays > 0) {
         longestStreak = {
-          friendName: info?.displayName || bestStreakSessionId,
+          friendName: contactInfoMap.get(bestStreakSessionId)?.displayName || bestStreakSessionId,
           days: bestStreakDays,
-          startDate: formatDate(bestStreakStart),
-          endDate: formatDate(bestStreakEnd)
+          startDate: bestStart,
+          endDate: bestEnd
         }
       }
 
-      // 计算双向奔赴（发送/接收比例最接近1:1的好友）
       let mutualFriend: AnnualReportData['mutualFriend'] = null
       let bestRatioDiff = Infinity
-      const contactEntries = Array.from(contactStats.entries())
-      for (const [sessionId, stats] of contactEntries) {
-        if (stats.sent >= 50 && stats.received >= 50) { // 至少各50条消息
+      for (const [sessionId, stats] of contactStats.entries()) {
+        if (stats.sent >= 50 && stats.received >= 50) {
           const ratio = stats.sent / stats.received
           const ratioDiff = Math.abs(ratio - 1)
           if (ratioDiff < bestRatioDiff) {
@@ -693,34 +497,29 @@ class AnnualReportService {
         }
       }
 
-      // 计算社交主动性
-      let socialInitiative: AnnualReportData['socialInitiative'] = null
       let totalInitiated = 0
       let totalReceived = 0
-      const convValues = Array.from(conversationStarts.values())
-      for (const stats of convValues) {
+      for (const stats of conversationStarts.values()) {
         totalInitiated += stats.initiated
         totalReceived += stats.received
       }
       const totalConversations = totalInitiated + totalReceived
-      if (totalConversations > 0) {
-        socialInitiative = {
-          initiatedChats: totalInitiated,
-          receivedChats: totalReceived,
-          initiativeRate: Math.round((totalInitiated / totalConversations) * 1000) / 10
-        }
-      }
+      const socialInitiative = totalConversations > 0
+        ? {
+            initiatedChats: totalInitiated,
+            receivedChats: totalReceived,
+            initiativeRate: Math.round((totalInitiated / totalConversations) * 1000) / 10
+          }
+        : null
 
-      // 计算回复速度
       let responseSpeed: AnnualReportData['responseSpeed'] = null
-      let allResponseTimes: number[] = []
+      const allResponseTimes: number[] = []
       let fastestFriendId = ''
       let fastestAvgTime = Infinity
-      const responseEntries = Array.from(responseTimeStats.entries())
-      for (const [sessionId, times] of responseEntries) {
-        if (times.length >= 10) { // 至少10次回复
+      for (const [sessionId, times] of responseTimeStats.entries()) {
+        if (times.length >= 10) {
           allResponseTimes.push(...times)
-          const avgTime = times.reduce((a: number, b: number) => a + b, 0) / times.length
+          const avgTime = times.reduce((a, b) => a + b, 0) / times.length
           if (avgTime < fastestAvgTime) {
             fastestAvgTime = avgTime
             fastestFriendId = sessionId
@@ -728,18 +527,16 @@ class AnnualReportService {
         }
       }
       if (allResponseTimes.length > 0) {
-        const avgResponseTime = allResponseTimes.reduce((a: number, b: number) => a + b, 0) / allResponseTimes.length
-        const fastestInfo = contactInfoMap.get(fastestFriendId)
+        const avgResponseTime = allResponseTimes.reduce((a, b) => a + b, 0) / allResponseTimes.length
         responseSpeed = {
           avgResponseTime: Math.round(avgResponseTime),
-          fastestFriend: fastestInfo?.displayName || fastestFriendId,
+          fastestFriend: contactInfoMap.get(fastestFriendId)?.displayName || fastestFriendId,
           fastestTime: Math.round(fastestAvgTime)
         }
       }
 
-      // 计算年度常用语（Top 32 for word cloud）
       const topPhrases = Array.from(phraseCount.entries())
-        .filter(([_, count]) => count >= 2) // 至少使用2次
+        .filter(([, count]) => count >= 2)
         .sort((a, b) => b[1] - a[1])
         .slice(0, 32)
         .map(([phrase, count]) => ({ phrase, count }))
@@ -755,12 +552,13 @@ class AnnualReportService {
         activityHeatmap: { data: heatmapData },
         midnightKing,
         selfAvatarUrl,
+        daysCovered: allActiveDays.size,
         mutualFriend,
         socialInitiative,
         responseSpeed,
-        topPhrases
+        topPhrases,
       }
-
+      if (errors.length > 0) Object.assign(reportData, { errors, partialFailureCount: errors.length })
       return { success: true, data: reportData }
     } catch (e) {
       return { success: false, error: String(e) }
@@ -768,7 +566,7 @@ class AnnualReportService {
   }
 
   close() {
-    this.myRowIdCache.clear()
+    // 共享 messageDbScanner 缓存由账号切换入口统一清理。
   }
 }
 

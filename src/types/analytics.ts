@@ -11,10 +11,20 @@ export interface ChatStatistics {
   otherMessages: number
   sentMessages: number
   receivedMessages: number
+  unknownMessages?: number
   firstMessageTime: number | null  // Unix timestamp
   lastMessageTime: number | null
   activeDays: number
   messageTypeCounts: Record<number, number>
+  errors?: StatsPartialError[]
+  partialFailureCount?: number
+}
+
+export interface StatsPartialError {
+  dbName?: string
+  dbPath?: string
+  tableName?: string
+  message: string
 }
 
 // 时间分布统计
@@ -22,6 +32,8 @@ export interface TimeDistribution {
   hourlyDistribution: Record<number, number>  // 0-23
   weekdayDistribution: Record<number, number> // 1-7
   monthlyDistribution: Record<string, number> // YYYY-MM
+  errors?: StatsPartialError[]
+  partialFailureCount?: number
 }
 
 // 联系人排名
@@ -32,6 +44,7 @@ export interface ContactRanking {
   messageCount: number
   sentCount: number
   receivedCount: number
+  unknownCount?: number
   lastMessageTime: number | null
 }
 
@@ -42,7 +55,7 @@ export const MESSAGE_TYPE_LABELS: Record<number, string> = {
   3: '图片',
   34: '语音',
   43: '视频',
-  47: '表情',
+  47: '表情包消息',
   48: '位置',
   49: '链接/文件',
   42: '名片',

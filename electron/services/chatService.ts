@@ -11,6 +11,9 @@ import { dbAdapter } from './dbAdapter'
 import { findMessageDbPaths, getDbStoragePath } from './dbStoragePaths'
 import { wcdbService } from './wcdbService'
 import { imageDecryptService } from './imageDecryptService'
+import { clearMessageDbScannerCache, getMessageTableColumns } from './messageDbScanner'
+import { buildMessageStatsWhere, quoteIdent, recordStatsError } from './statsSqlHelpers'
+import type { StatsPartialError } from './statsConstants'
 
 export interface ChatSession {
   username: string
@@ -637,6 +640,7 @@ class ChatService extends EventEmitter {
     this.myRowIdCache.clear()
     this.hasName2IdCache.clear()
     this.contactColumnsCache = null
+    clearMessageDbScannerCache()
     // 尝试推送增量消息（fire-and-forget，避免把同步方法改成 async）
     void this.checkNewMessagesForCurrentSession()
   }
@@ -681,10 +685,6 @@ class ChatService extends EventEmitter {
           return name
         }
 
-        // 兜底兼容：历史表名规则可能不完全一致，采用大小写无关包含匹配
-        if (name.toLowerCase().includes(hash)) {
-          return name
-        }
       }
 
       if (tables.length > 0 && process.env.CIPHERTALK_CHAT_DEBUG === '1') {
@@ -4704,6 +4704,8 @@ class ChatService extends EventEmitter {
       firstMessageTime?: number
       latestMessageTime?: number
       messageTables: { dbName: string; tableName: string; count: number }[]
+      errors?: StatsPartialError[]
+      partialFailureCount?: number
     }
     error?: string
   }> {
@@ -4767,14 +4769,20 @@ class ChatService extends EventEmitter {
       let totalMessageCount = 0
       let firstMessageTime: number | undefined
       let latestMessageTime: number | undefined
+      const errors: StatsPartialError[] = []
 
       for (const { tableName, dbPath } of dbTablePairs) {
         try {
-          // 获取消息数量
+          const columns = await getMessageTableColumns(dbPath, tableName)
+          const where = buildMessageStatsWhere({ contentColumn: columns.contentColumn || undefined })
+          const safeTable = quoteIdent(tableName)
+
+          // 获取消息数量（排除系统消息 / 撤回 / 拍一拍 / 空内容）
           const countResult = await dbAdapter.get<any>(
             'message',
             dbPath,
-            `SELECT COUNT(*) as count FROM ${tableName}`
+            `SELECT COUNT(*) as count FROM ${safeTable} ${where.sql}`,
+            where.params
           )
           const count = countResult?.count || 0
           totalMessageCount += count
@@ -4784,17 +4792,18 @@ class ChatService extends EventEmitter {
             'message',
             dbPath,
             `SELECT MIN(create_time) as first_time, MAX(create_time) as last_time
-             FROM ${tableName}`
+             FROM ${safeTable} ${where.sql}`,
+            where.params
           )
 
           if (timeResult) {
-            if (timeResult.first_time) {
-              if (!firstMessageTime || timeResult.first_time < firstMessageTime) {
+            if (timeResult.first_time !== null && timeResult.first_time !== undefined && timeResult.first_time > 0) {
+              if (firstMessageTime === undefined || timeResult.first_time < firstMessageTime) {
                 firstMessageTime = timeResult.first_time
               }
             }
-            if (timeResult.last_time) {
-              if (!latestMessageTime || timeResult.last_time > latestMessageTime) {
+            if (timeResult.last_time !== null && timeResult.last_time !== undefined && timeResult.last_time > 0) {
+              if (latestMessageTime === undefined || timeResult.last_time > latestMessageTime) {
                 latestMessageTime = timeResult.last_time
               }
             }
@@ -4805,8 +4814,14 @@ class ChatService extends EventEmitter {
             tableName,
             count
           })
-        } catch { }
+        } catch (e) {
+          recordStatsError(errors, e, { dbPath, tableName, prefix: '[ChatService][SessionDetail]' })
+        }
       }
+
+      const extra = errors.length > 0
+        ? { errors, partialFailureCount: errors.length }
+        : {}
 
       return {
         success: true,
@@ -4820,7 +4835,8 @@ class ChatService extends EventEmitter {
           messageCount: totalMessageCount,
           firstMessageTime,
           latestMessageTime,
-          messageTables
+          messageTables,
+          ...extra,
         }
       }
     } catch (e) {

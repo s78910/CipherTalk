@@ -69,7 +69,7 @@ function AnalyticsPage() {
       { name: '图片', value: statistics.imageMessages },
       { name: '语音', value: statistics.voiceMessages },
       { name: '视频', value: statistics.videoMessages },
-      { name: '表情', value: statistics.emojiMessages },
+      { name: '表情包消息', value: statistics.emojiMessages },
       { name: '其他', value: statistics.otherMessages },
     ].filter(d => d.value > 0)
     return {
@@ -84,8 +84,9 @@ function AnalyticsPage() {
       tooltip: { trigger: 'item' },
       series: [{ type: 'pie', radius: ['50%', '70%'], data: [
         { name: '发送', value: statistics.sentMessages, itemStyle: { color: '#07c160' } },
-        { name: '接收', value: statistics.receivedMessages, itemStyle: { color: '#1989fa' } }
-      ], label: { show: true, formatter: '{b}: {c}' } }]
+        { name: '接收', value: statistics.receivedMessages, itemStyle: { color: '#1989fa' } },
+        { name: '未知', value: statistics.unknownMessages || 0, itemStyle: { color: '#94a3b8' } }
+      ].filter(item => item.value > 0), label: { show: true, formatter: '{b}: {c}' } }]
     }
   }
 
@@ -157,6 +158,11 @@ function AnalyticsPage() {
               <span>数据范围: {formatDate(statistics.firstMessageTime)} - {formatDate(statistics.lastMessageTime)}</span>
             </div>
           )}
+          {!!statistics?.partialFailureCount && (
+            <div className="time-range">
+              <span>部分数据库读取失败（{statistics.partialFailureCount} 个分片），统计结果可能不完整</span>
+            </div>
+          )}
           <div className="charts-grid">
             <div className="chart-card"><h3>消息类型分布</h3><ReactECharts option={getTypeChartOption()} style={{ height: 300 }} /></div>
             <div className="chart-card"><h3>发送/接收比例</h3><ReactECharts option={getSendReceiveOption()} style={{ height: 300 }} /></div>
@@ -175,7 +181,10 @@ function AnalyticsPage() {
                 </div>
                 <div className="contact-info">
                   <span className="contact-name">{contact.displayName}</span>
-                  <span className="contact-stats">发送 {contact.sentCount} / 接收 {contact.receivedCount}</span>
+                  <span className="contact-stats">
+                    发送 {contact.sentCount} / 接收 {contact.receivedCount}
+                    {!!contact.unknownCount && ` / 未知 ${contact.unknownCount}`}
+                  </span>
                 </div>
                 <span className="message-count">{formatNumber(contact.messageCount)} 条</span>
               </div>

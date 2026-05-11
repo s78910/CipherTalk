@@ -1,5 +1,18 @@
 import { ipcMain } from 'electron'
 import type { MainProcessContext } from '../context'
+import { analyticsService } from '../../services/analyticsService'
+import { annualReportService } from '../../services/annualReportService'
+import { chatService } from '../../services/chatService'
+import { groupAnalyticsService } from '../../services/groupAnalyticsService'
+import { clearMessageDbScannerCache } from '../../services/messageDbScanner'
+
+function clearStatsCaches(): void {
+  clearMessageDbScannerCache()
+  chatService.close()
+  analyticsService.close()
+  annualReportService.close()
+  groupAnalyticsService.close()
+}
 
 export function registerAccountHandlers(ctx: MainProcessContext): void {
   ipcMain.handle('accounts:list', async () => {
@@ -11,11 +24,15 @@ export function registerAccountHandlers(ctx: MainProcessContext): void {
   })
 
   ipcMain.handle('accounts:setActive', async (_, accountId: string) => {
-    return ctx.getConfigService()?.setActiveAccount(accountId) || null
+    const result = ctx.getConfigService()?.setActiveAccount(accountId) || null
+    clearStatsCaches()
+    return result
   })
 
   ipcMain.handle('accounts:save', async (_, profile: any) => {
-    return ctx.getConfigService()?.saveAccount(profile) || null
+    const result = ctx.getConfigService()?.saveAccount(profile) || null
+    clearStatsCaches()
+    return result
   })
 
   ipcMain.handle('accounts:update', async (_, accountId: string, patch: any) => {
@@ -40,6 +57,7 @@ export function registerAccountHandlers(ctx: MainProcessContext): void {
     }
 
     const result = configService.deleteAccount(accountId)
+    clearStatsCaches()
     return { success: true, deleted: result.deleted, nextActiveAccountId: result.nextActiveAccountId }
   })
 }
