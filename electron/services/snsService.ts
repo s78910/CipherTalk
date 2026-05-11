@@ -6,6 +6,7 @@ import crypto from 'crypto'
 import zlib from 'zlib'
 import { chatService } from './chatService'
 import { dbAdapter } from './dbAdapter'
+import { wcdbService } from './wcdbService'
 import { WasmService } from './wasmService'
 import { Isaac64 } from './isaac64'
 
@@ -1173,125 +1174,132 @@ class SnsService {
         return join(this.getSnsCacheDir(), `${hash}${ext}`)
     }
 
+    private normalizeMedia(media: SnsMedia[], videoKey?: string): SnsMedia[] {
+        return (Array.isArray(media) ? media : []).map((m: any) => {
+            const isMediaVideo = isVideoUrl(String(m.url || ''))
+
+            return {
+                url: fixSnsUrl(String(m.url || ''), m.token, isMediaVideo),
+                thumb: fixSnsUrl(String(m.thumb || ''), m.token, false),
+                md5: m.md5,
+                token: m.token,
+                key: isMediaVideo ? (videoKey || m.key) : m.key,
+                thumbKey: m.thumbKey,
+                encIdx: m.encIdx,
+                width: m.width !== undefined ? Number(m.width) : undefined,
+                height: m.height !== undefined ? Number(m.height) : undefined,
+                livePhoto: m.livePhoto ? {
+                    url: fixSnsUrl(String(m.livePhoto.url || ''), m.livePhoto.token, true),
+                    thumb: fixSnsUrl(String(m.livePhoto.thumb || ''), m.livePhoto.token, false),
+                    token: m.livePhoto.token,
+                    key: videoKey || m.livePhoto.key || m.key,
+                    md5: m.livePhoto.md5,
+                    encIdx: m.livePhoto.encIdx
+                } : undefined
+            }
+        })
+    }
+
+    private async normalizeTimelineRow(row: any): Promise<SnsPost> {
+        const xmlContent = String(row.rawXml || row.content || row.xml || '')
+        const username = String(row.username || row.user_name || row.userName || '')
+        const contact = username ? await chatService.getContact(username) : null
+        const avatarInfo = username ? await chatService.getContactAvatar(username) : null
+
+        let createTime = Number(row.createTime || row.create_time || 0)
+        let contentDesc = String(row.contentDesc || row.content_desc || '')
+        let snsId = String(row.id || row.snsId || row.sns_id || row.tid || '')
+        let type = Number(row.type || 1)
+        const { media: parsedMedia, videoKey } = this.parseMediaFromXml(xmlContent)
+
+        if (xmlContent) {
+            const createTimeMatch = xmlContent.match(/<createTime>(\d+)<\/createTime>/i)
+            if (!createTime && createTimeMatch) {
+                createTime = parseInt(createTimeMatch[1])
+            }
+
+            const idMatch = xmlContent.match(/<id>(\d+)<\/id>/i)
+            if (idMatch) {
+                snsId = idMatch[1]
+            }
+
+            const contentDescMatch = xmlContent.match(/<contentDesc(?:\s+[^>]*)?>([^<]*)<\/contentDesc>/i)
+            if (!contentDesc && contentDescMatch) {
+                contentDesc = contentDescMatch[1].trim()
+            }
+
+            const typeMatch = xmlContent.match(/<type>(\d+)<\/type>/i)
+            if (typeMatch) {
+                type = parseInt(typeMatch[1])
+            }
+        }
+
+        const media = Array.isArray(row.media) && row.media.length > 0
+            ? row.media
+            : parsedMedia
+
+        return {
+            id: snsId,
+            username,
+            nickname: row.nickname || contact?.remark || contact?.nickName || contact?.alias || username,
+            avatarUrl: row.avatarUrl || avatarInfo?.avatarUrl,
+            createTime,
+            contentDesc,
+            type,
+            media: this.normalizeMedia(media, videoKey),
+            shareInfo: row.shareInfo || extractShareInfo(xmlContent),
+            likes: Array.isArray(row.likes) ? row.likes : this.parseLikesFromXml(xmlContent),
+            comments: Array.isArray(row.comments) ? this.normalizeComments(row.comments) : this.normalizeComments(this.parseCommentsFromXml(xmlContent)),
+            rawXml: xmlContent
+        }
+    }
+
+    private async getTimelineViaSql(limit: number, offset: number, usernames?: string[], keyword?: string, startTime?: number, endTime?: number): Promise<SnsPost[]> {
+        let sql = 'SELECT tid, user_name, content FROM SnsTimeLine WHERE 1=1'
+        const params: any[] = []
+
+        if (usernames && usernames.length > 0) {
+            sql += ` AND user_name IN (${usernames.map(() => '?').join(',')})`
+            params.push(...usernames)
+        }
+
+        if (keyword) {
+            sql += ' AND content LIKE ?'
+            params.push(`%${keyword}%`)
+        }
+
+        if (startTime) {
+            sql += ` AND CAST(SUBSTR(CAST(content AS TEXT), INSTR(CAST(content AS TEXT), '<createTime>') + 12, 10) AS INTEGER) >= ?`
+            params.push(startTime)
+        }
+        if (endTime) {
+            sql += ` AND CAST(SUBSTR(CAST(content AS TEXT), INSTR(CAST(content AS TEXT), '<createTime>') + 12, 10) AS INTEGER) <= ?`
+            params.push(endTime)
+        }
+
+        sql += ' ORDER BY tid DESC LIMIT ? OFFSET ?'
+        params.push(limit, offset)
+
+        const rows = await dbAdapter.all<any>('sns', '', sql, params)
+        return Promise.all(rows.map((row) => this.normalizeTimelineRow(row)))
+    }
+
     async getTimeline(limit: number = 20, offset: number = 0, usernames?: string[], keyword?: string, startTime?: number, endTime?: number): Promise<{ success: boolean; timeline?: SnsPost[]; error?: string }> {
         try {
-            // 构建 SQL 查询（参数化）
-            let sql = 'SELECT tid, user_name, content FROM SnsTimeLine WHERE 1=1'
-            const params: any[] = []
-
-            // 用户名过滤
-            if (usernames && usernames.length > 0) {
-                sql += ` AND user_name IN (${usernames.map(() => '?').join(',')})`
-                params.push(...usernames)
+            const nativeResult = await wcdbService.getSnsTimeline(limit, offset, usernames, keyword, startTime, endTime)
+            if (nativeResult.success && nativeResult.timeline) {
+                const nativeRows = Array.isArray(nativeResult.timeline)
+                    ? nativeResult.timeline
+                    : Array.isArray((nativeResult.timeline as any).timeline)
+                        ? (nativeResult.timeline as any).timeline
+                        : Array.isArray((nativeResult.timeline as any).items)
+                            ? (nativeResult.timeline as any).items
+                            : []
+                const timeline = await Promise.all(nativeRows.map((row) => this.normalizeTimelineRow(row)))
+                return { success: true, timeline }
             }
 
-            // 关键词过滤
-            if (keyword) {
-                sql += ' AND content LIKE ?'
-                params.push(`%${keyword}%`)
-            }
-
-            // 时间范围过滤
-            if (startTime) {
-                sql += ` AND CAST(SUBSTR(CAST(content AS TEXT), INSTR(CAST(content AS TEXT), '<createTime>') + 12, 10) AS INTEGER) >= ?`
-                params.push(startTime)
-            }
-            if (endTime) {
-                sql += ` AND CAST(SUBSTR(CAST(content AS TEXT), INSTR(CAST(content AS TEXT), '<createTime>') + 12, 10) AS INTEGER) <= ?`
-                params.push(endTime)
-            }
-
-            // 排序和分页（按 tid 降序，tid 越大越新）
-            sql += ' ORDER BY tid DESC LIMIT ? OFFSET ?'
-            params.push(limit, offset)
-
-            const rows = await dbAdapter.all<any>('sns', '', sql, params)
-
-            // 解析每条记录
-            const timeline: SnsPost[] = await Promise.all(rows.map(async (row) => {
-                const contact = await chatService.getContact(row.user_name)
-                const avatarInfo = await chatService.getContactAvatar(row.user_name)
-
-                // 解析 XML 获取媒体信息和其他字段
-                const xmlContent = row.content || ''
-                const { media, videoKey } = this.parseMediaFromXml(xmlContent)
-
-                // 从 XML 中提取基本信息
-                let createTime = 0
-                let contentDesc = ''
-                let snsId = String(row.tid)
-                let type = 1 // 默认类型
-
-                // 提取 createTime
-                const createTimeMatch = xmlContent.match(/<createTime>(\d+)<\/createTime>/i)
-                if (createTimeMatch) {
-                    createTime = parseInt(createTimeMatch[1])
-                }
-
-                // 提取 id
-                const idMatch = xmlContent.match(/<id>(\d+)<\/id>/i)
-                if (idMatch) {
-                    snsId = idMatch[1]
-                }
-
-                // 提取 contentDesc
-                const contentDescMatch = xmlContent.match(/<contentDesc(?:\s+[^>]*)?>([^<]*)<\/contentDesc>/i)
-                if (contentDescMatch) {
-                    contentDesc = contentDescMatch[1].trim()
-                }
-
-                // 提取 type
-                const typeMatch = xmlContent.match(/<type>(\d+)<\/type>/i)
-                if (typeMatch) {
-                    type = parseInt(typeMatch[1])
-                }
-
-                // 修正媒体 URL
-                const fixedMedia = media.map((m) => {
-                    const isMediaVideo = isVideoUrl(m.url)
-
-                    return {
-                        url: fixSnsUrl(m.url, m.token, isMediaVideo),
-                        thumb: fixSnsUrl(m.thumb, m.token, false),
-                        md5: m.md5,
-                        token: m.token,
-                        // 视频用 XML 的 key，图片用 media 的 key
-                        key: isMediaVideo ? (videoKey || m.key) : m.key,
-                        encIdx: m.encIdx,
-                        width: m.width,
-                        height: m.height,
-                        livePhoto: m.livePhoto ? {
-                            url: fixSnsUrl(m.livePhoto.url, m.livePhoto.token, true),
-                            thumb: fixSnsUrl(m.livePhoto.thumb, m.livePhoto.token, false),
-                            token: m.livePhoto.token,
-                            // 实况照片的视频部分用 XML 的 key
-                            key: videoKey || m.livePhoto.key || m.key,
-                            md5: m.livePhoto.md5,
-                            encIdx: m.livePhoto.encIdx
-                        } : undefined
-                    }
-                })
-
-                // 提取点赞和评论
-                const likes = this.parseLikesFromXml(xmlContent)
-                const comments = this.normalizeComments(this.parseCommentsFromXml(xmlContent))
-
-                return {
-                    id: snsId,
-                    username: row.user_name,
-                    nickname: contact?.remark || contact?.nickName || contact?.alias || row.user_name,
-                    avatarUrl: avatarInfo?.avatarUrl,
-                    createTime,
-                    contentDesc,
-                    type,
-                    media: fixedMedia,
-                    shareInfo: extractShareInfo(xmlContent),
-                    likes,
-                    comments,
-                    rawXml: xmlContent
-                }
-            }))
-
+            const timeline = await this.getTimelineViaSql(limit, offset, usernames, keyword, startTime, endTime)
             return { success: true, timeline }
         } catch (error: any) {
             console.error('[SnsService] 查询 SNS 数据失败:', error)
