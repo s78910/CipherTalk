@@ -1175,6 +1175,17 @@ export class ChatSearchIndexService {
     await onProgress?.(progress)
   }
 
+  private canReuseCompleteSearchIndexAfterSourceError(
+    state: ChatSearchIndexState | null,
+    error?: string
+  ): state is ChatSearchIndexState {
+    if (!state?.isComplete || state.indexedCount <= 0) return false
+    const message = String(error || '')
+    return message.includes('未找到该会话的消息表')
+      || message.includes('WCDB 未初始化')
+      || message.includes('Chat database is not ready')
+  }
+
   private getVectorIdsBySession(db: Database.Database, sessionId: string): number[] {
     return (db.prepare('SELECT id FROM message_vector_index WHERE session_id = ?').all(sessionId) as Array<{ id?: number }>)
       .map((row) => Number(row.id || 0))
@@ -1227,7 +1238,19 @@ export class ChatSearchIndexService {
           cursor.localId
         )
         if (!result.success) {
-          throw new Error(result.error || '更新搜索索引失败')
+          const errorMessage = result.error || '更新搜索索引失败'
+          if (this.canReuseCompleteSearchIndexAfterSourceError(state, errorMessage)) {
+            console.warn('[ChatSearchIndex] 源消息表不可用，复用已有搜索索引继续:', { sessionId, error: errorMessage })
+            await this.report({
+              stage: 'completed',
+              sessionId,
+              message: `无法检查增量，已使用现有搜索索引继续，共 ${state.indexedCount} 条消息`,
+              messagesScanned: scanned,
+              indexedCount: state.indexedCount
+            }, onProgress)
+            return state
+          }
+          throw new Error(errorMessage)
         }
 
         const messages = result.messages || []

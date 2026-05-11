@@ -1,5 +1,5 @@
-import { app } from 'electron'
 import { delimiter, join } from 'path'
+import { getAppPath, isElectronPackaged } from './runtimePaths'
 
 function copyProcessEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {}
@@ -16,14 +16,16 @@ export function getElectronWorkerEnv(): NodeJS.ProcessEnv {
   const existingNodePaths = env.NODE_PATH
     ? env.NODE_PATH.split(delimiter).filter(Boolean)
     : []
-  const packagedNodePaths = app.isPackaged
+  const appPath = getAppPath()
+  const resourcesRoot = process.resourcesPath || appPath
+  const packagedNodePaths = isElectronPackaged()
     ? [
-        join(process.resourcesPath, 'app.asar.unpacked', 'node_modules'),
-        join(process.resourcesPath, 'app.asar', 'node_modules'),
-        join(process.resourcesPath, 'node_modules')
+        join(resourcesRoot, 'app.asar.unpacked', 'node_modules'),
+        join(resourcesRoot, 'app.asar', 'node_modules'),
+        join(resourcesRoot, 'node_modules')
       ]
     : [
-        join(app.getAppPath(), 'node_modules'),
+        join(appPath, 'node_modules'),
         join(process.cwd(), 'node_modules')
       ]
 

@@ -8,8 +8,8 @@ import { EventEmitter } from 'events'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import { Worker } from 'worker_threads'
-import { app } from 'electron'
 import { ConfigService } from './config'
+import { getAppPath, getUserDataPath, isElectronPackaged } from './runtimePaths'
 
 type WorkerRequest = { id: number; type: string; payload?: any }
 type WorkerResponse = { id: number; result?: any; error?: string; type?: string; payload?: any }
@@ -261,10 +261,12 @@ export class WcdbService extends EventEmitter {
         }
         // Worker 启动就绪：下发 setPaths，然后结束 init
         if (msg?.id === 0 && msg.type === 'ready') {
-          const resourcesPath = app.isPackaged
-            ? join(process.resourcesPath, 'resources')
-            : join(app.getAppPath(), 'resources')
-          const userDataPath = app.getPath('userData')
+          const appPath = getAppPath()
+          const resourcesRoot = process.resourcesPath || appPath
+          const resourcesPath = isElectronPackaged()
+            ? join(resourcesRoot, 'resources')
+            : join(appPath, 'resources')
+          const userDataPath = getUserDataPath()
           try {
             const id = ++this.seq
             worker.postMessage({ id, type: 'setPaths', payload: { resourcesPath, userDataPath } } as WorkerRequest)
@@ -418,18 +420,20 @@ export class WcdbService extends EventEmitter {
    * 不直接复用那个工具函数，是为了避免与 main/workers 形成循环或 ipc 依赖。
    */
   private resolveWorkerPath(): string | null {
-    const candidates = app.isPackaged
+    const appPath = getAppPath()
+    const resourcesRoot = process.resourcesPath || appPath
+    const candidates = isElectronPackaged()
       ? [
-          join(process.resourcesPath, 'app.asar', 'dist-electron', WORKER_FILE),
-          join(process.resourcesPath, 'app.asar.unpacked', 'dist-electron', WORKER_FILE),
-          join(process.resourcesPath, 'dist-electron', WORKER_FILE),
+          join(resourcesRoot, 'app.asar', 'dist-electron', WORKER_FILE),
+          join(resourcesRoot, 'app.asar.unpacked', 'dist-electron', WORKER_FILE),
+          join(resourcesRoot, 'dist-electron', WORKER_FILE),
           join(__dirname, WORKER_FILE),
           join(__dirname, '..', WORKER_FILE)
         ]
       : [
           join(__dirname, '..', WORKER_FILE),
           join(__dirname, WORKER_FILE),
-          join(app.getAppPath(), 'dist-electron', WORKER_FILE)
+          join(appPath, 'dist-electron', WORKER_FILE)
         ]
     return candidates.find((c) => existsSync(c)) || null
   }
