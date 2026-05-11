@@ -33,6 +33,16 @@ function ensureConfigService(ctx: MainProcessContext): ConfigService {
   return configService
 }
 
+async function openConfiguredWcdb(dbPath: string, decryptKey: string, wxid: string): Promise<boolean> {
+  try {
+    await wcdbService.initWorker()
+    return await wcdbService.open(dbPath, decryptKey, wxid)
+  } catch (e) {
+    console.error('[startup] WCDB 启动连接失败:', (e as Error)?.message || e)
+    return false
+  }
+}
+
 /**
  * 启动阶段数据库连接编排。
  * 配置不完整时打开引导窗口；配置完整时用启动屏承接连接过程，并把结果写回 context。
@@ -53,9 +63,9 @@ export async function checkAndConnectOnStartup(ctx: MainProcessContext): Promise
     const serverReady = await waitForDevServer(process.env.VITE_DEV_SERVER_URL)
     if (!serverReady) {
       try {
-        const result = await chatService.connect()
-        ctx.setStartupDbConnected(result.success)
-        return result.success
+        const connected = await openConfiguredWcdb(String(dbPath), String(decryptKey), String(wxid))
+        ctx.setStartupDbConnected(connected)
+        return connected
       } catch {
         return false
       }
@@ -69,10 +79,10 @@ export async function checkAndConnectOnStartup(ctx: MainProcessContext): Promise
     const checkReady = setInterval(() => {
       if (ctx.getSplashReady()) {
         clearInterval(checkReady)
-        chatService.connect().then(async (result) => {
+        openConfiguredWcdb(String(dbPath), String(decryptKey), String(wxid)).then(async (connected) => {
           await ctx.getWindowManager().closeSplashWindow()
-          ctx.setStartupDbConnected(result.success)
-          resolve(result.success)
+          ctx.setStartupDbConnected(connected)
+          resolve(connected)
         }).catch(async (e) => {
           console.error('启动时连接数据库失败:', e)
           await ctx.getWindowManager().closeSplashWindow()

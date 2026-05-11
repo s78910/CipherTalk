@@ -31,6 +31,11 @@ export class WcdbCore {
 
   // 预留的 C 符号（native 未实现则置 null，特性降级）
   private wcdbExecQueryWithParams: any = null
+  private wcdbGetMessages: any = null
+  private wcdbOpenMessageCursor: any = null
+  private wcdbOpenMessageCursorLite: any = null
+  private wcdbFetchMessageBatch: any = null
+  private wcdbCloseMessageCursor: any = null
   private wcdbStartMonitorPipe: any = null
   private wcdbStopMonitorPipe: any = null
   private wcdbGetMonitorPipeName: any = null
@@ -98,6 +103,11 @@ export class WcdbCore {
         try { return this.lib.func(decl) } catch { return null }
       }
       this.wcdbExecQueryWithParams = tryBind('int32 wcdb_exec_query_with_params(int64 handle, const char* kind, const char* path, const char* sql, const char* argsJson, _Out_ void** outJson)')
+      this.wcdbGetMessages = tryBind('int32 wcdb_get_messages(int64 handle, const char* username, int32 limit, int32 offset, _Out_ void** outJson)')
+      this.wcdbOpenMessageCursor = tryBind('int32 wcdb_open_message_cursor(int64 handle, const char* sessionId, int32 batchSize, int32 ascending, int32 beginTimestamp, int32 endTimestamp, _Out_ int64* outCursor)')
+      this.wcdbOpenMessageCursorLite = tryBind('int32 wcdb_open_message_cursor_lite(int64 handle, const char* sessionId, int32 batchSize, int32 ascending, int32 beginTimestamp, int32 endTimestamp, _Out_ int64* outCursor)')
+      this.wcdbFetchMessageBatch = tryBind('int32 wcdb_fetch_message_batch(int64 handle, int64 cursor, _Out_ void** outJson, _Out_ int32* outHasMore)')
+      this.wcdbCloseMessageCursor = tryBind('int32 wcdb_close_message_cursor(int64 handle, int64 cursor)')
       this.wcdbStartMonitorPipe = tryBind('int32 wcdb_start_monitor_pipe()')
       this.wcdbStopMonitorPipe = tryBind('int32 wcdb_stop_monitor_pipe()')
       this.wcdbGetMonitorPipeName = tryBind('int32 wcdb_get_monitor_pipe_name(_Out_ void** outName)')
@@ -437,6 +447,167 @@ export class WcdbCore {
     }
   }
 
+  private decodeJsonPtr(outPtr: any): string | null {
+    if (!outPtr) return null
+    try {
+      const jsonStr = this.koffi.decode(outPtr, 'char', -1)
+      this.wcdbFreeString(outPtr)
+      return jsonStr
+    } catch {
+      try { this.wcdbFreeString(outPtr) } catch { /* ignore */ }
+      return null
+    }
+  }
+
+  private parseMessageJson(jsonStr: string): any[] {
+    const raw = String(jsonStr || '')
+    if (!raw) return []
+    const needsInt64Normalize = /"server_id"\s*:\s*-?\d{16,}/.test(raw)
+    const normalized = needsInt64Normalize
+      ? raw.replace(/("server_id"\s*:\s*)(-?\d{16,})/g, '$1"$2"')
+      : raw
+    const parsed = JSON.parse(normalized)
+    return Array.isArray(parsed) ? parsed : [parsed]
+  }
+
+  async getNativeMessages(sessionId: string, limit: number, offset: number): Promise<{ success: boolean; rows?: any[]; error?: string }> {
+    if (!this.initialized || this.handle === null) {
+      return { success: false, error: 'WCDB 未初始化' }
+    }
+    if (!this.wcdbGetMessages) {
+      return { success: false, error: 'native 未支持直接消息读取' }
+    }
+
+    try {
+      const outJson = [null as any]
+      const result = this.wcdbGetMessages(
+        this.handle,
+        sessionId,
+        Math.max(1, Math.floor(Number(limit) || 50)),
+        Math.max(0, Math.floor(Number(offset) || 0)),
+        outJson
+      )
+      if (result !== 0 || !outJson[0]) {
+        return { success: false, error: this.mapCursorStatusCode(result, '直接读取消息失败') }
+      }
+      const jsonStr = this.decodeJsonPtr(outJson[0])
+      if (!jsonStr) return { success: false, error: '解析消息失败' }
+      return { success: true, rows: this.parseMessageJson(jsonStr) }
+    } catch (e: any) {
+      return { success: false, error: e?.message || String(e) }
+    }
+  }
+
+  async openMessageCursor(
+    sessionId: string,
+    batchSize: number,
+    ascending: boolean,
+    beginTimestamp: number,
+    endTimestamp: number
+  ): Promise<{ success: boolean; cursor?: number; error?: string }> {
+    if (!this.initialized || this.handle === null) {
+      return { success: false, error: 'WCDB 未初始化' }
+    }
+    if (!this.wcdbOpenMessageCursor) {
+      return { success: false, error: 'native 未支持消息游标' }
+    }
+
+    try {
+      const outCursor = [0]
+      const result = this.wcdbOpenMessageCursor(
+        this.handle,
+        sessionId,
+        Math.max(1, Math.floor(Number(batchSize) || 100)),
+        ascending ? 1 : 0,
+        Math.max(0, Math.floor(Number(beginTimestamp) || 0)),
+        Math.max(0, Math.floor(Number(endTimestamp) || 0)),
+        outCursor
+      )
+      if (result !== 0 || outCursor[0] <= 0) {
+        return { success: false, error: this.mapCursorStatusCode(result, '创建游标失败') }
+      }
+      return { success: true, cursor: outCursor[0] }
+    } catch (e: any) {
+      return { success: false, error: e?.message || String(e) }
+    }
+  }
+
+  async openMessageCursorLite(
+    sessionId: string,
+    batchSize: number,
+    ascending: boolean,
+    beginTimestamp: number,
+    endTimestamp: number
+  ): Promise<{ success: boolean; cursor?: number; error?: string }> {
+    if (!this.wcdbOpenMessageCursorLite) {
+      return this.openMessageCursor(sessionId, batchSize, ascending, beginTimestamp, endTimestamp)
+    }
+    if (!this.initialized || this.handle === null) {
+      return { success: false, error: 'WCDB 未初始化' }
+    }
+
+    try {
+      const outCursor = [0]
+      const result = this.wcdbOpenMessageCursorLite(
+        this.handle,
+        sessionId,
+        Math.max(1, Math.floor(Number(batchSize) || 100)),
+        ascending ? 1 : 0,
+        Math.max(0, Math.floor(Number(beginTimestamp) || 0)),
+        Math.max(0, Math.floor(Number(endTimestamp) || 0)),
+        outCursor
+      )
+      if (result !== 0 || outCursor[0] <= 0) {
+        return { success: false, error: this.mapCursorStatusCode(result, '创建轻量游标失败') }
+      }
+      return { success: true, cursor: outCursor[0] }
+    } catch (e: any) {
+      return { success: false, error: e?.message || String(e) }
+    }
+  }
+
+  async fetchMessageBatch(cursor: number): Promise<{ success: boolean; rows?: any[]; hasMore?: boolean; error?: string }> {
+    if (!this.initialized || this.handle === null) {
+      return { success: false, error: 'WCDB 未初始化' }
+    }
+    if (!this.wcdbFetchMessageBatch) {
+      return { success: false, error: 'native 未支持消息游标批量读取' }
+    }
+
+    try {
+      const outJson = [null as any]
+      const outHasMore = [0]
+      const result = this.wcdbFetchMessageBatch(this.handle, cursor, outJson, outHasMore)
+      if (result !== 0 || !outJson[0]) {
+        return { success: false, error: this.mapCursorStatusCode(result, '获取批次失败') }
+      }
+      const jsonStr = this.decodeJsonPtr(outJson[0])
+      if (!jsonStr) return { success: false, error: '解析批次失败' }
+      return { success: true, rows: this.parseMessageJson(jsonStr), hasMore: outHasMore[0] === 1 }
+    } catch (e: any) {
+      return { success: false, error: e?.message || String(e) }
+    }
+  }
+
+  async closeMessageCursor(cursor: number): Promise<{ success: boolean; error?: string }> {
+    if (!this.initialized || this.handle === null) {
+      return { success: false, error: 'WCDB 未初始化' }
+    }
+    if (!this.wcdbCloseMessageCursor) {
+      return { success: false, error: 'native 未支持关闭消息游标' }
+    }
+
+    try {
+      const result = this.wcdbCloseMessageCursor(this.handle, cursor)
+      if (result !== 0) {
+        return { success: false, error: this.mapCursorStatusCode(result, '关闭游标失败') }
+      }
+      return { success: true }
+    } catch (e: any) {
+      return { success: false, error: e?.message || String(e) }
+    }
+  }
+
   // ============== 命名管道监控 ==============
   /**
    * 启动 native 侧的命名管道监控并订阅事件回调。
@@ -588,5 +759,11 @@ export class WcdbCore {
       case -6: return 'WCDB 尚未初始化'
       default: return `WCDB 错误码: ${code}`
     }
+  }
+
+  private mapCursorStatusCode(code: number, prefix: string): string {
+    if (code === -7) return 'message schema mismatch：当前账号消息表结构与程序要求不一致'
+    if (code === -3) return `${prefix}: ${code}（消息数据库未找到）`
+    return `${prefix}: ${code}`
   }
 }

@@ -8,6 +8,7 @@ import { ConfigService } from './config'
 import { getAppPath, getDocumentsPath, getExePath, isElectronPackaged } from './runtimePaths'
 import { dbAdapter } from './dbAdapter'
 import { findMessageDbPaths, getDbStoragePath } from './dbStoragePaths'
+import { wcdbService } from './wcdbService'
 
 export interface ChatSession {
   username: string
@@ -279,10 +280,23 @@ class ChatService extends EventEmitter {
   }
 
   /**
-   * 连接数据库（no-op；真正的 open 由 wcdbService 在启动流程完成）
+   * 连接数据库。业务层仍调用 chatService.connect，但实际句柄由 wcdbService Worker 管理。
    */
   async connect(): Promise<{ success: boolean; error?: string }> {
-    return { success: true }
+    try {
+      const wxid = String(this.configService.get('myWxid') || '').trim()
+      const dbPath = String(this.configService.get('dbPath') || '').trim()
+      const decryptKey = String(this.configService.get('decryptKey') || '').trim()
+
+      if (!wxid || !dbPath || !decryptKey) {
+        return { success: false, error: '数据库配置不完整' }
+      }
+
+      const opened = await wcdbService.open(dbPath, decryptKey, wxid)
+      return opened ? { success: true } : { success: false, error: 'WCDB 打开失败' }
+    } catch (e: any) {
+      return { success: false, error: e?.message || String(e) }
+    }
   }
 
   /**
@@ -326,7 +340,7 @@ class ChatService extends EventEmitter {
   /**
    * 获取会话列表
    */
-  async getSessions(offset?: number, limit?: number): Promise<{ success: boolean; sessions?: ChatSession[]; error?: string }> {
+  async getSessions(offset?: number, limit?: number): Promise<{ success: boolean; sessions?: ChatSession[]; hasMore?: boolean; error?: string }> {
     try {
       // 获取表列表
       const tables = await dbAdapter.all<{ name: string }>(
@@ -351,17 +365,17 @@ class ChatService extends EventEmitter {
 
       // 查询数据（支持分页）
       const safeOffset = Math.max(0, Math.floor(Number(offset) || 0))
-      const safeLimit = Math.max(1, Math.floor(Number(limit) || 999999))
+      const safeLimit = Math.max(1, Math.min(1000, Math.floor(Number(limit) || 300)))
       const rows = await dbAdapter.all<any>(
         'session',
         '',
         `SELECT * FROM ${sessionTableName} ORDER BY sort_timestamp DESC LIMIT ? OFFSET ?`,
-        [safeLimit, safeOffset]
+        [safeLimit + 1, safeOffset]
       )
 
       // 转换为 ChatSession
       const sessions: ChatSession[] = []
-      for (const row of rows) {
+      for (const row of rows.slice(0, safeLimit)) {
         const username = row.username || row.user_name || row.userName || ''
 
         if (!this.shouldKeepSession(username)) continue
@@ -384,7 +398,7 @@ class ChatService extends EventEmitter {
       // 获取联系人信息
       await this.enrichSessionsWithContacts(sessions)
 
-      return { success: true, sessions }
+      return { success: true, sessions, hasMore: rows.length > safeLimit }
     } catch (e) {
       console.error('ChatService: 获取会话列表失败:', e)
       return { success: false, error: String(e) }
@@ -426,28 +440,34 @@ class ChatService extends EventEmitter {
 
       const { hasBigHeadUrl, hasSmallHeadUrl, selectCols } = this.contactColumnsCache
 
-      const contactSql = `
-        SELECT ${selectCols.join(', ')}
-        FROM contact
-        WHERE username = ?
-      `
+      const usernames = Array.from(new Set(sessions.map(s => s.username).filter(Boolean)))
+      if (usernames.length === 0) return
+
+      const contacts: any[] = []
+      for (let i = 0; i < usernames.length; i += 400) {
+        const batch = usernames.slice(i, i + 400)
+        const placeholders = batch.map(() => '?').join(',')
+        const batchContacts = await dbAdapter.all<any>(
+          'contact',
+          '',
+          `SELECT ${selectCols.join(', ')}
+           FROM contact
+           WHERE username IN (${placeholders})`,
+          batch
+        )
+        contacts.push(...batchContacts)
+      }
+      const contactMap = new Map<string, any>(contacts.map((contact: any) => [contact.username, contact]))
 
       for (const session of sessions) {
-        try {
-          const contact = await dbAdapter.get<any>('contact', '', contactSql, [session.username])
-          if (contact) {
-            session.displayName = contact.remark || contact.nick_name || contact.alias || session.username
-
-            if (hasBigHeadUrl && contact.big_head_url) {
-              session.avatarUrl = contact.big_head_url
-            } else if (hasSmallHeadUrl && contact.small_head_url) {
-              session.avatarUrl = contact.small_head_url
-            } else {
-              // 如果 contact 表中没有头像 URL，尝试从 head_image.db 获取
-              session.avatarUrl = await this.getAvatarFromHeadImageDb(session.username)
-            }
-          }
-        } catch { }
+        const contact = contactMap.get(session.username)
+        if (!contact) continue
+        session.displayName = contact.remark || contact.nick_name || contact.alias || session.username
+        if (hasBigHeadUrl && contact.big_head_url) {
+          session.avatarUrl = contact.big_head_url
+        } else if (hasSmallHeadUrl && contact.small_head_url) {
+          session.avatarUrl = contact.small_head_url
+        }
       }
     } catch (e) {
       console.error('ChatService: 获取联系人信息失败:', e)
@@ -799,6 +819,156 @@ class ChatService extends EventEmitter {
     return null
   }
 
+  private buildIdentityKeys(raw: string): string[] {
+    const value = String(raw || '').trim()
+    if (!value) return []
+    const lowerRaw = value.toLowerCase()
+    const cleaned = this.cleanAccountDirName(value).toLowerCase()
+    return cleaned && cleaned !== lowerRaw ? [cleaned, lowerRaw] : [lowerRaw]
+  }
+
+  private resolveRowIsSend(row: any, senderUsername?: string | null): number | null {
+    const rawIsSend = row?.is_send ?? row?.isSend ?? row?.is_sender ?? row?.isSender ?? row?.WCDB_CT_is_send ?? null
+    const computedIsSend = row?.computed_is_send ?? row?.computedIsSend ?? null
+    if (Number(rawIsSend) === 1 || Number(computedIsSend) === 1) return 1
+
+    const senderKeys = this.buildIdentityKeys(String(senderUsername || row?.sender_username || row?.senderUsername || row?.sender || row?.talker || row?.src || ''))
+    const myWxid = String(this.configService.get('myWxid') || '').trim()
+    const selfKeys = this.buildIdentityKeys(myWxid)
+    if (senderKeys.length > 0 && selfKeys.length > 0) {
+      const matched = senderKeys.some(senderKey =>
+        selfKeys.some(selfKey =>
+          senderKey === selfKey ||
+          senderKey.startsWith(`${selfKey}_`) ||
+          selfKey.startsWith(`${senderKey}_`)
+        )
+      )
+      if (matched) return 1
+    }
+
+    if (rawIsSend !== null && rawIsSend !== undefined) {
+      const parsed = Number(rawIsSend)
+      return Number.isFinite(parsed) ? parsed : null
+    }
+    if (computedIsSend !== null && computedIsSend !== undefined) {
+      const parsed = Number(computedIsSend)
+      return Number.isFinite(parsed) ? parsed : null
+    }
+    return null
+  }
+
+  private rowToMessage(row: any): Message {
+    const content = this.decodeMessageContent(
+      row.message_content ?? row.messageContent ?? row.rawContent ?? row.content,
+      row.compress_content ?? row.compressContent
+    )
+    const localType = row.local_type || row.localType || row.type || 1
+    const senderUsername = row.sender_username || row.senderUsername || row.sender || row.talker || row.src || null
+    const isSend = this.resolveRowIsSend(row, senderUsername)
+
+    let emojiCdnUrl: string | undefined
+    let emojiMd5: string | undefined
+    let emojiProductId: string | undefined
+    let quotedContent: string | undefined
+    let quotedSender: string | undefined
+    let quotedImageMd5: string | undefined
+    let quotedEmojiMd5: string | undefined
+    let quotedEmojiCdnUrl: string | undefined
+    let imageMd5: string | undefined
+    let imageDatName: string | undefined
+    let isLivePhoto: boolean | undefined
+    let videoMd5: string | undefined
+    let videoDuration: number | undefined
+    let voiceDuration: number | undefined
+
+    if (localType === 47 && content) {
+      const emojiInfo = this.parseEmojiInfo(content)
+      emojiCdnUrl = emojiInfo.cdnUrl
+      emojiMd5 = emojiInfo.md5
+      emojiProductId = emojiInfo.productId
+    } else if (localType === 3 && content) {
+      const imageInfo = this.parseImageInfo(content)
+      imageMd5 = imageInfo.md5
+      imageDatName = this.parseImageDatNameFromRow(row)
+      isLivePhoto = imageInfo.isLivePhoto
+    } else if (localType === 43 && content) {
+      videoMd5 = this.parseVideoMd5(content)
+      videoDuration = this.parseVideoDuration(content)
+    } else if (localType === 34 && content) {
+      voiceDuration = this.parseVoiceDuration(content)
+    } else if (localType === 244813135921 || (content && content.includes('<type>57</type>'))) {
+      const quoteInfo = this.parseQuoteMessage(content)
+      quotedContent = quoteInfo.content
+      quotedSender = quoteInfo.sender
+      quotedImageMd5 = quoteInfo.imageMd5
+      quotedEmojiMd5 = quoteInfo.emojiMd5
+      quotedEmojiCdnUrl = quoteInfo.emojiCdnUrl
+    }
+
+    let fileName: string | undefined
+    let fileSize: number | undefined
+    let fileExt: string | undefined
+    let fileMd5: string | undefined
+    if (localType === 49 && content) {
+      const fileInfo = this.parseFileInfo(content)
+      fileName = fileInfo.fileName
+      fileSize = fileInfo.fileSize
+      fileExt = fileInfo.fileExt
+      fileMd5 = fileInfo.fileMd5
+    }
+
+    let chatRecordList: ChatRecordItem[] | undefined
+    if (content) {
+      const xmlType = this.extractXmlValue(content, 'type')
+      if (xmlType === '19' || localType === 49) {
+        chatRecordList = this.parseChatHistory(content)
+      }
+    }
+
+    let transferPayerUsername: string | undefined
+    let transferReceiverUsername: string | undefined
+    if ((localType === 49 || localType === 8589934592049) && content) {
+      const xmlType = this.extractXmlValue(content, 'type')
+      if (xmlType === '2000') {
+        transferPayerUsername = this.extractXmlValue(content, 'payer_username') || undefined
+        transferReceiverUsername = this.extractXmlValue(content, 'receiver_username') || undefined
+      }
+    }
+
+    return {
+      localId: row.local_id || row.localId || row.id || row.ID || 0,
+      serverId: row.server_id || row.serverId || row.MsgSvrID || row.msgSvrId || 0,
+      localType,
+      createTime: row.create_time || row.createTime || row.CreateTime || 0,
+      sortSeq: row.sort_seq || row.sortSeq || row.sequence || 0,
+      isSend,
+      senderUsername,
+      parsedContent: row.parsedContent || this.parseMessageContent(content, localType),
+      rawContent: content,
+      emojiCdnUrl: row.emojiCdnUrl || emojiCdnUrl,
+      emojiMd5: row.emojiMd5 || emojiMd5,
+      productId: row.productId || emojiProductId,
+      quotedContent: row.quotedContent || quotedContent,
+      quotedSender: row.quotedSender || quotedSender,
+      quotedImageMd5: row.quotedImageMd5 || quotedImageMd5,
+      quotedEmojiMd5: row.quotedEmojiMd5 || quotedEmojiMd5,
+      quotedEmojiCdnUrl: row.quotedEmojiCdnUrl || quotedEmojiCdnUrl,
+      imageMd5: row.imageMd5 || imageMd5,
+      imageDatName: row.imageDatName || imageDatName,
+      isLivePhoto: row.isLivePhoto ?? isLivePhoto,
+      videoMd5: row.videoMd5 || videoMd5,
+      videoDuration: row.videoDuration || videoDuration,
+      voiceDuration: row.voiceDuration || voiceDuration,
+      fileName: row.fileName || fileName,
+      fileSize: row.fileSize || fileSize,
+      fileExt: row.fileExt || fileExt,
+      fileMd5: row.fileMd5 || fileMd5,
+      chatRecordList: row.chatRecordList || chatRecordList,
+      transferPayerUsername: row.transferPayerUsername || transferPayerUsername,
+      transferReceiverUsername: row.transferReceiverUsername || transferReceiverUsername
+    }
+  }
+
   /**
    * 获取消息列表（支持跨多个数据库合并，已优化）
    */
@@ -808,14 +978,67 @@ class ChatService extends EventEmitter {
     limit: number = 50
   ): Promise<{ success: boolean; messages?: Message[]; hasMore?: boolean; error?: string }> {
     try {
+      const normalizedLimit = Math.max(1, Math.min(500, Math.floor(Number(limit) || 50)))
+
+      if (Math.max(0, Math.floor(Number(offset) || 0)) === 0) {
+        const nativeDirect = await wcdbService.getNativeMessages(sessionId, normalizedLimit + 1, 0)
+        if (nativeDirect.success && nativeDirect.rows) {
+          const seen = new Set<string>()
+          const messages = nativeDirect.rows
+            .map(row => this.rowToMessage(row))
+            .sort(compareMessageCursorDesc)
+            .filter(msg => {
+              const key = `${msg.serverId}-${msg.localId}-${msg.createTime}-${msg.sortSeq}`
+              if (seen.has(key)) return false
+              seen.add(key)
+              return true
+            })
+          const page = messages.slice(0, normalizedLimit).reverse()
+          if (page.length > 0) {
+            const latestMsg = page[page.length - 1]
+            const currentCursor = this.sessionCursor.get(sessionId) || 0
+            if (latestMsg.sortSeq > currentCursor) {
+              this.sessionCursor.set(sessionId, latestMsg.sortSeq)
+            }
+          }
+          return { success: true, messages: page, hasMore: messages.length > normalizedLimit }
+        }
+
+        const nativeOpen = await wcdbService.openMessageCursor(sessionId, normalizedLimit + 1, false, 0, 0)
+        if (nativeOpen.success && nativeOpen.cursor) {
+          try {
+            const batch = await wcdbService.fetchMessageBatch(nativeOpen.cursor)
+            if (batch.success && batch.rows) {
+              const seen = new Set<string>()
+              const messages = batch.rows
+                .map(row => this.rowToMessage(row))
+                .sort(compareMessageCursorDesc)
+                .filter(msg => {
+                  const key = `${msg.serverId}-${msg.localId}-${msg.createTime}-${msg.sortSeq}`
+                  if (seen.has(key)) return false
+                  seen.add(key)
+                  return true
+                })
+              const hasMore = messages.length > normalizedLimit || batch.hasMore === true
+              const page = messages.slice(0, normalizedLimit).reverse()
+              if (page.length > 0) {
+                const latestMsg = page[page.length - 1]
+                const currentCursor = this.sessionCursor.get(sessionId) || 0
+                if (latestMsg.sortSeq > currentCursor) {
+                  this.sessionCursor.set(sessionId, latestMsg.sortSeq)
+                }
+              }
+              return { success: true, messages: page, hasMore }
+            }
+          } finally {
+            await wcdbService.closeMessageCursor(nativeOpen.cursor).catch(() => undefined)
+          }
+        }
+      }
+
       // 获取当前用户的 wxid
       const myWxid = this.configService.get('myWxid')
       const cleanedMyWxid = myWxid ? this.cleanAccountDirName(myWxid) : ''
-
-      // 当 offset === 0 时（重新加载），只清除该会话的表缓存，保留其他缓存
-      if (offset === 0) {
-        this.sessionTableCache.delete(sessionId)
-      }
 
       // 使用缓存查找会话对应的数据库和表
       const dbTablePairs = await this.findSessionTables(sessionId)
@@ -864,7 +1087,7 @@ class ChatService extends EventEmitter {
           for (const row of rows) {
             const content = this.decodeMessageContent(row.message_content, row.compress_content)
             const localType = row.local_type || row.type || 1
-            const isSend = row.computed_is_send ?? row.is_send ?? null
+            const isSend = this.resolveRowIsSend(row, row.sender_username || null)
 
             // 只在需要时解析表情包和引用消息
             let emojiCdnUrl: string | undefined
@@ -1019,6 +1242,63 @@ class ChatService extends EventEmitter {
   }
 
   /**
+   * 获取指定时间之后的新消息。
+   * 优先走 WeFlow native cursor；cursor 不可用时回退到现有最新页查询。
+   */
+  async getNewMessages(
+    sessionId: string,
+    minTime: number,
+    limit: number = 1000
+  ): Promise<{ success: boolean; messages?: Message[]; error?: string }> {
+    const normalizedMinTime = Number(minTime) > 1e12
+      ? Math.floor(Number(minTime) / 1000)
+      : Math.max(0, Math.floor(Number(minTime) || 0))
+    const normalizedLimit = Math.max(1, Math.min(2000, Math.floor(Number(limit) || 1000)))
+
+    try {
+      const nativeResult = await wcdbService.getNewMessages(sessionId, normalizedMinTime, normalizedLimit)
+      if (nativeResult.success) {
+        let messages = (nativeResult.rows || [])
+          .map(row => this.rowToMessage(row))
+          .filter(msg => Number(msg.createTime || 0) >= normalizedMinTime)
+
+        const seen = new Set<string>()
+        messages = messages
+          .sort(compareMessageCursorAsc)
+          .filter(msg => {
+            const key = `${msg.serverId}-${msg.localId}-${msg.createTime}-${msg.sortSeq}`
+            if (seen.has(key)) return false
+            seen.add(key)
+            return true
+          })
+
+        if (messages.length > 0) {
+          const latestMsg = messages[messages.length - 1]
+          const currentCursor = this.sessionCursor.get(sessionId) || 0
+          if (latestMsg.sortSeq > currentCursor) {
+            this.sessionCursor.set(sessionId, latestMsg.sortSeq)
+          }
+        }
+
+        return { success: true, messages }
+      }
+
+      console.warn('[ChatService] native cursor getNewMessages 失败，回退到最新页查询:', nativeResult.error)
+      const fallback = await this.getMessages(sessionId, 0, Math.min(normalizedLimit, 200))
+      if (!fallback.success || !fallback.messages) {
+        return { success: false, error: nativeResult.error || fallback.error || '获取新消息失败' }
+      }
+      return {
+        success: true,
+        messages: fallback.messages.filter(msg => Number(msg.createTime || 0) >= normalizedMinTime)
+      }
+    } catch (e) {
+      console.error('ChatService: 获取新消息失败:', e)
+      return { success: false, error: String(e) }
+    }
+  }
+
+  /**
    * 摘要专用：按精确时间范围读取消息，并优先保留范围内最新消息。
    */
   async getMessagesByTimeRangeForSummary(
@@ -1104,7 +1384,7 @@ class ChatService extends EventEmitter {
           for (const row of rows) {
             const content = this.decodeMessageContent(row.message_content, row.compress_content)
             const localType = row.local_type || row.type || 1
-            const isSend = row.computed_is_send ?? row.is_send ?? null
+            const isSend = this.resolveRowIsSend(row, row.sender_username || null)
             const parsedContent = this.parseMessageContent(content, localType)
             const xmlType = content ? this.extractXmlValue(content, 'type') : undefined
             const chatRecordList = content && (xmlType === '19' || localType === 49)
@@ -1253,7 +1533,7 @@ class ChatService extends EventEmitter {
           for (const row of rows) {
             const content = this.decodeMessageContent(row.message_content, row.compress_content)
             const localType = row.local_type || row.type || 1
-            const isSend = row.computed_is_send ?? row.is_send ?? null
+            const isSend = this.resolveRowIsSend(row, row.sender_username || null)
 
             let emojiCdnUrl: string | undefined
             let emojiMd5: string | undefined
@@ -1488,7 +1768,7 @@ class ChatService extends EventEmitter {
           for (const row of rows) {
             const content = this.decodeMessageContent(row.message_content, row.compress_content)
             const localType = row.local_type || row.type || 1
-            const isSend = row.computed_is_send ?? row.is_send ?? null
+            const isSend = this.resolveRowIsSend(row, row.sender_username || null)
 
             let emojiCdnUrl: string | undefined
             let emojiMd5: string | undefined
@@ -1717,7 +1997,7 @@ class ChatService extends EventEmitter {
           for (const row of rows) {
             const content = this.decodeMessageContent(row.message_content, row.compress_content)
             const localType = row.local_type || row.type || 1
-            const isSend = row.computed_is_send ?? row.is_send ?? null
+            const isSend = this.resolveRowIsSend(row, row.sender_username || null)
             const parsedContent = this.parseMessageContent(content, localType)
             const xmlType = content ? this.extractXmlValue(content, 'type') : undefined
             const chatRecordList = content && (xmlType === '19' || localType === 49)
@@ -1842,7 +2122,7 @@ class ChatService extends EventEmitter {
           for (const row of rows) {
             const content = this.decodeMessageContent(row.message_content, row.compress_content)
             const localType = row.local_type || row.type || 1
-            const isSend = row.computed_is_send ?? row.is_send ?? null
+            const isSend = this.resolveRowIsSend(row, row.sender_username || null)
             const voiceDuration = this.parseVoiceDuration(content)
 
             allVoiceMessages.push({
@@ -2020,7 +2300,7 @@ class ChatService extends EventEmitter {
           for (const row of rows) {
             const content = this.decodeMessageContent(row.message_content, row.compress_content)
             const localType = row.local_type || row.type || 1
-            const isSend = row.computed_is_send ?? row.is_send ?? null
+            const isSend = this.resolveRowIsSend(row, row.sender_username || null)
 
             let emojiCdnUrl: string | undefined
             let emojiMd5: string | undefined
@@ -4620,7 +4900,7 @@ class ChatService extends EventEmitter {
         if (row) {
           const content = this.decodeMessageContent(row.message_content, row.compress_content)
           const localType = row.local_type || row.type || 1
-          const isSend = row.computed_is_send ?? row.is_send ?? null
+          const isSend = this.resolveRowIsSend(row, row.sender_username || null)
 
           let emojiCdnUrl: string | undefined
           let emojiMd5: string | undefined
