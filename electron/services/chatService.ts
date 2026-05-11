@@ -878,6 +878,35 @@ class ChatService extends EventEmitter {
     return Number.isFinite(parsed) ? parsed : fallback
   }
 
+  private resolveMessageLocalType(row: Record<string, any>, fallback = 1): number {
+    const fieldNames = [
+      'local_type',
+      'localType',
+      'type',
+      'Type',
+      'msg_type',
+      'msgType',
+      'MsgType',
+      'message_type',
+      'messageType',
+      'WCDB_CT_local_type'
+    ]
+    let zeroCandidate: number | undefined
+
+    for (const fieldName of fieldNames) {
+      const value = this.getRowField(row, [fieldName])
+      if (value === null || value === undefined || value === '') continue
+      const parsed = this.coerceRowNumber(value, Number.NaN)
+      if (!Number.isFinite(parsed)) continue
+      if (parsed > 0) return parsed
+      if (parsed === 0 && zeroCandidate === undefined) {
+        zeroCandidate = parsed
+      }
+    }
+
+    return zeroCandidate ?? fallback
+  }
+
   private coerceRowString(value: any): string | undefined {
     if (value === null || value === undefined) return undefined
     if (Buffer.isBuffer(value)) return value.toString('utf-8')
@@ -956,10 +985,7 @@ class ChatService extends EventEmitter {
       this.getRowField(row, ['message_content', 'messageContent', 'rawContent', 'raw_content', 'content', 'Content']),
       this.getRowField(row, ['compress_content', 'compressContent', 'compressedContent', 'CompressContent'])
     )
-    const localType = this.coerceRowNumber(
-      this.getRowField(row, ['local_type', 'localType', 'type', 'Type', 'msg_type', 'msgType', 'MsgType', 'message_type', 'messageType', 'WCDB_CT_local_type']),
-      1
-    )
+    const localType = this.resolveMessageLocalType(row, 1)
     const senderUsername = this.coerceRowString(
       this.getRowField(row, ['sender_username', 'senderUsername', 'sender', 'talker', 'src'])
     ) || null
@@ -1169,7 +1195,7 @@ class ChatService extends EventEmitter {
           // 批量处理消息
           for (const row of rows) {
             const content = this.decodeMessageContent(row.message_content, row.compress_content)
-            const localType = row.local_type || row.type || 1
+            const localType = this.resolveMessageLocalType(row, 1)
             const isSend = this.resolveRowIsSend(row, row.sender_username || null)
 
             // 只在需要时解析表情包和引用消息
@@ -1468,7 +1494,7 @@ class ChatService extends EventEmitter {
 
           for (const row of rows) {
             const content = this.decodeMessageContent(row.message_content, row.compress_content)
-            const localType = row.local_type || row.type || 1
+            const localType = this.resolveMessageLocalType(row, 1)
             const isSend = this.resolveRowIsSend(row, row.sender_username || null)
             const parsedContent = this.parseMessageContent(content, localType)
             const xmlType = content ? this.extractXmlValue(content, 'type') : undefined
@@ -1616,113 +1642,7 @@ class ChatService extends EventEmitter {
           }
 
           for (const row of rows) {
-            const content = this.decodeMessageContent(row.message_content, row.compress_content)
-            const localType = row.local_type || row.type || 1
-            const isSend = this.resolveRowIsSend(row, row.sender_username || null)
-
-            let emojiCdnUrl: string | undefined
-            let emojiMd5: string | undefined
-            let emojiProductId: string | undefined
-            let quotedContent: string | undefined
-            let quotedSender: string | undefined
-            let quotedImageMd5: string | undefined
-            let quotedEmojiMd5: string | undefined
-            let quotedEmojiCdnUrl: string | undefined
-            let imageMd5: string | undefined
-            let imageDatName: string | undefined
-            let isLivePhoto: boolean | undefined
-            let videoMd5: string | undefined
-            let videoDuration: number | undefined
-            let voiceDuration: number | undefined
-
-            if (localType === 47 && content) {
-              const emojiInfo = this.parseEmojiInfo(content)
-              emojiCdnUrl = emojiInfo.cdnUrl
-              emojiMd5 = emojiInfo.md5
-              emojiProductId = emojiInfo.productId
-            } else if (localType === 3 && content) {
-              const imageInfo = this.parseImageInfo(content)
-              imageMd5 = imageInfo.md5
-              imageDatName = this.parseImageDatNameFromRow(row)
-              isLivePhoto = imageInfo.isLivePhoto
-            } else if (localType === 43 && content) {
-              videoMd5 = this.parseVideoMd5(content)
-              videoDuration = this.parseVideoDuration(content)
-            } else if (localType === 34 && content) {
-              voiceDuration = this.parseVoiceDuration(content)
-            } else if (localType === 244813135921 || (content && content.includes('<type>57</type>'))) {
-              const quoteInfo = this.parseQuoteMessage(content)
-              quotedContent = quoteInfo.content
-              quotedSender = quoteInfo.sender
-              quotedImageMd5 = quoteInfo.imageMd5
-              quotedEmojiMd5 = quoteInfo.emojiMd5
-              quotedEmojiCdnUrl = quoteInfo.emojiCdnUrl
-            }
-
-            let fileName: string | undefined
-            let fileSize: number | undefined
-            let fileExt: string | undefined
-            let fileMd5: string | undefined
-            if (localType === 49 && content) {
-              const fileInfo = this.parseFileInfo(content)
-              fileName = fileInfo.fileName
-              fileSize = fileInfo.fileSize
-              fileExt = fileInfo.fileExt
-              fileMd5 = fileInfo.fileMd5
-            }
-
-            let chatRecordList: ChatRecordItem[] | undefined
-            if (content) {
-              const xmlType = this.extractXmlValue(content, 'type')
-              if (xmlType === '19' || localType === 49) {
-                chatRecordList = this.parseChatHistory(content)
-              }
-            }
-
-            let transferPayerUsername: string | undefined
-            let transferReceiverUsername: string | undefined
-            if ((localType === 49 || localType === 8589934592049) && content) {
-              const xmlType = this.extractXmlValue(content, 'type')
-              if (xmlType === '2000') {
-                transferPayerUsername = this.extractXmlValue(content, 'payer_username') || undefined
-                transferReceiverUsername = this.extractXmlValue(content, 'receiver_username') || undefined
-              }
-            }
-
-            const parsedContent = this.parseMessageContent(content, localType)
-
-            allMessages.push({
-              localId: row.local_id || 0,
-              serverId: row.server_id || 0,
-              localType,
-              createTime: row.create_time || 0,
-              sortSeq: row.sort_seq || 0,
-              isSend,
-              senderUsername: row.sender_username || null,
-              parsedContent,
-              rawContent: content,
-              emojiCdnUrl,
-              emojiMd5,
-              productId: emojiProductId,
-              quotedContent,
-              quotedSender,
-              quotedImageMd5,
-              quotedEmojiMd5,
-              quotedEmojiCdnUrl,
-              imageMd5,
-              imageDatName,
-              isLivePhoto,
-              videoMd5,
-              videoDuration,
-              voiceDuration,
-              fileName,
-              fileSize,
-              fileExt,
-              fileMd5,
-              chatRecordList,
-              transferPayerUsername,
-              transferReceiverUsername
-            })
+            allMessages.push(this.rowToMessage(row))
           }
         } catch (e: any) {
           if (e?.code === 'SQLITE_CORRUPT' || e?.message?.includes('malformed')) {
@@ -1852,7 +1772,7 @@ class ChatService extends EventEmitter {
 
           for (const row of rows) {
             const content = this.decodeMessageContent(row.message_content, row.compress_content)
-            const localType = row.local_type || row.type || 1
+            const localType = this.resolveMessageLocalType(row, 1)
             const isSend = this.resolveRowIsSend(row, row.sender_username || null)
 
             let emojiCdnUrl: string | undefined
@@ -2081,7 +2001,7 @@ class ChatService extends EventEmitter {
 
           for (const row of rows) {
             const content = this.decodeMessageContent(row.message_content, row.compress_content)
-            const localType = row.local_type || row.type || 1
+            const localType = this.resolveMessageLocalType(row, 1)
             const isSend = this.resolveRowIsSend(row, row.sender_username || null)
             const parsedContent = this.parseMessageContent(content, localType)
             const xmlType = content ? this.extractXmlValue(content, 'type') : undefined
@@ -2206,7 +2126,7 @@ class ChatService extends EventEmitter {
           // 处理查询结果
           for (const row of rows) {
             const content = this.decodeMessageContent(row.message_content, row.compress_content)
-            const localType = row.local_type || row.type || 1
+            const localType = this.resolveMessageLocalType(row, 1)
             const isSend = this.resolveRowIsSend(row, row.sender_username || null)
             const voiceDuration = this.parseVoiceDuration(content)
 
@@ -2384,7 +2304,7 @@ class ChatService extends EventEmitter {
           // 处理消息
           for (const row of rows) {
             const content = this.decodeMessageContent(row.message_content, row.compress_content)
-            const localType = row.local_type || row.type || 1
+            const localType = this.resolveMessageLocalType(row, 1)
             const isSend = this.resolveRowIsSend(row, row.sender_username || null)
 
             let emojiCdnUrl: string | undefined
@@ -5004,7 +4924,7 @@ class ChatService extends EventEmitter {
 
         if (row) {
           const content = this.decodeMessageContent(row.message_content, row.compress_content)
-          const localType = row.local_type || row.type || 1
+          const localType = this.resolveMessageLocalType(row, 1)
           const isSend = this.resolveRowIsSend(row, row.sender_username || null)
 
           let emojiCdnUrl: string | undefined

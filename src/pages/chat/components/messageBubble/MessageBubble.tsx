@@ -39,6 +39,18 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat, h
   const isVideo = message.localType === 43
   const isVoice = message.localType === 34
   const isSent = message.isSend === 1
+
+  useEffect(() => {
+    if (isImage || message.parsedContent !== '[图片]') return
+    console.warn('[ChatPage] 图片消息被当文本渲染', {
+      localType: message.localType,
+      localTypeType: typeof message.localType,
+      localId: message.localId,
+      createTime: message.createTime,
+      sortSeq: message.sortSeq
+    })
+  }, [isImage, message.parsedContent, message.localType, message.localId, message.createTime, message.sortSeq])
+
   const [senderAvatarUrl, setSenderAvatarUrl] = useState<string | undefined>(undefined)
   const [senderName, setSenderName] = useState<string | undefined>(undefined)
   const [transferPayerName, setTransferPayerName] = useState<string | undefined>(undefined)
