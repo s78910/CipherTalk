@@ -1,5 +1,6 @@
 import { ipcMain } from 'electron'
 import { chatService } from '../../services/chatService'
+import { pickRandomPrivateIncomingMoment } from '../../services/randomMomentService'
 import type { MainProcessContext } from '../context'
 
 /**
@@ -15,6 +16,17 @@ export function registerChatHandlers(ctx: MainProcessContext): void {
 
   ipcMain.handle('chat:getMessage', async (_, sessionId: string, localId: number) => {
     return chatService.getMessageByLocalId(sessionId, localId)
+  })
+
+  /** 「回忆一刻」：直接扫消息库 + 完整解析校验，不依赖 message_index */
+  ipcMain.handle('chat:pickRandomMomentFromIndex', async () => {
+    try {
+      return await pickRandomPrivateIncomingMoment()
+    } catch (e) {
+      const err = String(e)
+      ctx.getLogService()?.warn('Chat', 'pickRandomMomentFromIndex 失败', { error: err })
+      return { success: false, error: err, hint: `随机回忆失败：${err}` }
+    }
   })
   ipcMain.handle('chat:connect', async () => {
     ctx.getLogService()?.info('Chat', '尝试连接聊天服务')

@@ -628,6 +628,14 @@ export interface ElectronAPI {
       error?: string
     }>
     getMessage: (sessionId: string, localId: number) => Promise<{ success: boolean; message?: Message; error?: string }>
+    /** 回忆一刻：从 chat_search_index.db 随机索引行再还原消息（方案 A） */
+    pickRandomMomentFromIndex: () => Promise<{
+      success: boolean
+      sessionId?: string
+      message?: Message
+      error?: string
+      hint?: string
+    }>
     getDatesWithMessages: (sessionId: string, year: number, month: number) => Promise<{
       success: boolean
       dates?: string[]

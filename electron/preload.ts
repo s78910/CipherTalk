@@ -455,6 +455,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getMessagesByDate: (sessionId: string, targetTimestamp: number, limit?: number) =>
       ipcRenderer.invoke('chat:getMessagesByDate', sessionId, targetTimestamp, limit),
     getMessage: (sessionId: string, localId: number) => ipcRenderer.invoke('chat:getMessage', sessionId, localId),
+    pickRandomMomentFromIndex: () =>
+      ipcRenderer.invoke('chat:pickRandomMomentFromIndex'),
     getDatesWithMessages: (sessionId: string, year: number, month: number) =>
       ipcRenderer.invoke('chat:getDatesWithMessages', sessionId, year, month),
     onSessionsUpdated: (callback: (sessions: any[]) => void) => {

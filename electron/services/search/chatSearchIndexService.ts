@@ -1831,6 +1831,37 @@ export class ChatSearchIndexService {
     }
   }
 
+  /**
+   * 方案 A：在 message_index 上全量均匀随机（仅已索引行）。
+   * 条件：私聊、非己发、文本(1) / 图片(3) / 语音(34) / 表情(47)。
+   */
+  pickRandomIndexedMoment(): { sessionId: string; localId: number } | null {
+    try {
+      const db = this.getDb()
+      const row = db
+        .prepare(
+          `
+        SELECT session_id, local_id
+        FROM message_index
+        WHERE session_id NOT LIKE '%@chatroom%'
+          AND (is_send IS NULL OR is_send != 1)
+          AND local_type IN (1, 3, 34, 47)
+        ORDER BY RANDOM()
+        LIMIT 1
+      `
+        )
+        .get() as { session_id?: string; local_id?: number } | undefined
+
+      if (!row?.session_id || row.local_id == null || Number.isNaN(Number(row.local_id))) {
+        return null
+      }
+      return { sessionId: row.session_id, localId: Number(row.local_id) }
+    } catch (e) {
+      console.error('[ChatSearchIndex] pickRandomIndexedMoment 失败:', e)
+      return null
+    }
+  }
+
   async listSessionMemoryMessages(
     sessionId: string,
     onProgress?: ChatSearchSessionOptions['onProgress']

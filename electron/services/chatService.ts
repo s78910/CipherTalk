@@ -5469,6 +5469,13 @@ class ChatService extends EventEmitter {
   private async checkNewMessagesForCurrentSession(): Promise<void> {
     // no-op；等待 wcdb monitor 推送变更后再由 attachMonitor 处理
   }
+
+  /**
+   * 解析会话对应的消息表路径（可能跨多个 .db），供 randomMomentService 等模块使用。
+   */
+  public async getSessionMessageTables(sessionId: string): Promise<{ tableName: string; dbPath: string }[]> {
+    return this.findSessionTables(sessionId)
+  }
 }
 
 export const chatService = new ChatService()

@@ -1,73 +1,81 @@
-import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { FileText, CheckCircle, XCircle, User, Smile } from 'lucide-react'
-import { useAppStore, UserInfo } from '../stores/appStore'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { User, Smile, MessageSquareQuote, RefreshCw } from 'lucide-react'
+import { useAppStore } from '../stores/appStore'
 import WhatsNewModal from '../components/WhatsNewModal'
+import { RandomMomentBubble } from '../features/home/RandomMomentBubble'
+import {
+  loadRandomMomentSnippet,
+  MOMENT_EMOJI_TYPE,
+  MOMENT_IMAGE_TYPE,
+  MOMENT_TEXT_TYPE,
+  type RandomMomentSnippet
+} from '../features/home/randomMoment'
 import './HomePage.scss'
 
-interface LocalUserInfo {
-  connected: boolean
-  wxid: string
-  nickName: string
-  alias: string
-  avatarUrl: string
-}
-
 function HomePage() {
-  const navigate = useNavigate()
-  const { isDbConnected, userInfo: preloadedUserInfo, userInfoLoaded } = useAppStore()
-  const [userInfo, setUserInfo] = useState<LocalUserInfo>({
-    connected: false,
-    wxid: '',
-    nickName: '',
-    alias: '',
-    avatarUrl: ''
-  })
+  const { isDbConnected } = useAppStore()
 
-  // 新版本弹窗状态
   const [showWhatsNew, setShowWhatsNew] = useState(false)
   const [currentVersion, setCurrentVersion] = useState('')
+
+  const [randomSnippet, setRandomSnippet] = useState<RandomMomentSnippet | null>(null)
+  const [randomSnippetLoading, setRandomSnippetLoading] = useState(false)
+  const [randomSnippetFetched, setRandomSnippetFetched] = useState(false)
+  const [momentHint, setMomentHint] = useState<string | null>(null)
+  const randomSnippetRunRef = useRef(0)
 
   useEffect(() => {
     checkNewVersion()
   }, [])
 
-  useEffect(() => {
-    // 如果已经预加载了用户信息，直接使用
-    if (userInfoLoaded && preloadedUserInfo) {
-      setUserInfo({
-        connected: true,
-        wxid: preloadedUserInfo.wxid,
-        nickName: preloadedUserInfo.nickName,
-        alias: preloadedUserInfo.alias,
-        avatarUrl: preloadedUserInfo.avatarUrl
-      })
-    } else if (userInfoLoaded && !preloadedUserInfo && isDbConnected) {
-      // 预加载完成但没有数据，尝试重新加载
-      loadUserInfo()
-    } else if (!userInfoLoaded && isDbConnected) {
-      // 未预加载，手动加载
-      loadUserInfo()
-    } else if (!isDbConnected) {
-      setUserInfo({
-        connected: false,
-        wxid: '',
-        nickName: '',
-        alias: '',
-        avatarUrl: ''
-      })
+  const fetchRandomSnippet = useCallback(async () => {
+    if (!isDbConnected) return
+
+    const runId = ++randomSnippetRunRef.current
+    const stale = () => runId !== randomSnippetRunRef.current
+
+    setRandomSnippet(null)
+    setMomentHint(null)
+    setRandomSnippetFetched(false)
+    setRandomSnippetLoading(true)
+
+    try {
+      const { snippet, hint } = await loadRandomMomentSnippet()
+      if (stale()) return
+      setRandomSnippet(snippet)
+      setMomentHint(hint)
+    } catch (e) {
+      console.error('首页回忆一刻加载失败:', e)
+      if (!stale()) {
+        setRandomSnippet(null)
+        setMomentHint(String(e))
+      }
+    } finally {
+      if (!stale()) {
+        setRandomSnippetLoading(false)
+        setRandomSnippetFetched(true)
+      }
     }
-  }, [isDbConnected, userInfoLoaded, preloadedUserInfo])
+  }, [isDbConnected])
+
+  useEffect(() => {
+    if (!isDbConnected) {
+      randomSnippetRunRef.current += 1
+      setRandomSnippet(null)
+      setMomentHint(null)
+      setRandomSnippetLoading(false)
+      setRandomSnippetFetched(false)
+      return
+    }
+    fetchRandomSnippet()
+  }, [isDbConnected, fetchRandomSnippet])
 
   const checkNewVersion = async () => {
     try {
       const version = await window.electronAPI.app.getVersion()
       setCurrentVersion(version)
 
-      const [
-        announcementVersion,
-        seenVersion
-      ] = await Promise.all([
+      const [announcementVersion, seenVersion] = await Promise.all([
         window.electronAPI.config.get('releaseAnnouncementVersion'),
         window.electronAPI.config.get('releaseAnnouncementSeenVersion')
       ])
@@ -90,87 +98,88 @@ function HomePage() {
     }
   }
 
-  const loadUserInfo = async () => {
-    try {
-      const result = await window.electronAPI.chat.getMyUserInfo()
-      if (result.success && result.userInfo) {
-        setUserInfo({
-          connected: true,
-          wxid: result.userInfo.wxid,
-          nickName: result.userInfo.nickName,
-          alias: result.userInfo.alias,
-          avatarUrl: result.userInfo.avatarUrl
-        })
-      } else {
-        setUserInfo({
-          connected: true,
-          wxid: '',
-          nickName: '',
-          alias: '',
-          avatarUrl: ''
-        })
-      }
-    } catch (e) {
-      console.error('加载用户信息失败:', e)
-    }
-  }
+  const momentLt = randomSnippet?.message.localType
+  const isTextBubble = momentLt === MOMENT_TEXT_TYPE
+  const isImageOrEmojiBare = momentLt === MOMENT_IMAGE_TYPE || momentLt === MOMENT_EMOJI_TYPE
 
   return (
     <div className="home-page">
       <button className="whats-new-btn" onClick={() => setShowWhatsNew(true)}>
         <Smile size={18} />
       </button>
-      {showWhatsNew && (
-        <WhatsNewModal
-          version={currentVersion}
-          onClose={handleCloseWhatsNew}
-        />
-      )}
+      {showWhatsNew && <WhatsNewModal version={currentVersion} onClose={handleCloseWhatsNew} />}
 
-      {/* 用户状态卡片 */}
-      <div className="user-status-card">
-        {userInfo.connected ? (
-          <div className="user-info">
-            <div className="user-avatar">
-              {userInfo.avatarUrl ? (
-                <img src={userInfo.avatarUrl} alt="" />
-              ) : (
-                <User size={24} />
-              )}
-            </div>
-            <div className="user-details">
-              <div className="user-name">{userInfo.nickName || userInfo.wxid}</div>
-              {userInfo.alias && <div className="user-alias">微信号: {userInfo.alias}</div>}
-              <div className="user-status">
-                <CheckCircle size={12} />
-                <span>已连接</span>
+      {isDbConnected && (
+        <div className="random-message-card" aria-busy={randomSnippetLoading}>
+          <div className="random-message-card-header">
+            <h3 className="random-message-heading">
+              <MessageSquareQuote size={16} aria-hidden />
+              <span>回忆一刻</span>
+            </h3>
+          </div>
+          {randomSnippetLoading && (
+            <div className="random-message-skeleton" aria-busy="true" aria-label="加载回忆一刻">
+              <div className="random-message-skel-avatar" />
+              <div className="random-message-skel-main">
+                <div className="random-message-skel-name" />
+                <div className="random-message-skel-bubble-wrap">
+                  <div className="random-message-skel-bubble">
+                    <span className="random-message-skel-line" />
+                    <span className="random-message-skel-line random-message-skel-line--mid" />
+                    <span className="random-message-skel-line random-message-skel-line--short" />
+                  </div>
+                </div>
               </div>
             </div>
-          </div>
-        ) : (
-          <div className="disconnected-info">
-            <div className="status-icon">
-              <XCircle size={20} />
+          )}
+          {!randomSnippetLoading && randomSnippetFetched && randomSnippet && (
+            <div className="random-message-inner">
+              <div className="random-message-avatar">
+                {randomSnippet.avatarUrl ? (
+                  <img src={randomSnippet.avatarUrl} alt="" referrerPolicy="no-referrer" />
+                ) : (
+                  <User size={22} />
+                )}
+              </div>
+              <div className="random-message-main">
+                <div className="random-message-name">{randomSnippet.displayName}</div>
+                <div className="random-message-bubble-row">
+                  <div className="random-message-body-wrap">
+                    {isImageOrEmojiBare ? (
+                      <div className="random-message-body-wrap--bare">
+                        <RandomMomentBubble sessionId={randomSnippet.sessionId} message={randomSnippet.message} />
+                      </div>
+                    ) : isTextBubble ? (
+                      <blockquote className="random-message-body">
+                        <RandomMomentBubble sessionId={randomSnippet.sessionId} message={randomSnippet.message} />
+                      </blockquote>
+                    ) : (
+                      <div className="random-message-body random-message-body--media">
+                        <RandomMomentBubble sessionId={randomSnippet.sessionId} message={randomSnippet.message} />
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    className="random-message-refresh-btn"
+                    onClick={() => fetchRandomSnippet()}
+                    disabled={randomSnippetLoading}
+                    data-tooltip="换一条"
+                    aria-label="换一条"
+                  >
+                    <RefreshCw size={15} className={randomSnippetLoading ? 'spinning' : undefined} aria-hidden />
+                  </button>
+                </div>
+              </div>
             </div>
-            <div className="status-text">
-              <span className="title">未连接数据库</span>
-              <span className="desc">请先配置解密密钥</span>
-            </div>
-            <button className="config-btn" onClick={() => navigate('/settings?tab=database')}>
-              去配置
-            </button>
-          </div>
-        )}
-      </div>
-
-      <div className="tips">
-        <h3><FileText size={16} /> 使用提示</h3>
-        <ul>
-          <li>联网功能仅用来支持在线更新！</li>
-          <li>记得到「数据管理」界面解密数据库哦！</li>
-          <li>除使用 AI 功能外，所有数据仅在本地处理，不会上传到任何服务器！</li>
-        </ul>
-      </div>
+          )}
+          {!randomSnippetLoading && randomSnippetFetched && !randomSnippet && (
+            <p className="random-message-placeholder muted">
+              {momentHint || '暂无可展示的回忆。'}
+            </p>
+          )}
+        </div>
+      )}
     </div>
   )
 }
