@@ -49,7 +49,6 @@ interface ConfigSchema {
   // 界面相关
   theme: string
   themeMode: string
-  appIcon: string
   language: string
   releaseAnnouncementVersion: string
   releaseAnnouncementBody: string
@@ -152,7 +151,6 @@ const defaults: ConfigSchema = {
   exportPath: '',
   theme: 'cloud-dancer',
   themeMode: 'light',
-  appIcon: 'default',
   language: 'zh-CN',
   releaseAnnouncementVersion: '',
   releaseAnnouncementBody: '',

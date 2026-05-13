@@ -77,7 +77,7 @@ function SettingsPage() {
   const [searchParams] = useSearchParams()
   const location = useLocation()
   const { setDbConnected, setLoading, setMyWxid: setCurrentWxid, userInfo } = useAppStore()
-  const { currentTheme, themeMode, setTheme, setThemeMode, appIcon, setAppIcon } = useThemeStore()
+  const { currentTheme, themeMode, setTheme, setThemeMode } = useThemeStore()
   const { status: activationStatus, checkStatus: checkActivationStatus } = useActivationStore()
 
   const { isAuthEnabled, enableAuth, disableAuth, setupPassword, authMethod } = useAuthStore()
@@ -159,16 +159,6 @@ function SettingsPage() {
       targetVersion?: string
       lastUpdatedAt: number
     }
-  } | null>(null)
-  const [updateSourceInfo, setUpdateSourceInfo] = useState<{
-    primaryUpdateSource: 'github'
-    githubRepository: {
-      owner: string
-      repo: string
-    }
-    policySources: Array<'github' | 'custom'>
-    policyPrecedence: 'github'
-    forceUpdatePolicyFallbackUrl: string
   } | null>(null)
   const [keyStatus, setKeyStatus] = useState('')
   const [message, setMessage] = useState<{ text: string; success: boolean } | null>(null)
@@ -1179,10 +1169,26 @@ function SettingsPage() {
       const result = await dialog.openFile({ title: '选择微信数据库根目录', properties: ['openDirectory'] })
       if (!result.canceled && result.filePaths.length > 0) {
         setDbPath(result.filePaths[0])
+        setWxid('')
+        setWxidOptions([])
+        setShowWxidDropdown(false)
+        setIsAccountVerified(false)
         showMessage('已选择数据库目录', true)
       }
     } catch (e) {
       showMessage('选择目录失败', false)
+    }
+  }
+
+  const handleSelectCachePath = async () => {
+    try {
+      const result = await dialog.openFile({ title: '选择缓存目录', properties: ['openDirectory'] })
+      if (!result.canceled && result.filePaths.length > 0) {
+        setCachePath(result.filePaths[0])
+        showMessage('已选择缓存目录', true)
+      }
+    } catch (e) {
+      showMessage('选择缓存目录失败', false)
     }
   }
 
@@ -1474,39 +1480,6 @@ function SettingsPage() {
         ))}
       </div>
 
-      <h3 className="section-title" style={{ marginTop: '2rem' }}>应用图标</h3>
-      <div className="quote-style-options">
-        <label className={`radio-label ${appIcon === 'default' ? 'active' : ''}`} style={{ width: 'auto', minWidth: '120px' }}>
-          <input
-            type="radio"
-            name="appIcon"
-            value="default"
-            checked={appIcon === 'default' || !appIcon}
-            onChange={() => setAppIcon('default')}
-          />
-          <div className="radio-content" style={{ justifyContent: 'center' }}>
-            <div className="style-preview" style={{ justifyContent: 'center', padding: '10px' }}>
-              <img src="./logo.png" alt="默认" style={{ width: '48px', height: '48px' }} />
-            </div>
-          </div>
-        </label>
-
-        <label className={`radio-label ${appIcon === 'xinnian' ? 'active' : ''}`} style={{ width: 'auto', minWidth: '120px' }}>
-          <input
-            type="radio"
-            name="appIcon"
-            value="xinnian"
-            checked={appIcon === 'xinnian'}
-            onChange={() => setAppIcon('xinnian')}
-          />
-          <div className="radio-content" style={{ justifyContent: 'center' }}>
-            <div className="style-preview" style={{ justifyContent: 'center', padding: '10px' }}>
-              <img src="./xinnian.png" alt="新年" style={{ width: '48px', height: '48px' }} />
-            </div>
-          </div>
-        </label>
-      </div>
-
       <h3 className="section-title" style={{ marginTop: '2rem' }}>引用消息样式</h3>
       <div className="quote-style-options">
         <label className={`radio-label ${quoteStyle === 'default' ? 'active' : ''}`}>
@@ -1591,16 +1564,13 @@ function SettingsPage() {
 
   const renderDatabaseTab = () => (
     <div className="tab-content">
-      {/* 引导窗口按钮 */}
+      <h3 className="section-title">账号管理</h3>
       <div className="form-group">
         <button className="btn btn-secondary" onClick={handleOpenWelcomeWindow}>
           <Zap size={16} /> 新增账号引导
         </button>
         <span className="form-hint">使用引导窗口一步步新增账号，不会覆盖其他已保存账号</span>
-      </div>
 
-      <h3 className="section-title">账号管理</h3>
-      <div className="form-group">
         <div className="form-hint" style={{ marginBottom: '10px' }}>
           当前激活账号：{getAccountDisplayName(accountsList.find(item => item.id === activeAccountId) || null) || '未设置'}
         </div>
@@ -1654,270 +1624,80 @@ function SettingsPage() {
         </div>
       </div>
 
-      {/* 数据库解密部分 */}
-      <h3 className="section-title">数据库解密与同步</h3>
-
+      <h3 className="section-title" style={{ marginTop: '2rem' }}>缓存目录</h3>
       <div className="form-group">
-        <div className="toggle-setting">
-          <div className="toggle-header">
-            <label className="toggle-label">
-              <span className="toggle-title">开启数据库自动增量同步</span>
-              <div className="toggle-switch">
-                <input
-                  type="checkbox"
-                  checked={autoUpdateDatabase}
-                  onChange={(e) => setAutoUpdateDatabase(e.target.checked)}
-                />
-                <span className="toggle-slider" />
-              </div>
-            </label>
-          </div>
-          <div className="toggle-description">
-            <p>当检测到微信数据库文件变化时（如收到新消息），自动将新数据同步到密语。</p>
-          </div>
+        <label>缓存目录 <span className="optional">(可选)</span></label>
+        <span className="form-hint">留空使用默认目录，建议选择空间充足的磁盘</span>
+        <input
+          type="text"
+          placeholder="留空使用默认目录"
+          value={cachePath}
+          onChange={(e) => setCachePath(e.target.value)}
+        />
+        <div className="btn-row">
+          <button className="btn btn-secondary" onClick={handleSelectCachePath}>
+            <FolderOpen size={16} /> 浏览选择
+          </button>
+          <button className="btn btn-secondary" onClick={() => setCachePath('')}>
+            <RotateCcw size={16} /> 恢复默认
+          </button>
         </div>
       </div>
 
-      {/* 自动同步高级参数 - 仅在开启自动同步时显示 */}
-      {autoUpdateDatabase && (
-        <div className="form-group advanced-sync-settings">
-          <label>自动同步高级参数</label>
-          <span className="form-hint">调整以下参数可以减少同步时的界面抖动（需要保存配置后重启应用生效）</span>
-
-          <div className="advanced-params-grid">
-            <div className="param-item">
-              <label>检查间隔</label>
-              <div className="number-control">
-                <button
-                  className="control-btn minus"
-                  onClick={() => setAutoUpdateCheckInterval(Math.max(10, autoUpdateCheckInterval - 10))}
-                  disabled={autoUpdateCheckInterval <= 10}
-                >
-                  <Minus size={14} />
-                </button>
-                <div className="value-display">
-                  <input
-                    type="text"
-                    value={autoUpdateCheckInterval}
-                    readOnly
-                  />
-                  <span className="unit">秒</span>
-                </div>
-                <button
-                  className="control-btn plus"
-                  onClick={() => setAutoUpdateCheckInterval(Math.min(600, autoUpdateCheckInterval + 10))}
-                  disabled={autoUpdateCheckInterval >= 600}
-                >
-                  <Plus size={14} />
-                </button>
-              </div>
-              <span className="param-hint">定时检查数据库更新的间隔（10-600秒）</span>
-            </div>
-
-            <div className="param-item">
-              <label>最小更新间隔</label>
-              <div className="number-control">
-                <button
-                  className="control-btn minus"
-                  onClick={() => setAutoUpdateMinInterval(Math.max(500, autoUpdateMinInterval - 100))}
-                  disabled={autoUpdateMinInterval <= 500}
-                >
-                  <Minus size={14} />
-                </button>
-                <div className="value-display">
-                  <input
-                    type="text"
-                    value={autoUpdateMinInterval}
-                    readOnly
-                  />
-                  <span className="unit">毫秒</span>
-                </div>
-                <button
-                  className="control-btn plus"
-                  onClick={() => setAutoUpdateMinInterval(Math.min(10000, autoUpdateMinInterval + 100))}
-                  disabled={autoUpdateMinInterval >= 10000}
-                >
-                  <Plus size={14} />
-                </button>
-              </div>
-              <span className="param-hint">两次更新之间的最小间隔（500-10000毫秒）</span>
-            </div>
-
-            <div className="param-item">
-              <label>防抖时间</label>
-              <div className="number-control">
-                <button
-                  className="control-btn minus"
-                  onClick={() => setAutoUpdateDebounceTime(Math.max(100, autoUpdateDebounceTime - 100))}
-                  disabled={autoUpdateDebounceTime <= 100}
-                >
-                  <Minus size={14} />
-                </button>
-                <div className="value-display">
-                  <input
-                    type="text"
-                    value={autoUpdateDebounceTime}
-                    readOnly
-                  />
-                  <span className="unit">毫秒</span>
-                </div>
-                <button
-                  className="control-btn plus"
-                  onClick={() => setAutoUpdateDebounceTime(Math.min(5000, autoUpdateDebounceTime + 100))}
-                  disabled={autoUpdateDebounceTime >= 5000}
-                >
-                  <Plus size={14} />
-                </button>
-              </div>
-              <span className="param-hint">文件变化后等待稳定的时间（100-5000毫秒）</span>
-            </div>
-          </div>
-
-          <div className="preset-buttons">
-            <button
-              type="button"
-              className="btn btn-sm"
-              onClick={() => {
-                setAutoUpdateCheckInterval(30)
-                setAutoUpdateMinInterval(500)
-                setAutoUpdateDebounceTime(200)
-              }}
-            >
-              快速响应
-            </button>
-            <button
-              type="button"
-              className="btn btn-sm"
-              onClick={() => {
-                setAutoUpdateCheckInterval(60)
-                setAutoUpdateMinInterval(1000)
-                setAutoUpdateDebounceTime(500)
-              }}
-            >
-              平衡（推荐）
-            </button>
-            <button
-              type="button"
-              className="btn btn-sm"
-              onClick={() => {
-                setAutoUpdateCheckInterval(120)
-                setAutoUpdateMinInterval(3000)
-                setAutoUpdateDebounceTime(1000)
-              }}
-            >
-              稳定优先
-            </button>
-          </div>
-        </div>
-      )}
+      <h3 className="section-title" style={{ marginTop: '2rem' }}>数据库配置</h3>
 
       <div className="form-group">
         <label>解密密钥</label>
-        <span className="form-hint">{isMac ? '64位十六进制 DbKey，macOS 通过 helper + 断点捕获获取' : '64位十六进制密钥'}</span>
+        <span className="form-hint">64位十六进制密钥，用于验证当前账号数据库连接</span>
         <div className="input-with-toggle">
-          <input type={showDecryptKey ? 'text' : 'password'} placeholder="例如: a1b2c3d4e5f6..." value={decryptKey} onChange={(e) => setDecryptKey(e.target.value)} />
+          <input
+            type={showDecryptKey ? 'text' : 'password'}
+            placeholder="请输入或自动获取解密密钥"
+            value={decryptKey}
+            onChange={(e) => {
+              setDecryptKey(e.target.value)
+              setIsAccountVerified(false)
+            }}
+          />
           <button type="button" className="toggle-visibility" onClick={() => setShowDecryptKey(!showDecryptKey)}>
             {showDecryptKey ? <EyeOff size={14} /> : <Eye size={14} />}
           </button>
         </div>
-        {keyStatus && <span className="key-status">{keyStatus}</span>}
+        {keyStatus && <p className="key-status">{keyStatus}</p>}
         <div className="btn-row">
           <button className="btn btn-primary" onClick={handleGetKey} disabled={isGettingKey}>
             <Key size={16} /> {isGettingKey ? '获取中...' : '自动获取密钥'}
           </button>
-          {isGettingKey && <button className="btn btn-secondary" onClick={handleCancelGetKey}><X size={16} /> 取消</button>}
+          {isGettingKey && (
+            <button className="btn btn-secondary" onClick={handleCancelGetKey}>
+              <X size={16} /> 取消
+            </button>
+          )}
         </div>
-        <span className="form-hint">
-          {isMac
-            ? 'macOS 要求先关闭 SIP；点击后会请求管理员授权，并在微信访问数据库时返回最终 DbKey。'
-            : '点击后会自动启动微信并等待 Hook 安装完成。'}
-        </span>
       </div>
 
       <div className="form-group">
         <label>数据库根目录</label>
-        <span className="form-hint">{isMac ? '微信版本目录或旧版 xwechat_files 根目录' : 'xwechat_files 目录'}</span>
+        <span className="form-hint">选择微信账号数据所在目录，通常是 WeChat Files 的上级或包含 db_storage 的目录</span>
         <input
           type="text"
-          placeholder={isMac
-            ? '例如: ~/Library/Containers/com.tencent.xinWeChat/Data/Library/Application Support/com.tencent.xinWeChat/2.0b4.0.9'
-            : '例如: C:\\Users\\xxx\\Documents\\xwechat_files'}
+          placeholder="请选择微信数据库根目录"
           value={dbPath}
-          onChange={(e) => setDbPath(e.target.value)}
-        />
-        <button className="btn btn-primary" onClick={handleSelectDbPath}><FolderOpen size={16} /> 浏览选择</button>
-      </div>
-
-      <div className="form-group">
-        <label>账号目录（待验证）</label>
-        <span className="form-hint">先扫描候选目录，获取密钥后再进行验证</span>
-        <input
-          type="text"
-          placeholder="例如: wxid_xxxxxx 或其他账号目录名"
-          value={wxid}
           onChange={(e) => {
-            setWxid(e.target.value)
+            setDbPath(e.target.value)
+            setWxid('')
+            setWxidOptions([])
+            setShowWxidDropdown(false)
             setIsAccountVerified(false)
           }}
         />
         <div className="btn-row">
-          <button className="btn btn-secondary" onClick={handleScanWxid} disabled={isScanningWxid}>
-            <Search size={16} /> {isScanningWxid ? '扫描中...' : '扫描账号目录'}
+          <button className="btn btn-secondary" onClick={handleSelectDbPath}>
+            <FolderOpen size={16} /> 浏览选择
           </button>
-          <button className="btn btn-secondary" onClick={handleVerifyAccountDirectory} disabled={isVerifyingAccount || !wxid || decryptKey.length !== 64}>
-            <Check size={16} /> {isVerifyingAccount ? '验证中...' : '验证账号目录'}
-          </button>
-        </div>
-        <span className="form-hint">状态：{isAccountVerified ? '✅ 已验证' : '⚠️ 未验证'}</span>
-
-        {/* 多账号选择列表 */}
-        {showWxidDropdown && wxidOptions.length > 1 && (
-          <>
-            <div className="wxid-backdrop" onClick={() => setShowWxidDropdown(false)} />
-            <div className="wxid-select-list">
-              <div className="wxid-select-header">
-                <span>检测到 {wxidOptions.length} 个账号，请选择：</span>
-              </div>
-              {wxidOptions.map((opt) => (
-                <div
-                  key={opt}
-                  className={`wxid-select-item ${opt === wxid ? 'active' : ''}`}
-                  onClick={() => handleSelectWxid(opt)}
-                >
-                  {opt}
-                </div>
-              ))}
-            </div>
-          </>
-        )}
-      </div>
-
-      <div className="form-group">
-        <div className="toggle-setting">
-          <div className="toggle-header">
-            <label className="toggle-label">
-              <span className="toggle-title">跳过数据库完整性检查</span>
-              <span className="toggle-switch">
-                <input
-                  type="checkbox"
-                  checked={skipIntegrityCheck}
-                  onChange={(e) => setSkipIntegrityCheck(e.target.checked)}
-                />
-                <span className="toggle-slider"></span>
-              </span>
-            </label>
-          </div>
-          <div className="toggle-description">
-            <p>启用后将跳过更新时的数据库完整性验证，可以加快更新速度并减少界面卡顿。</p>
-            <p className="toggle-warning">
-              <AlertCircle size={14} />
-              注意：关闭完整性检查可能会错过损坏的数据库文件。
-            </p>
-          </div>
         </div>
       </div>
 
-      {/* 图片解密部分 */}
       <h3 className="section-title" style={{ marginTop: '2rem' }}>图片解密</h3>
       <p className="section-desc">您只负责获取密钥，其他的交给密语-CipherTalk</p>
 
@@ -1951,6 +1731,62 @@ function SettingsPage() {
       <span className="form-hint">
         {isMac ? '优先扫描 kvcomm 和模板文件；只有前者不可用时才回退到微信进程内存扫描。' : '请先在电脑微信中打开几张图片，再执行自动获取。'}
       </span>
+
+      <h3 className="section-title" style={{ marginTop: '2rem' }}>账号验证</h3>
+      <div className="form-group wxid-group">
+        <label>账号验证配置</label>
+        <span className="form-hint">请选择或填写候选账号目录，验证成功后才会作为当前账号配置保存</span>
+        <div className="wxid-row">
+          <div className="input-with-dropdown">
+            <input
+              type="text"
+              placeholder="例如 wxid_xxxxx"
+              value={wxid}
+              onChange={(e) => {
+                setWxid(e.target.value)
+                setIsAccountVerified(false)
+              }}
+              onFocus={() => wxidOptions.length > 0 && setShowWxidDropdown(true)}
+            />
+            {showWxidDropdown && wxidOptions.length > 0 && (
+              <div className="wxid-dropdown">
+                <div className="dropdown-header">
+                  <span className="dropdown-hint">候选账号目录</span>
+                  <button type="button" className="close-dropdown" onClick={() => setShowWxidDropdown(false)}>
+                    <X size={14} />
+                  </button>
+                </div>
+                <div className="dropdown-list">
+                  {wxidOptions.map((option) => (
+                    <div
+                      key={option}
+                      className={`wxid-option ${wxid === option ? 'active' : ''}`}
+                      onClick={() => handleSelectWxid(option)}
+                    >
+                      <span className="option-icon">{wxid === option ? <Check size={14} /> : <Check size={14} className="invisible" />}</span>
+                      <span className="option-text">{option}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+          <button className="btn btn-secondary btn-icon" onClick={handleScanWxid} disabled={isScanningWxid || !dbPath}>
+            <Search size={16} className={isScanningWxid ? 'spin' : ''} /> {isScanningWxid ? '扫描中...' : '扫描账号'}
+          </button>
+          <button className="btn btn-secondary btn-icon" onClick={handleVerifyAccountDirectory} disabled={isVerifyingAccount || !dbPath || !decryptKey || !wxid}>
+            <ShieldCheck size={16} /> {isVerifyingAccount ? '验证中...' : '验证账号'}
+          </button>
+        </div>
+        <div className="btn-row" style={{ marginTop: '10px' }}>
+          <button className="btn btn-secondary" onClick={handleTestConnection} disabled={isTesting || !isAccountVerified}>
+            <Plug size={16} /> {isTesting ? '测试中...' : '测试连接'}
+          </button>
+          <span className="form-hint" style={{ marginBottom: 0 }}>
+            {isAccountVerified ? '账号目录已验证' : '账号目录未验证'}
+          </span>
+        </div>
+      </div>
     </div>
   )
 
@@ -3473,31 +3309,15 @@ function SettingsPage() {
     }
   }, [location.state])
 
-  useEffect(() => {
-    window.electronAPI.app.getUpdateSourceInfo?.().then((info) => {
-      setUpdateSourceInfo(info)
-    }).catch((error) => {
-      console.error('获取更新源信息失败:', error)
-    })
-  }, [])
-
   const renderAboutTab = () => (
     <div className="tab-content about-tab">
       <div className="about-card">
         <div className="about-logo">
-          <img src={appIcon === 'xinnian' ? "./xinnian.png" : "./logo.png"} alt="密语" />
+          <img src="./About.png" alt="密语 CipherTalk" />
         </div>
-        <h2 className="about-name">密语</h2>
-        <p className="about-slogan">CipherTalk</p>
         <p className="about-version">v{appVersion || '...'}</p>
 
         <div className="about-update">
-          {updateSourceInfo && (
-            <div className="update-hint" style={{ marginBottom: '10px' }}>
-              主更新源：GitHub Release ({updateSourceInfo.githubRepository.owner}/{updateSourceInfo.githubRepository.repo})<br />
-              策略补充源：{updateSourceInfo.forceUpdatePolicyFallbackUrl}
-            </div>
-          )}
           {updateInfo?.hasUpdate ? (
             <>
               <p className="update-hint">

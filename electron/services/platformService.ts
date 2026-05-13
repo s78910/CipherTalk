@@ -54,14 +54,18 @@ export function getBestCachePath(): CachePathResult {
     }
   }
 
-  const drives = ['D', 'E', 'F', 'C']
+  const systemDrive = (process.env.SystemDrive || 'C:').replace(':', '').toUpperCase()
+  const allDrives = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
+  const candidates = [
+    ...allDrives.filter(d => d !== systemDrive),
+    systemDrive,
+  ]
 
-  for (const drive of drives) {
-    const drivePath = `${drive}:\\`
-    if (existsSync(drivePath)) {
+  for (const drive of candidates) {
+    if (existsSync(`${drive}:\\`)) {
       return {
         success: true,
-        path: join(drivePath, 'CipherTalkDB'),
+        path: join(`${drive}:\\`, 'CipherTalkDB'),
         drive
       }
     }

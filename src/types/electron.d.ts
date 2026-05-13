@@ -285,7 +285,6 @@ export interface ElectronAPI {
     }>
     downloadAndInstall: () => Promise<void>
     getStartupDbConnected?: () => Promise<boolean>
-    setAppIcon: (iconName: string) => Promise<void>
     onDownloadProgress: (callback: (progress: UpdateDownloadProgressPayload) => void) => () => void
     onUpdateAvailable: (callback: (info: {
       hasUpdate: boolean

@@ -25,7 +25,6 @@ export interface WindowManager {
   createTray(): Tray | null
   destroyTray(): void
   setDockIcon(): void
-  updateAppIcon(): Promise<{ success: boolean; error?: string }>
   openChatWindow(): BrowserWindow
   openMomentsWindow(filterUsername?: string): BrowserWindow
   openGroupAnalyticsWindow(): BrowserWindow

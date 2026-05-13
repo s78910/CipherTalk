@@ -36,32 +36,21 @@ function SplashPage() {
 
   return (
     <div className={`splash-page${fadeOut ? ' fade-out' : ''}`}>
-      <div className="splash-brand">
-        <div className="splash-logo-wrap">
-          <img
-            className="splash-logo-img"
-            src="./logo.png"
-            alt="密语"
-            onError={(e) => {
-              e.currentTarget.style.display = 'none'
-              const fb = e.currentTarget.nextElementSibling as HTMLElement | null
-              if (fb) fb.style.display = 'grid'
-            }}
-          />
-          <div className="splash-logo-fallback">密语</div>
-        </div>
+      <div className="splash-content">
+        <img
+          className="splash-logo-img"
+          src="./Startup-Screen-Logo.png"
+          alt="密语 CipherTalk"
+        />
 
-        <div className="splash-app-name">密语</div>
-        <div className="splash-app-sub">CipherTalk · 本地聊天记录分析工作台</div>
-      </div>
-
-      <div className="splash-status">
-        <div className="splash-status-row">
-          <span className="splash-dot" />
-          <span key={msgIdx} className="splash-status-text">{MESSAGES[msgIdx]}</span>
-        </div>
-        <div className="splash-progress-track">
-          <div className="splash-progress-bar" />
+        <div className="splash-status">
+          <div className="splash-status-row">
+            <span className="splash-dot" />
+            <span key={msgIdx} className="splash-status-text">{MESSAGES[msgIdx]}</span>
+          </div>
+          <div className="splash-progress-track">
+            <div className="splash-progress-bar" />
+          </div>
         </div>
       </div>
     </div>

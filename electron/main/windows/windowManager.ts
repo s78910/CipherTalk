@@ -15,7 +15,6 @@ import { ConfigService } from '../../services/config'
 import { LogService } from '../../services/logService'
 import { appUpdateService } from '../../services/appUpdateService'
 import { mcpProxyService } from '../../services/mcp/proxyService'
-import { shortcutService } from '../../services/shortcutService'
 import { voiceTranscribeServiceWhisper } from '../../services/voiceTranscribeServiceWhisper'
 import type { ImageViewerOpenOptions, MainProcessContext, WindowManager } from '../context'
 
@@ -94,24 +93,11 @@ function getThemeQuery(ctx: MainProcessContext): Record<string, string> {
 
 function getAppIconPath(ctx: MainProcessContext): string {
   const isDev = !!process.env.VITE_DEV_SERVER_URL
-  const iconName = ctx.getConfigService()?.get('appIcon') || 'default'
 
   if (process.platform === 'darwin') {
-    if (iconName === 'xinnian') {
-      return isDev
-        ? join(__dirname, '../public/xinnian.icns')
-        : join(process.resourcesPath, 'icon.icns')
-    }
-
     return isDev
       ? join(__dirname, '../public/icon.icns')
       : join(process.resourcesPath, 'icon.icns')
-  }
-
-  if (iconName === 'xinnian') {
-    return isDev
-      ? join(__dirname, '../public/xinnian.ico')
-      : join(process.resourcesPath, 'xinnian.ico')
   }
 
   return isDev
@@ -147,16 +133,6 @@ function getWindowIconOptions(ctx: MainProcessContext): Pick<BrowserWindowConstr
 
 function getDockIconPath(ctx: MainProcessContext): string {
   const isDev = !!process.env.VITE_DEV_SERVER_URL
-  const iconName = ctx.getConfigService()?.get('appIcon') || 'default'
-
-  if (iconName === 'xinnian') {
-    const devPaddedPath = join(__dirname, '../public/xinnian-dock.png')
-    const devFallbackPath = join(__dirname, '../public/xinnian.png')
-    return isDev
-      ? (existsSync(devPaddedPath) ? devPaddedPath : devFallbackPath)
-      : join(process.resourcesPath, 'icon.png')
-  }
-
   const devPaddedPath = join(__dirname, '../public/icon-dock.png')
   const devFallbackPath = join(__dirname, '../public/logo.png')
   return isDev
@@ -167,10 +143,7 @@ function getDockIconPath(ctx: MainProcessContext): string {
 function getTrayIconPath(ctx: MainProcessContext): string {
   if (process.platform === 'darwin') {
     const isDev = !!process.env.VITE_DEV_SERVER_URL
-    const iconName = ctx.getConfigService()?.get('appIcon') || 'default'
-    const devTrayPath = iconName === 'xinnian'
-      ? join(__dirname, '../public/xinnian-tray.png')
-      : join(__dirname, '../public/tray-mac.png')
+    const devTrayPath = join(__dirname, '../public/tray-mac.png')
 
     if (isDev && existsSync(devTrayPath)) return devTrayPath
   }
@@ -464,40 +437,6 @@ export function createWindowManager(ctx: MainProcessContext): WindowManager {
       const dockIcon = nativeImage.createFromPath(dockIconPath)
       if (!dockIcon.isEmpty()) {
         app.dock?.setIcon(dockIcon)
-      }
-    },
-
-    async updateAppIcon() {
-      try {
-        const iconPath = process.platform === 'darwin' ? getDockIconPath(ctx) : getAppIconPath(ctx)
-        if (!existsSync(iconPath)) {
-          return { success: false, error: 'Icon not found' }
-        }
-
-        const image = nativeImage.createFromPath(iconPath)
-        if (process.platform === 'darwin') {
-          if (!image.isEmpty()) {
-            app.dock?.setIcon(image)
-          }
-        } else {
-          BrowserWindow.getAllWindows().forEach(win => {
-            win.setIcon(image)
-          })
-        }
-
-        shortcutService.updateDesktopShortcutIcon(iconPath).catch(err => {
-          console.error('更新快捷方式失败:', err)
-        })
-
-        const tray = ctx.getTray()
-        if (tray) {
-          tray.setImage(getTrayImage(ctx))
-        }
-
-        return { success: true }
-      } catch (e) {
-        console.error('设置图标失败:', e)
-        return { success: false, error: String(e) }
       }
     },
 

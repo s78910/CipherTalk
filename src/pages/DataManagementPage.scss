@@ -429,6 +429,11 @@
   &.emoji-grid {
     grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); // 表情包也自适应
   }
+
+  .empty-state {
+    grid-column: 1 / -1;
+    min-height: 320px;
+  }
 }
 
 .media-item {

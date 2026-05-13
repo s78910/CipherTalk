@@ -2,7 +2,6 @@ import { create } from 'zustand'
 
 export type ThemeId = 'cloud-dancer' | 'corundum-blue' | 'kiwi-green' | 'spicy-red' | 'teal-water' | 'new-year' | 'sakura-mist'
 export type ThemeMode = 'light' | 'dark' | 'system'
-export type AppIcon = 'default' | 'xinnian'
 
 export interface ThemeInfo {
   id: ThemeId
@@ -68,10 +67,8 @@ interface ThemeState {
   currentTheme: ThemeId
   themeMode: ThemeMode
   isLoaded: boolean
-  appIcon: AppIcon
   setTheme: (theme: ThemeId) => void
   setThemeMode: (mode: ThemeMode) => void
-  setAppIcon: (icon: AppIcon) => void
   toggleThemeMode: () => void
   loadTheme: () => Promise<void>
 }
@@ -79,7 +76,6 @@ interface ThemeState {
 export const useThemeStore = create<ThemeState>()((set, get) => ({
   currentTheme: 'new-year',
   themeMode: 'light',
-  appIcon: 'xinnian',
   isLoaded: false,
 
   setTheme: async (theme) => {
@@ -100,16 +96,6 @@ export const useThemeStore = create<ThemeState>()((set, get) => ({
     }
   },
 
-  setAppIcon: async (icon) => {
-    set({ appIcon: icon })
-    try {
-      await window.electronAPI.config.set('appIcon', icon)
-      await window.electronAPI.app.setAppIcon(icon)
-    } catch (e) {
-      console.error('保存应用图标失败:', e)
-    }
-  },
-
   toggleThemeMode: () => {
     const newMode = get().themeMode === 'light' ? 'dark' : 'light'
     get().setThemeMode(newMode)
@@ -119,19 +105,12 @@ export const useThemeStore = create<ThemeState>()((set, get) => ({
     try {
       const theme = await window.electronAPI.config.get('theme') as ThemeId
       const themeMode = await window.electronAPI.config.get('themeMode') as ThemeMode
-      const appIcon = await window.electronAPI.config.get('appIcon') as AppIcon
 
       set({
         currentTheme: theme || 'cloud-dancer',
         themeMode: themeMode || 'light',
-        appIcon: appIcon || 'default',
         isLoaded: true
       })
-
-      // 初始化图标
-      if (appIcon) {
-        window.electronAPI.app.setAppIcon(appIcon).catch(console.error)
-      }
     } catch (e) {
       console.error('加载主题失败:', e)
       set({ isLoaded: true })

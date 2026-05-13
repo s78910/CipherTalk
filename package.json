@@ -170,10 +170,6 @@
         "to": "icon.ico"
       },
       {
-        "from": "public/xinnian.ico",
-        "to": "xinnian.ico"
-      },
-      {
         "from": ".tmp/release-announcement.json",
         "to": "release-announcement.json"
       },

@@ -199,7 +199,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     checkForUpdates: () => ipcRenderer.invoke('app:checkForUpdates'),
     downloadAndInstall: () => ipcRenderer.invoke('app:downloadAndInstall'),
     getStartupDbConnected: () => ipcRenderer.invoke('app:getStartupDbConnected'),
-    setAppIcon: (iconName: string) => ipcRenderer.invoke('app:setAppIcon', iconName),
     onDownloadProgress: (callback: (progress: {
       percent: number
       transferred: number

@@ -3,7 +3,6 @@ import { RefreshCw } from 'lucide-react'
 import { usePlatformInfo } from '../hooks/usePlatformInfo'
 import { useTitleBarStore } from '../stores/titleBarStore'
 import { useUpdateStatusStore } from '../stores/updateStatusStore'
-import { useThemeStore } from '../stores/themeStore'
 import './TitleBar.scss'
 
 interface TitleBarProps {
@@ -17,7 +16,6 @@ function TitleBar({ className, rightContent, title, variant = 'app' }: TitleBarP
   const storeRightContent = useTitleBarStore(state => state.rightContent)
   const displayContent = rightContent ?? storeRightContent
   const isUpdating = useUpdateStatusStore(state => state.isUpdating)
-  const appIcon = useThemeStore(state => state.appIcon)
   const { isMac } = usePlatformInfo()
   const titleBarClassName = ['title-bar', `variant-${variant}`, isMac ? 'is-mac' : 'is-win', className]
     .filter(Boolean)
@@ -36,7 +34,7 @@ function TitleBar({ className, rightContent, title, variant = 'app' }: TitleBarP
 
   const titleNode = (
     <>
-      <img src={appIcon === 'xinnian' ? "./xinnian.png" : "./logo.png"} alt="密语" className="title-logo" />
+      <img src="./logo.png" alt="密语" className="title-logo" />
       <span className="titles">{title || 'CipherTalk'}</span>
     </>
   )

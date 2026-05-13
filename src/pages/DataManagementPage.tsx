@@ -1,25 +1,25 @@
 /**
  * DataManagementPage
  *
- * Direct-DB 迁移后：本页由"解密/缓存管理页"改造为"数据通道诊断页"。
- * - 展示 dbPath / wxid / db_storage 目录扫描结果
- * - 展示当前连接状态（基于 wcdb.testConnection）
- * - 订阅 wcdb.onChange，以滚动日志形式展示最近监控事件
- * - 提供"重连"按钮，调用 wcdb.close + wcdb.open
+ * 图片 / 表情包缓存查看。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Database, RefreshCw, Plug, PlugZap, Activity } from 'lucide-react'
-import * as configService from '../services/config'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Download, Image as ImageIcon, RefreshCw, Smile, Trash2 } from 'lucide-react'
 import './DataManagementPage.scss'
 
-type ConnStatus = 'idle' | 'checking' | 'connected' | 'error'
-interface DbInfo { fileName: string; filePath: string; fileSize: number; wxid: string }
-interface MonitorLog { id: number; at: string; table: string; dbPath: string }
+type TabType = 'images' | 'emojis'
 
-const MAX_LOGS = 50
-const STATUS_LABEL: Record<ConnStatus, string> = {
-  idle: '未连接', checking: '检测中...', connected: '已连接', error: '连接异常'
+interface ImageFileInfo {
+  fileName: string
+  filePath: string
+  fileSize: number
+  isDecrypted: boolean
+  decryptedPath?: string
+  version: number
 }
+
+const INITIAL_MEDIA_COUNT = 40
+const MEDIA_BATCH_SIZE = 40
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -27,112 +27,252 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
+function toFileUrl(filePath: string): string {
+  return filePath.startsWith('data:') || filePath.startsWith('file://')
+    ? filePath
+    : `file:///${filePath.replace(/\\/g, '/')}`
+}
+
 function DataManagementPage() {
-  const [dbPath, setDbPath] = useState('')
-  const [wxid, setWxid] = useState('')
-  const [databases, setDatabases] = useState<DbInfo[]>([])
-  const [isScanning, setIsScanning] = useState(false)
-  const [connStatus, setConnStatus] = useState<ConnStatus>('idle')
-  const [connError, setConnError] = useState<string>('')
-  const [sessionCount, setSessionCount] = useState<number | null>(null)
-  const [isReconnecting, setIsReconnecting] = useState(false)
+  const [activeTab, setActiveTab] = useState<TabType>('images')
   const [message, setMessage] = useState<{ text: string; success: boolean } | null>(null)
-  const [logs, setLogs] = useState<MonitorLog[]>([])
-  const logIdRef = useRef(0)
+  const [images, setImages] = useState<ImageFileInfo[]>([])
+  const [emojis, setEmojis] = useState<ImageFileInfo[]>([])
+  const [isMediaLoading, setIsMediaLoading] = useState(false)
+  const [mediaLoaded, setMediaLoaded] = useState({ images: false, emojis: false })
+  const [displayedImageCount, setDisplayedImageCount] = useState(INITIAL_MEDIA_COUNT)
+  const [displayedEmojiCount, setDisplayedEmojiCount] = useState(INITIAL_MEDIA_COUNT)
+  const [isDeletingThumbs, setIsDeletingThumbs] = useState(false)
+  const [thumbDeleteConfirm, setThumbDeleteConfirm] = useState<{ show: boolean; count: number }>({ show: false, count: 0 })
+  const imageGridRef = useRef<HTMLDivElement>(null)
+  const emojiGridRef = useRef<HTMLDivElement>(null)
 
   const showMessage = useCallback((text: string, success: boolean) => {
     setMessage({ text, success })
     setTimeout(() => setMessage(null), 2500)
   }, [])
 
-  const loadAccountAndDbs = useCallback(async () => {
-    setIsScanning(true)
+  const loadMedia = useCallback(async (target: TabType) => {
+    setIsMediaLoading(true)
     try {
-      const active = await configService.getActiveAccount()
-      setDbPath(active?.dbPath || '')
-      setWxid(active?.wxid || '')
-    } catch { /* ignore */ }
-    try {
-      const r = await window.electronAPI.dataManagement.scanDatabases()
-      if (r.success && r.databases) {
-        setDatabases(r.databases.map((db) => ({
-          fileName: db.fileName, filePath: db.filePath, fileSize: db.fileSize, wxid: db.wxid
-        })))
+      const dirsResult = await window.electronAPI.dataManagement.getImageDirectories()
+      if (!dirsResult.success || !dirsResult.directories?.length) {
+        if (target === 'images') setImages([])
+        else setEmojis([])
+        setMediaLoaded((prev) => ({ ...prev, [target]: true }))
+        showMessage(dirsResult.error || '未找到图片或表情包目录', false)
+        return
       }
-    } catch (e) {
-      console.warn('[DataManagement] scanDatabases 失败:', e)
-    } finally {
-      setIsScanning(false)
-    }
-  }, [])
 
-  const checkConnection = useCallback(async () => {
-    const active = await configService.getActiveAccount()
-    if (!active?.dbPath || !active?.wxid || !active?.decryptKey) {
-      setConnStatus('idle')
-      setConnError('未找到已激活账号（dbPath / wxid / key 缺失）')
-      return
-    }
-    setConnStatus('checking'); setConnError('')
-    try {
-      const r = await window.electronAPI.wcdb.testConnection(active.dbPath, active.decryptKey, active.wxid, true)
-      if (r.success) {
-        setConnStatus('connected')
-        setSessionCount(r.sessionCount ?? null)
-      } else {
-        setConnStatus('error'); setConnError(r.error || '连接失败')
+      const mediaDir = dirsResult.directories.find((dir) => {
+        const normalized = dir.path.replace(/\\/g, '/').toLowerCase()
+        return target === 'images' ? normalized.endsWith('/images') : normalized.endsWith('/emojis')
+      })
+
+      if (!mediaDir) {
+        if (target === 'images') setImages([])
+        else setEmojis([])
+        setMediaLoaded((prev) => ({ ...prev, [target]: true }))
+        showMessage(target === 'images' ? '未找到图片目录' : '未找到表情包目录', false)
+        return
       }
+
+      const result = await window.electronAPI.dataManagement.scanImages(mediaDir.path)
+      if (!result.success) {
+        showMessage(result.error || '扫描媒体失败', false)
+        return
+      }
+
+      const files = result.images || []
+      if (target === 'images') {
+        setImages(files)
+        setDisplayedImageCount(INITIAL_MEDIA_COUNT)
+      } else {
+        setEmojis(files)
+        setDisplayedEmojiCount(INITIAL_MEDIA_COUNT)
+      }
+      setMediaLoaded((prev) => ({ ...prev, [target]: true }))
     } catch (e) {
-      setConnStatus('error'); setConnError(String(e))
+      showMessage(`扫描媒体失败: ${e}`, false)
+    } finally {
+      setIsMediaLoading(false)
     }
-  }, [])
+  }, [showMessage])
 
   useEffect(() => {
-    void loadAccountAndDbs()
-    void checkConnection()
-  }, [loadAccountAndDbs, checkConnection])
+    if (activeTab === 'images' && !mediaLoaded.images) {
+      void loadMedia('images')
+    } else if (activeTab === 'emojis' && !mediaLoaded.emojis) {
+      void loadMedia('emojis')
+    }
+  }, [activeTab, loadMedia, mediaLoaded])
 
-  useEffect(() => {
-    const onChange = window.electronAPI.wcdb.onChange
-    if (typeof onChange !== 'function') return
-    const remove = onChange((payload) => {
-      const id = ++logIdRef.current
-      setLogs((prev) => [{
-        id, at: new Date().toLocaleTimeString(),
-        table: payload?.table || 'Unknown', dbPath: payload?.dbPath || ''
-      }, ...prev].slice(0, MAX_LOGS))
-    })
-    return () => { remove?.() }
+  const handleMediaScroll = useCallback((target: TabType) => {
+    const grid = target === 'images' ? imageGridRef.current : emojiGridRef.current
+    if (!grid) return
+
+    const distanceToBottom = grid.scrollHeight - grid.scrollTop - grid.clientHeight
+    if (distanceToBottom > 300) return
+
+    if (target === 'images') {
+      setDisplayedImageCount((prev) => Math.min(prev + MEDIA_BATCH_SIZE, images.length))
+    } else {
+      setDisplayedEmojiCount((prev) => Math.min(prev + MEDIA_BATCH_SIZE, emojis.length))
+    }
+  }, [emojis.length, images.length])
+
+  const handleImageClick = useCallback(async (image: ImageFileInfo) => {
+    const imagePath = image.decryptedPath || image.filePath
+    try {
+      await window.electronAPI.window.openImageViewerWindow(imagePath)
+    } catch (e) {
+      showMessage(`打开图片失败: ${e}`, false)
+    }
+  }, [showMessage])
+
+  const handleDownloadImage = useCallback((e: React.MouseEvent, image: ImageFileInfo) => {
+    e.stopPropagation()
+    const imagePath = image.decryptedPath || image.filePath
+    const link = document.createElement('a')
+    link.href = toFileUrl(imagePath)
+    link.download = image.fileName
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
   }, [])
 
-  const handleReconnect = useCallback(async () => {
-    const active = await configService.getActiveAccount()
-    if (!active?.dbPath || !active?.wxid || !active?.decryptKey) {
-      showMessage('未找到已激活账号，无法重连', false); return
-    }
-    setIsReconnecting(true); setConnStatus('checking'); setConnError('')
+  const handleDeleteThumbnails = useCallback(async () => {
     try {
-      try { await window.electronAPI.wcdb.close() } catch { /* ignore */ }
-      const ok = await window.electronAPI.wcdb.open(active.dbPath, active.decryptKey, active.wxid)
-      if (ok) {
-        showMessage('已重新建立直连', true)
-        await checkConnection()
+      const result = await window.electronAPI.image.countThumbnails()
+      if (!result.success) {
+        showMessage(result.error || '统计缩略图失败', false)
+        return
+      }
+
+      if (result.count === 0) {
+        showMessage('没有可删除的缩略图缓存', true)
+        return
+      }
+
+      setThumbDeleteConfirm({ show: true, count: result.count })
+    } catch (e) {
+      showMessage(`统计缩略图失败: ${e}`, false)
+    }
+  }, [showMessage])
+
+  const confirmDeleteThumbnails = useCallback(async () => {
+    setThumbDeleteConfirm({ show: false, count: 0 })
+    setIsDeletingThumbs(true)
+    try {
+      const result = await window.electronAPI.image.deleteThumbnails()
+      if (result.success) {
+        showMessage(`已删除 ${result.deleted} 张缩略图`, true)
+        await loadMedia('images')
       } else {
-        setConnStatus('error'); setConnError('重连失败'); showMessage('重连失败', false)
+        showMessage(result.error || '删除缩略图失败', false)
       }
     } catch (e) {
-      setConnStatus('error'); setConnError(String(e)); showMessage(`重连失败: ${e}`, false)
+      showMessage(`删除缩略图失败: ${e}`, false)
     } finally {
-      setIsReconnecting(false)
+      setIsDeletingThumbs(false)
     }
-  }, [checkConnection, showMessage])
+  }, [loadMedia, showMessage])
 
-  const dbStoragePath = useMemo(() => {
-    if (databases.length === 0) return ''
-    const first = databases[0].filePath
-    const idx = first.toLowerCase().lastIndexOf('db_storage')
-    return idx >= 0 ? first.slice(0, idx + 'db_storage'.length) : ''
-  }, [databases])
+  const renderMediaGrid = (target: TabType) => {
+    const list = target === 'images' ? images : emojis
+    const displayedCount = target === 'images' ? displayedImageCount : displayedEmojiCount
+    const ref = target === 'images' ? imageGridRef : emojiGridRef
+    const title = target === 'images' ? '图片管理' : '表情包管理'
+    const emptyText = target === 'images' ? '未找到图片文件' : '未找到表情包'
+    const Icon = target === 'images' ? ImageIcon : Smile
+
+    return (
+      <>
+        <div className="media-header">
+          <div>
+            <h2>{title}</h2>
+            <p className="section-desc">
+              {isMediaLoading ? '正在扫描...' : `共 ${list.length} 个文件`}
+            </p>
+          </div>
+          <div className="section-actions">
+            {target === 'images' && (
+              <button className="btn btn-secondary" onClick={() => void handleDeleteThumbnails()} disabled={isDeletingThumbs}>
+                <Trash2 size={16} />
+                {isDeletingThumbs ? '删除中...' : '一键删除缩略图'}
+              </button>
+            )}
+            <button className="btn btn-secondary" onClick={() => void loadMedia(target)} disabled={isMediaLoading}>
+              <RefreshCw size={16} className={isMediaLoading ? 'spin' : ''} />
+              刷新
+            </button>
+          </div>
+        </div>
+
+        <div
+          className={`media-grid ${target === 'emojis' ? 'emoji-grid' : ''}`}
+          ref={ref}
+          onScroll={() => handleMediaScroll(target)}
+        >
+          {list.slice(0, displayedCount).map((image) => {
+            const imagePath = image.decryptedPath || image.filePath
+            const imagePathLower = imagePath.toLowerCase()
+            const isThumb = /_thumb\./.test(imagePathLower) || /_t\./.test(imagePathLower) || /\.t\./.test(imagePathLower)
+            const isHd = /_hd\./.test(imagePathLower) || /_h\./.test(imagePathLower)
+
+            return (
+              <div
+                key={image.filePath}
+                className={`media-item ${target === 'emojis' ? 'emoji-item' : ''}`}
+                onClick={() => void handleImageClick(image)}
+              >
+                {target === 'images' && (
+                  <span className={`media-quality-tag ${isThumb ? 'thumb' : 'hd'}`}>
+                    {isThumb ? '缩略图' : isHd ? '高清图' : '原图'}
+                  </span>
+                )}
+                <img
+                  src={toFileUrl(imagePath)}
+                  alt={image.fileName}
+                  loading="lazy"
+                  onError={(e) => {
+                    e.currentTarget.style.display = 'none'
+                  }}
+                />
+                <div className="media-actions">
+                  <button
+                    className="action-btn download-btn"
+                    onClick={(e) => handleDownloadImage(e, image)}
+                    title="下载"
+                  >
+                    <Download size={16} />
+                  </button>
+                </div>
+                <div className="media-info">
+                  <span className="media-name">{image.fileName}</span>
+                  <span className="media-size">{formatFileSize(image.fileSize)}</span>
+                </div>
+              </div>
+            )
+          })}
+
+          {!isMediaLoading && list.length === 0 && (
+            <div className="empty-state">
+              <Icon size={48} strokeWidth={1} />
+              <p>{emptyText}</p>
+              <p className="hint">请确认图片缓存目录已生成</p>
+            </div>
+          )}
+
+          {displayedCount < list.length && (
+            <div className="loading-more">
+              继续滚动加载 ({displayedCount}/{list.length})
+            </div>
+          )}
+        </div>
+      </>
+    )
+  }
 
   return (
     <>
@@ -140,112 +280,46 @@ function DataManagementPage() {
         <div className={`message-toast ${message.success ? 'success' : 'error'}`}>{message.text}</div>
       )}
 
-      <div className="page-header"><h1>数据通道诊断</h1></div>
-
-      <div className="page-scroll">
-        <section className="page-section">
-          <div className="section-header">
-            <div>
-              <h2>直连状态</h2>
-              <p className="section-desc">当前 Direct-DB 通道连接信息</p>
-            </div>
-            <div className="section-actions">
-              <button className="btn btn-secondary" onClick={() => void checkConnection()} disabled={connStatus === 'checking'}>
-                <RefreshCw size={16} className={connStatus === 'checking' ? 'spin' : ''} />
-                重新检测
+      {thumbDeleteConfirm.show && (
+        <div className="delete-confirm-overlay" onClick={() => setThumbDeleteConfirm({ show: false, count: 0 })}>
+          <div className="delete-confirm-card" onClick={(e) => e.stopPropagation()}>
+            <h3>批量删除缩略图</h3>
+            <p className="confirm-message">共找到 {thumbDeleteConfirm.count} 张缩略图缓存</p>
+            <p className="confirm-warning">删除后查看图片时会重新生成，此操作不可恢复。</p>
+            <div className="confirm-actions">
+              <button className="btn btn-secondary" onClick={() => setThumbDeleteConfirm({ show: false, count: 0 })}>
+                取消
               </button>
-              <button className="btn btn-primary" onClick={() => void handleReconnect()} disabled={isReconnecting}>
-                <PlugZap size={16} />
-                {isReconnecting ? '重连中...' : '重连'}
+              <button className="btn btn-danger" onClick={() => void confirmDeleteThumbnails()}>
+                确定删除
               </button>
             </div>
           </div>
+        </div>
+      )}
 
-          <div className="database-item" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 6 }}>
-            <div><strong>dbPath：</strong><span style={{ marginLeft: 8 }}>{dbPath || '（未设置）'}</span></div>
-            <div><strong>wxid：</strong><span style={{ marginLeft: 8 }}>{wxid || '（未设置）'}</span></div>
-            <div><strong>db_storage：</strong><span style={{ marginLeft: 8 }}>{dbStoragePath || '（未扫描到）'}</span></div>
-            <div>
-              <strong>状态：</strong>
-              <span style={{ marginLeft: 8 }}>
-                <Plug size={14} style={{ verticalAlign: 'middle', marginRight: 4 }} />
-                {STATUS_LABEL[connStatus]}
-                {sessionCount !== null && connStatus === 'connected' && `（会话数：${sessionCount}）`}
-              </span>
-            </div>
-            {connError && (
-              <div style={{ color: '#ff6b6b' }}><strong>错误：</strong><span style={{ marginLeft: 8 }}>{connError}</span></div>
-            )}
-          </div>
-        </section>
-
-        <section className="page-section">
-          <div className="section-header">
-            <div>
-              <h2>数据库文件</h2>
-              <p className="section-desc">
-                {isScanning ? '扫描中...' : `扫描到 ${databases.length} 个数据库文件（仅展示元信息，不再解密落地）`}
-              </p>
-            </div>
-            <div className="section-actions">
-              <button className="btn btn-secondary" onClick={() => void loadAccountAndDbs()} disabled={isScanning}>
-                <RefreshCw size={16} className={isScanning ? 'spin' : ''} />
-                刷新
-              </button>
-            </div>
-          </div>
-          <div className="database-list">
-            {databases.map((db) => (
-              <div key={db.filePath} className="database-item">
-                <div className="status-icon decrypted"><Database size={16} /></div>
-                <div className="db-info">
-                  <div className="db-name">{db.fileName}</div>
-                  <div className="db-meta">
-                    <span>{db.wxid}</span><span>•</span><span>{formatFileSize(db.fileSize)}</span>
-                  </div>
-                </div>
-              </div>
-            ))}
-            {!isScanning && databases.length === 0 && (
-              <div className="empty-state">
-                <Database size={48} strokeWidth={1} />
-                <p>未找到数据库文件</p>
-                <p className="hint">请确认已完成初始引导</p>
-              </div>
-            )}
-          </div>
-        </section>
-
-        <section className="page-section">
-          <div className="section-header">
-            <div>
-              <h2>监控事件日志</h2>
-              <p className="section-desc">实时订阅 wcdb.onChange（最近 {MAX_LOGS} 条）</p>
-            </div>
-            <div className="section-actions">
-              <button className="btn btn-secondary" onClick={() => setLogs([])} disabled={logs.length === 0}>清空</button>
-            </div>
-          </div>
-          <div className="database-list">
-            {logs.length === 0 && (
-              <div className="empty-state">
-                <Activity size={48} strokeWidth={1} />
-                <p>暂无监控事件</p>
-                <p className="hint">数据库发生变化时会在此滚动展示</p>
-              </div>
-            )}
-            {logs.map((log) => (
-              <div key={log.id} className="database-item">
-                <div className="status-icon decrypted"><Activity size={16} /></div>
-                <div className="db-info">
-                  <div className="db-name">[{log.at}] {log.table}</div>
-                  <div className="db-meta"><span>{log.dbPath}</span></div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
+      <div className="page-header">
+        <h1>数据管理</h1>
+        <div className="header-tabs">
+          <button
+            className={`tab-btn ${activeTab === 'images' ? 'active' : ''}`}
+            onClick={() => setActiveTab('images')}
+          >
+            <ImageIcon size={16} />
+            图片 ({images.length})
+          </button>
+          <button
+            className={`tab-btn ${activeTab === 'emojis' ? 'active' : ''}`}
+            onClick={() => setActiveTab('emojis')}
+          >
+            <Smile size={16} />
+            表情包 ({emojis.length})
+          </button>
+        </div>
       </div>
+
+      {activeTab === 'images' && renderMediaGrid('images')}
+      {activeTab === 'emojis' && renderMediaGrid('emojis')}
     </>
   )
 }

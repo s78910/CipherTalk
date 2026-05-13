@@ -45,10 +45,6 @@ export function registerAppHandlers(ctx: MainProcessContext): void {
     }
   })
 
-  ipcMain.handle('app:setAppIcon', async () => {
-    return ctx.getWindowManager().updateAppIcon()
-  })
-
   ipcMain.handle('app:getStartupDbConnected', () => {
     const connected = ctx.getStartupDbConnected()
     ctx.setStartupDbConnected(false)

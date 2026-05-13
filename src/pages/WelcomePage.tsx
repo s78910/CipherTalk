@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { useThemeStore } from '../stores/themeStore'
 import { useAppStore } from '../stores/appStore'
 import { dialog } from '../services/ipc'
 import * as configService from '../services/config'
@@ -29,7 +28,6 @@ function WelcomePage({ standalone = false }: WelcomePageProps) {
   const navigate = useNavigate()
   const location = useLocation()
   const { isDbConnected, setDbConnected, setMyWxid: setCurrentWxid } = useAppStore()
-  const appIcon = useThemeStore(state => state.appIcon)
   const { enableAuth, disableAuth, isAuthEnabled } = useAuthStore()
 
   const [stepIndex, setStepIndex] = useState(0)
@@ -524,7 +522,7 @@ function WelcomePage({ standalone = false }: WelcomePageProps) {
         if ('Notification' in window && Notification.permission === 'granted') {
           new Notification('CipherTalk - 图片密钥获取成功', {
             body: '已成功获取图片密钥，可以继续下一步操作',
-            icon: appIcon === 'xinnian' ? './xinnian.png' : './logo.png'
+            icon: './logo.png'
           })
         }
       } else {
@@ -719,7 +717,7 @@ function WelcomePage({ standalone = false }: WelcomePageProps) {
           {/* 左侧说明 */}
           <div className="info-panel">
             <div className="panel-brand">
-              <img src={appIcon === 'xinnian' ? "./xinnian.png" : "./logo.png"} alt="CipherTalk" className="brand-logo" />
+              <img src="./logo.png" alt="CipherTalk" className="brand-logo" />
               <div>
                 <h1 className="brand-title">CipherTalk</h1>
                 <p className="brand-subtitle">初始引导</p>
