@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createProgram } from '../../src/cli.js'
 import { notImplemented } from '../../src/errors.js'
-import { getInteractiveCommands, parseSlashInput } from '../../src/interactiveShell.js'
+import { getInteractiveCommands, parseSlashInput, renderWelcomeScreen } from '../../src/interactiveShell.js'
 import type { DataService, KeyService } from '../../src/services/types.js'
 
 function createOutput() {
@@ -131,5 +131,12 @@ describe('cli command registration', () => {
       command: '/messages',
       args: ['张三', '--limit', '20']
     })
+  })
+
+  it('renders a standalone welcome screen for interactive mode', () => {
+    const screen = renderWelcomeScreen()
+    expect(screen).toContain('Welcome to MiYu CLI')
+    expect(screen).toContain('欢迎使用密语命令行工具')
+    expect(screen).toContain('按 Enter 继续')
   })
 })

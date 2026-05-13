@@ -10,6 +10,10 @@ export interface InteractiveCommand {
   description: string
 }
 
+export interface InteractiveShellOptions {
+  initialCommand?: string
+}
+
 const COMMANDS: InteractiveCommand[] = [
   { name: '/status', usage: '/status', description: '检查配置和数据库连接状态' },
   { name: '/sessions', usage: '/sessions [--limit 20] [--type private|group|mp]', description: '列出会话' },
@@ -120,8 +124,32 @@ function showCommandList(): string {
   ].join('\n')
 }
 
-function shellFormat(config: RuntimeConfig): OutputFormat {
-  return config.defaultFormat
+export function renderWelcomeScreen(): string {
+  return [
+    '┌──────────────────────────────────────────────┐',
+    '│  Welcome to MiYu CLI                         │',
+    '│  欢迎使用密语命令行工具                      │',
+    '└──────────────────────────────────────────────┘',
+    '',
+    '███╗   ███╗ ██╗ ██╗   ██╗ ██╗   ██╗',
+    '████╗ ████║ ██║ ╚██╗ ██╔╝ ██║   ██║',
+    '██╔████╔██║ ██║  ╚████╔╝  ██║   ██║',
+    '██║╚██╔╝██║ ██║   ╚██╔╝   ██║   ██║',
+    '██║ ╚═╝ ██║ ██║    ██║    ╚██████╔╝',
+    '╚═╝     ╚═╝ ╚═╝    ╚═╝     ╚═════╝',
+    '',
+    '本地微信数据命令行工作台',
+    '',
+    '按 Enter 继续'
+  ].join('\n')
+}
+
+function shellFormat(config: RuntimeConfig, globals: GlobalCliOptions, options: Record<string, string | boolean>): OutputFormat {
+  const explicit = asString(options.format) || globals.format
+  if (explicit === 'json' || explicit === 'jsonl' || explicit === 'csv' || explicit === 'markdown' || explicit === 'table') {
+    return explicit
+  }
+  return config.defaultFormat === 'json' ? 'table' : config.defaultFormat
 }
 
 function asString(value: string | boolean | undefined): string | undefined {
@@ -142,7 +170,7 @@ async function runShellCommand(line: string, context: CommandContext, globals: G
 
   const { options, positional } = parseOptions(parsed.args)
   const config = resolveRuntimeConfig({ ...globals, limit: asString(options.limit) || globals.limit })
-  const format = shellFormat(config)
+  const format = shellFormat(config, globals, options)
 
   try {
     switch (parsed.command) {
@@ -247,18 +275,48 @@ async function runShellCommand(line: string, context: CommandContext, globals: G
   }
 }
 
-export async function startInteractiveShell(context: CommandContext, globals: GlobalCliOptions): Promise<void> {
-  if (!process.stdin.isTTY || !process.stdout.isTTY) return
+export async function startInteractiveShell(
+  context: CommandContext,
+  globals: GlobalCliOptions,
+  options: InteractiveShellOptions = {}
+): Promise<void> {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    context.output.stderr('当前终端不支持交互界面。请在真实终端中运行，或使用 --format json 输出脚本结果。')
+    return
+  }
 
   const input = process.stdin
   const output = process.stdout
   const prompt = 'miyu> '
   let buffer = ''
   let closed = false
+  let commandListVisible = false
+  let enteredMainScreen = false
 
   readline.emitKeypressEvents(input)
   input.setRawMode?.(true)
   input.resume()
+
+  const enterScreen = () => {
+    output.write('\x1b[?1049h\x1b[2J\x1b[H\x1b[?25l')
+  }
+
+  const leaveScreen = () => {
+    output.write('\x1b[?25h\x1b[?1049l')
+  }
+
+  const clearScreen = () => {
+    output.write('\x1b[2J\x1b[H')
+  }
+
+  const renderHeader = () => {
+    output.write([
+      '密语 CLI 工作台',
+      '输入 / 显示命令，输入 /help 查看帮助，输入 /exit 退出。',
+      '────────────────────────────────────────────────────────',
+      ''
+    ].join('\n'))
+  }
 
   const render = () => {
     readline.clearLine(output, 0)
@@ -267,12 +325,13 @@ export async function startInteractiveShell(context: CommandContext, globals: Gl
   }
 
   const printList = () => {
+    commandListVisible = true
     output.write(`\n${showCommandList()}\n`)
     render()
   }
 
-  output.write('\n已进入 miyu 交互模式。输入 / 自动显示命令，输入 /exit 退出。\n')
-  render()
+  enterScreen()
+  output.write(renderWelcomeScreen())
 
   await new Promise<void>((resolve) => {
     const close = () => {
@@ -280,8 +339,20 @@ export async function startInteractiveShell(context: CommandContext, globals: Gl
       closed = true
       input.off('keypress', onKeypress)
       input.setRawMode?.(false)
-      output.write('\n')
+      leaveScreen()
       resolve()
+    }
+
+    const enterMainScreen = async () => {
+      enteredMainScreen = true
+      clearScreen()
+      output.write('\x1b[?25h')
+      renderHeader()
+      if (options.initialCommand) {
+        await runShellCommand(options.initialCommand, context, globals)
+        output.write('\n')
+      }
+      render()
     }
 
     const execute = async () => {
@@ -303,7 +374,17 @@ export async function startInteractiveShell(context: CommandContext, globals: Gl
         close()
         return
       }
+
+      if (!enteredMainScreen) {
+        if (key.name === 'return' || key.name === 'enter') {
+          void enterMainScreen()
+          return
+        }
+        return
+      }
+
       if (key.name === 'return' || key.name === 'enter') {
+        commandListVisible = false
         void execute()
         return
       }
@@ -321,7 +402,7 @@ export async function startInteractiveShell(context: CommandContext, globals: Gl
 
       buffer += char
       render()
-      if (buffer === '/') printList()
+      if (buffer === '/' && !commandListVisible) printList()
     }
 
     input.on('keypress', onKeypress)

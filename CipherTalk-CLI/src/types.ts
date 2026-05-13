@@ -26,6 +26,7 @@ export interface GlobalCliOptions {
   limit?: string | number
   quiet?: boolean
   wxid?: string
+  ui?: boolean
 }
 
 export interface RuntimeConfig {

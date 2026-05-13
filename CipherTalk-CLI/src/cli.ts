@@ -41,6 +41,7 @@ export function createProgram(options: CreateProgramOptions = {}): Command {
     .option('--wxid <wxid>', '指定微信账户 wxid')
     .option('--format <fmt>', '输出格式: json | jsonl | table | csv | markdown')
     .option('--limit <n>', '结果条数限制')
+    .option('--ui', '强制进入交互界面')
     .option('--quiet', '仅输出数据，不打印状态信息')
 
   registerInitCommand(program, context)

@@ -27,7 +27,7 @@ npm run cli:test
 
 ## 交互模式
 
-在终端中执行 `miyu status` 会先检查状态，然后进入交互式 CLI。进入后所有命令都使用 `/命令` 形式：
+在真实终端中执行 `miyu status` 会进入独立的全屏终端界面。界面会先显示欢迎页，按 Enter 后进入密语 CLI 工作台。进入后所有命令都使用 `/命令` 形式：
 
 ```bash
 miyu status
@@ -36,7 +36,13 @@ miyu> /messages "张三" --limit 50
 miyu> /exit
 ```
 
-输入 `/` 会自动显示所有可用命令供选择；输入 `/help` 也可以再次查看命令列表。脚本或管道场景可以显式指定 `--format` 或 `--quiet`，此时 `status` 只输出结果，不进入交互模式：
+输入 `/` 会自动显示所有可用命令供选择；输入 `/help` 也可以再次查看命令列表。如果某些终端环境没有自动进入界面，可以使用 `--ui` 强制进入：
+
+```bash
+miyu --ui status
+```
+
+脚本或管道场景可以显式指定 `--format` 或 `--quiet`，此时 `status` 只输出结果，不进入交互模式：
 
 ```bash
 miyu --format json status
