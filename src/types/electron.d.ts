@@ -1146,6 +1146,11 @@ export interface ElectronAPI {
       error?: string
       needsProxy?: boolean
     }>
+    generatePosterTheme: (options: { description: string; provider?: string; apiKey?: string; model?: string }) => Promise<{
+      success: boolean
+      css?: string
+      error?: string
+    }>
     estimateCost: (messageCount: number, provider: string) => Promise<{
       success: boolean
       tokens?: number

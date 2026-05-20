@@ -965,6 +965,51 @@ ${detailInstructions[detail as keyof typeof detailInstructions] || detailInstruc
   }
 
   /**
+   * 为聊天记录分享海报生成主题 CSS（非流式）。
+   * 仅返回 CSS 文本，作用域裁剪与安全过滤由渲染层负责。
+   */
+  async generatePosterTheme(options: {
+    description: string
+    provider?: string
+    apiKey?: string
+    model?: string
+  }): Promise<string> {
+    if (!this.initialized) {
+      this.init()
+    }
+
+    const provider = this.getProvider(options.provider, options.apiKey)
+    const model = options.model || provider.models[0]
+    const system = [
+      '你是一名前端 CSS 设计师，为一张「聊天记录分享海报」生成主题样式。',
+      '海报使用以下固定类名，你只能为这些类名（及其组合、后代）编写样式：',
+      '.poster-card 海报整体卡片容器（设置背景、圆角等）',
+      '.poster-card__header 顶部区域 / .poster-card__title 标题 / .poster-card__subtitle 副标题',
+      '.poster-card__body 消息列表区域',
+      '.poster-divider span 日期分割标签',
+      '.poster-row.sent 自己发送的消息行 / .poster-row.received 对方的消息行',
+      '.poster-avatar 头像容器 / .poster-name 群昵称',
+      '.poster-bubble 气泡 / .poster-row.sent .poster-bubble 自己气泡 / .poster-row.received .poster-bubble 对方气泡',
+      '.poster-card__footer 底部水印',
+      '严格要求：',
+      '1. 只输出纯 CSS，不要 Markdown 代码块，不要任何解释文字。',
+      '2. 每条规则的选择器必须包含 .poster 开头的类名，禁止 body、html、*、:root 等全局选择器。',
+      '3. 只写扁平规则，禁止 @import、@media、@keyframes，禁止 url() 引用外部资源，禁止 javascript:。',
+      '4. 配色协调美观，务必保证气泡文字与气泡背景有足够对比度、清晰可读。'
+    ].join('\n')
+
+    const raw = await provider.chat([
+      { role: 'system', content: system },
+      { role: 'user', content: `请按下面的风格描述生成主题 CSS：${String(options.description || '').slice(0, 500)}` }
+    ], { model, temperature: 0.7, maxTokens: 1400, enableThinking: false })
+
+    return String(raw || '')
+      .replace(/```[a-zA-Z]*\n?/g, '')
+      .replace(/```/g, '')
+      .trim()
+  }
+
+  /**
    * 单会话 AI 问答（流式）
    */
   async answerSessionQuestion(

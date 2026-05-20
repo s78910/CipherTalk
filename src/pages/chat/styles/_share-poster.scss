@@ -174,10 +174,117 @@
   background: #d6d6d6;
 }
 
-/* 截图区域：固定微信浅色风格，不随主题变化 */
-.poster-card {
+/* 主题选择栏 */
+.poster-theme-bar {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border-color, #eee);
+}
+
+.poster-theme-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  font-size: 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color, #ddd);
+  background: var(--bg-primary, #fff);
+  color: var(--text-secondary, #666);
+  cursor: pointer;
+  transition: all 0.15s ease;
+
+  &:hover { border-color: #07c160; }
+
+  &.active {
+    background: #07c160;
+    border-color: #07c160;
+    color: #fff;
+  }
+
+  &--ai.active {
+    background: #8a5cf6;
+    border-color: #8a5cf6;
+  }
+
+  &--ai:not(.active):hover { border-color: #8a5cf6; }
+
+  &--custom {
+    padding-right: 4px;
+  }
+}
+
+.poster-theme-chip__name {
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.poster-theme-chip__del {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  opacity: 0.55;
+  transition: opacity 0.15s ease, background-color 0.15s ease;
+
+  &:hover {
+    opacity: 1;
+    background: rgba(0, 0, 0, 0.18);
+  }
+
+  .poster-theme-chip--custom.active & {
+    &:hover { background: rgba(255, 255, 255, 0.28); }
+  }
+}
+
+/* AI 定制面板 */
+.poster-ai-panel {
+  flex-shrink: 0;
+  display: flex;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border-color, #eee);
+  background: var(--bg-secondary, #fafafa);
+}
+
+.poster-ai-input {
+  flex: 1;
+  resize: none;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  border-radius: 6px;
+  border: 1px solid var(--border-color, #ddd);
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #333);
+  font-family: inherit;
+
+  &:focus {
+    outline: none;
+    border-color: #8a5cf6;
+  }
+}
+
+.poster-ai-gen {
+  align-self: stretch;
+  white-space: nowrap;
+}
+
+/* 截图区域：固定浅色画布，海报本体由主题决定 */
+.poster-theme-scope {
   width: 400px;
   margin: 0 auto;
+}
+
+.poster-card {
+  width: 100%;
   background: #ededed;
   border-radius: 10px;
   overflow: hidden;

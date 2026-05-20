@@ -21,6 +21,22 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
     }
   })
 
+  ipcMain.handle('ai:generatePosterTheme', async (_, options: {
+    description: string
+    provider?: string
+    apiKey?: string
+    model?: string
+  }) => {
+    try {
+      const { aiService } = await import('../../services/ai/aiService')
+      const css = await aiService.generatePosterTheme(options)
+      return { success: true, css }
+    } catch (e) {
+      console.error('[AI] 生成海报主题失败:', e)
+      return { success: false, error: e instanceof Error ? e.message : String(e) }
+    }
+  })
+
   // 代理相关
   ipcMain.handle('ai:getProxyStatus', async () => {
     try {
