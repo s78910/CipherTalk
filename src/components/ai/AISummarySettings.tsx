@@ -4,6 +4,7 @@ import { getAIProviders, type AIProviderInfo, type EmbeddingDevice, type Embeddi
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import AIProviderLogo from './AIProviderLogo'
+import { useSettingsStore } from '../settings/settingsStore'
 import './AISummarySettings.scss'
 
 interface CustomSelectProps {
@@ -92,30 +93,7 @@ function CustomSelect({ value, onChange, options, placeholder = '请选择', edi
   )
 }
 
-// Props 接口定义，接收父组件传递的状态和修改函数
 interface AISummarySettingsProps {
-  provider: string
-  setProvider: (val: string) => void
-  apiKey: string
-  setApiKey: (val: string) => void
-  model: string
-  setModel: (val: string) => void
-  defaultTimeRange: number
-  setDefaultTimeRange: (val: number) => void
-  summaryDetail: 'simple' | 'normal' | 'detailed'
-  setSummaryDetail: (val: 'simple' | 'normal' | 'detailed') => void
-  systemPromptPreset: 'default' | 'decision-focus' | 'action-focus' | 'risk-focus' | 'custom'
-  setSystemPromptPreset: (val: 'default' | 'decision-focus' | 'action-focus' | 'risk-focus' | 'custom') => void
-  customSystemPrompt: string
-  setCustomSystemPrompt: (val: string) => void
-  enableThinking: boolean
-  setEnableThinking: (val: boolean) => void
-  messageLimit: number
-  setMessageLimit: (val: number) => void
-  agentDecisionMaxTokens: number
-  setAgentDecisionMaxTokens: (val: number) => void
-  agentAnswerMaxTokens: number
-  setAgentAnswerMaxTokens: (val: number) => void
   showMessage: (text: string, success: boolean) => void
 }
 
@@ -149,31 +127,30 @@ function formatBytes(bytes?: number): string {
   return `${size.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`
 }
 
-function AISummarySettings({
-  provider,
-  setProvider,
-  apiKey,
-  setApiKey,
-  model,
-  setModel,
-  defaultTimeRange,
-  setDefaultTimeRange,
-  summaryDetail,
-  setSummaryDetail,
-  systemPromptPreset,
-  setSystemPromptPreset,
-  customSystemPrompt,
-  setCustomSystemPrompt,
-  enableThinking,
-  setEnableThinking,
-  messageLimit,
-  setMessageLimit,
-  agentDecisionMaxTokens,
-  setAgentDecisionMaxTokens,
-  agentAnswerMaxTokens,
-  setAgentAnswerMaxTokens,
-  showMessage
-}: AISummarySettingsProps) {
+function AISummarySettings({ showMessage }: AISummarySettingsProps) {
+  const provider = useSettingsStore(s => s.config.aiProvider)
+  const apiKey = useSettingsStore(s => s.config.aiApiKey)
+  const model = useSettingsStore(s => s.config.aiModel)
+  const defaultTimeRange = useSettingsStore(s => s.config.aiDefaultTimeRange)
+  const summaryDetail = useSettingsStore(s => s.config.aiSummaryDetail)
+  const systemPromptPreset = useSettingsStore(s => s.config.aiSystemPromptPreset)
+  const customSystemPrompt = useSettingsStore(s => s.config.aiCustomSystemPrompt)
+  const enableThinking = useSettingsStore(s => s.config.aiEnableThinking)
+  const messageLimit = useSettingsStore(s => s.config.aiMessageLimit)
+  const agentDecisionMaxTokens = useSettingsStore(s => s.config.aiAgentDecisionMaxTokens)
+  const agentAnswerMaxTokens = useSettingsStore(s => s.config.aiAgentAnswerMaxTokens)
+  const setField = useSettingsStore(s => s.setField)
+  const setProvider = (val: string) => setField('aiProvider', val)
+  const setApiKey = (val: string) => setField('aiApiKey', val)
+  const setModel = (val: string) => setField('aiModel', val)
+  const setDefaultTimeRange = (val: number) => setField('aiDefaultTimeRange', val)
+  const setSummaryDetail = (val: 'simple' | 'normal' | 'detailed') => setField('aiSummaryDetail', val)
+  const setSystemPromptPreset = (val: 'default' | 'decision-focus' | 'action-focus' | 'risk-focus' | 'custom') => setField('aiSystemPromptPreset', val)
+  const setCustomSystemPrompt = (val: string) => setField('aiCustomSystemPrompt', val)
+  const setEnableThinking = (val: boolean) => setField('aiEnableThinking', val)
+  const setMessageLimit = (val: number) => setField('aiMessageLimit', val)
+  const setAgentDecisionMaxTokens = (val: number) => setField('aiAgentDecisionMaxTokens', val)
+  const setAgentAnswerMaxTokens = (val: number) => setField('aiAgentAnswerMaxTokens', val)
   const [showApiKey, setShowApiKey] = useState(false)
   const [isTesting, setIsTesting] = useState(false)
   const [usageStats, setUsageStats] = useState<any>(null)

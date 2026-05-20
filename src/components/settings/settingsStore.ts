@@ -118,8 +118,13 @@ interface SettingsStore {
   config: SettingsConfig
   initialConfig: SettingsConfig | null
   hasUnsavedChanges: boolean
+  isLoading: boolean
+  isSaving: boolean
 
   setField: <K extends keyof SettingsConfig>(key: K, value: SettingsConfig[K]) => void
+  setFields: (partialConfig: Partial<SettingsConfig>) => void
+  setLoading: (isLoading: boolean) => void
+  setSaving: (isSaving: boolean) => void
   hydrate: (config: SettingsConfig) => void
   commit: () => void
   reset: () => void
@@ -129,6 +134,8 @@ export const useSettingsStore = create<SettingsStore>()((set) => ({
   config: { ...DEFAULT_SETTINGS_CONFIG },
   initialConfig: null,
   hasUnsavedChanges: false,
+  isLoading: false,
+  isSaving: false,
 
   setField: (key, value) =>
     set((state) => {
@@ -136,25 +143,38 @@ export const useSettingsStore = create<SettingsStore>()((set) => ({
       return { config, hasUnsavedChanges: isDirty(config, state.initialConfig) }
     }),
 
+  setFields: (partialConfig) =>
+    set((state) => {
+      const config = { ...state.config, ...partialConfig }
+      return { config, hasUnsavedChanges: isDirty(config, state.initialConfig) }
+    }),
+
+  setLoading: (isLoading) => set({ isLoading }),
+  setSaving: (isSaving) => set({ isSaving }),
+
   // 配置加载完成后调用一次:同时设置 config 与基线快照。
   hydrate: (config) =>
     set({
       config: { ...config },
       initialConfig: { ...config },
-      hasUnsavedChanges: false
+      hasUnsavedChanges: false,
+      isLoading: false
     }),
 
   // 保存成功后调用:把当前 config 提升为新的基线快照。
   commit: () =>
     set((state) => ({
       initialConfig: { ...state.config },
-      hasUnsavedChanges: false
+      hasUnsavedChanges: false,
+      isSaving: false
     })),
 
   reset: () =>
     set({
       config: { ...DEFAULT_SETTINGS_CONFIG },
       initialConfig: null,
-      hasUnsavedChanges: false
+      hasUnsavedChanges: false,
+      isLoading: false,
+      isSaving: false
     })
 }))
