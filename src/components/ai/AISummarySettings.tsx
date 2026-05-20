@@ -477,9 +477,14 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
 
   const handlePauseEmbeddingModelDownload = async () => {
     if (!embeddingProfileId) return
-    const result = await window.electronAPI.ai.cancelEmbeddingModelDownload(embeddingProfileId)
-    if (!result.success || !result.cancelled) {
-      showMessage(result.error || '暂停下载失败', false)
+    try {
+      const result = await window.electronAPI.ai.cancelEmbeddingModelDownload(embeddingProfileId)
+      if (!result.success || !result.cancelled) {
+        showMessage(result.error || '暂停下载失败', false)
+      }
+    } catch (e) {
+      const errorText = String(e)
+      showMessage(errorText.includes('No handler registered') ? '主进程还没加载暂停接口，请重启应用后再试' : `暂停下载失败: ${errorText}`, false)
     }
   }
 

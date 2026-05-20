@@ -3,7 +3,7 @@ import { AlertCircle, Check, CheckCircle, ChevronDown, Download, Layers, Minus, 
 import * as configService from '../../../services/config'
 import { formatFileSize } from '../utils'
 import { useSettingsStore } from '../settingsStore'
-import { ProgressBar } from '../ui'
+import { ProgressBar, SegmentedControl } from '../ui'
 
 const sttLanguageOptions = [
   { value: 'zh', label: '中文', enLabel: 'Chinese' },
@@ -49,6 +49,8 @@ const STT_ONLINE_DEFAULTS = {
 } as const
 
 const DOWNLOAD_PAUSED_MESSAGE = '下载已暂停'
+type SttMode = 'cpu' | 'gpu' | 'online'
+type SttOnlineProvider = 'openai-compatible' | 'aliyun-qwen-asr' | 'custom'
 
 interface SttTabProps {
   active: boolean
@@ -70,8 +72,8 @@ function SttTab({ active, showMessage }: SttTabProps) {
   const setField = useSettingsStore(s => s.setField)
   const setSttLanguagesState = (value: string[]) => setField('sttLanguages', value)
   const setSttModelType = (value: 'int8' | 'float32') => setField('sttModelType', value)
-  const setSttMode = (value: 'cpu' | 'gpu' | 'online') => setField('sttMode', value)
-  const setSttOnlineProvider = (value: 'openai-compatible' | 'aliyun-qwen-asr' | 'custom') => setField('sttOnlineProvider', value)
+  const setSttMode = (value: SttMode) => setField('sttMode', value)
+  const setSttOnlineProvider = (value: SttOnlineProvider) => setField('sttOnlineProvider', value)
   const setSttOnlineApiKey = (value: string) => setField('sttOnlineApiKey', value)
   const setSttOnlineBaseURL = (value: string) => setField('sttOnlineBaseURL', value)
   const setSttOnlineModel = (value: string) => setField('sttOnlineModel', value)
@@ -115,7 +117,7 @@ function SttTab({ active, showMessage }: SttTabProps) {
     setSttMode(savedMode || 'cpu')
   }
 
-  const handleSttModeChange = async (mode: 'cpu' | 'gpu' | 'online') => {
+  const handleSttModeChange = async (mode: SttMode) => {
     setSttMode(mode)
     showMessage(
       mode === 'cpu'
@@ -125,6 +127,26 @@ function SttTab({ active, showMessage }: SttTabProps) {
           : '已切换到在线模式 (OpenAI 兼容)',
       true
     )
+  }
+
+  const handleSttOnlineProviderChange = (provider: SttOnlineProvider) => {
+    setSttOnlineProvider(provider)
+
+    if (provider === 'aliyun-qwen-asr') {
+      if (!sttOnlineBaseURL || sttOnlineBaseURL === STT_ONLINE_DEFAULTS['openai-compatible'].baseURL) {
+        setSttOnlineBaseURL(STT_ONLINE_DEFAULTS['aliyun-qwen-asr'].baseURL)
+      }
+      if (!sttOnlineModel || sttOnlineModel === STT_ONLINE_DEFAULTS['openai-compatible'].model) {
+        setSttOnlineModel(STT_ONLINE_DEFAULTS['aliyun-qwen-asr'].model)
+      }
+    } else if (provider === 'openai-compatible') {
+      if (!sttOnlineBaseURL || sttOnlineBaseURL === STT_ONLINE_DEFAULTS['aliyun-qwen-asr'].baseURL) {
+        setSttOnlineBaseURL(STT_ONLINE_DEFAULTS['openai-compatible'].baseURL)
+      }
+      if (!sttOnlineModel || sttOnlineModel === STT_ONLINE_DEFAULTS['aliyun-qwen-asr'].model) {
+        setSttOnlineModel(STT_ONLINE_DEFAULTS['openai-compatible'].model)
+      }
+    }
   }
 
   const handleTestOnlineSttConfig = async () => {
@@ -192,9 +214,14 @@ function SttTab({ active, showMessage }: SttTabProps) {
   }
 
   const handlePauseSttModelDownload = async () => {
-    const result = await window.electronAPI.stt.cancelDownloadModel()
-    if (!result.success || !result.cancelled) {
-      showMessage(result.error || '暂停下载失败', false)
+    try {
+      const result = await window.electronAPI.stt.cancelDownloadModel()
+      if (!result.success || !result.cancelled) {
+        showMessage(result.error || '暂停下载失败', false)
+      }
+    } catch (e) {
+      const errorText = String(e)
+      showMessage(errorText.includes('No handler registered') ? '主进程还没加载暂停接口，请重启应用后再试' : `暂停下载失败: ${errorText}`, false)
     }
   }
 
@@ -290,9 +317,14 @@ function SttTab({ active, showMessage }: SttTabProps) {
   }
 
   const handlePauseWhisperModelDownload = async () => {
-    const result = await window.electronAPI.sttWhisper.cancelDownloadModel(whisperModelType)
-    if (!result.success || !result.cancelled) {
-      showMessage(result.error || '暂停下载失败', false)
+    try {
+      const result = await window.electronAPI.sttWhisper.cancelDownloadModel(whisperModelType)
+      if (!result.success || !result.cancelled) {
+        showMessage(result.error || '暂停下载失败', false)
+      }
+    } catch (e) {
+      const errorText = String(e)
+      showMessage(errorText.includes('No handler registered') ? '主进程还没加载暂停接口，请重启应用后再试' : `暂停下载失败: ${errorText}`, false)
     }
   }
 
@@ -357,9 +389,14 @@ function SttTab({ active, showMessage }: SttTabProps) {
   }
 
   const handlePauseGpuComponentsDownload = async () => {
-    const result = await window.electronAPI.sttWhisper.cancelDownloadGPUComponents()
-    if (!result.success || !result.cancelled) {
-      showMessage(result.error || '暂停下载失败', false)
+    try {
+      const result = await window.electronAPI.sttWhisper.cancelDownloadGPUComponents()
+      if (!result.success || !result.cancelled) {
+        showMessage(result.error || '暂停下载失败', false)
+      }
+    } catch (e) {
+      const errorText = String(e)
+      showMessage(errorText.includes('No handler registered') ? '主进程还没加载暂停接口，请重启应用后再试' : `暂停下载失败: ${errorText}`, false)
     }
   }
 
@@ -372,26 +409,16 @@ function SttTab({ active, showMessage }: SttTabProps) {
   const renderSttTab = () => (
     <div className="tab-content">
       {/* STT 模式切换器 */}
-      <div className="theme-mode-toggle" style={{ marginBottom: '2rem' }}>
-        <button
-          className={`mode-btn ${sttMode === 'cpu' ? 'active' : ''}`}
-          onClick={() => handleSttModeChange('cpu')}
-        >
-          <Layers size={16} /> CPU 模式
-        </button>
-        <button
-          className={`mode-btn ${sttMode === 'gpu' ? 'active' : ''}`}
-          onClick={() => handleSttModeChange('gpu')}
-        >
-          <Zap size={16} /> GPU 模式
-        </button>
-        <button
-          className={`mode-btn ${sttMode === 'online' ? 'active' : ''}`}
-          onClick={() => handleSttModeChange('online')}
-        >
-          <Plug size={16} /> 在线模式
-        </button>
-      </div>
+      <SegmentedControl<SttMode>
+        value={sttMode}
+        onChange={handleSttModeChange}
+        style={{ marginBottom: '2rem' }}
+        options={[
+          { value: 'cpu', label: <><Layers size={16} /> CPU 模式</> },
+          { value: 'gpu', label: <><Zap size={16} /> GPU 模式</> },
+          { value: 'online', label: <><Plug size={16} /> 在线模式</> }
+        ]}
+      />
 
       {/* CPU 模式 - SenseVoice */}
       {sttMode === 'cpu' && (
@@ -868,36 +895,12 @@ function SttTab({ active, showMessage }: SttTabProps) {
                   ? '阿里云走 DashScope 兼容入口，但内部使用 chat/completions + input_audio 协议'
                   : '自定义接口会直接使用你填写的完整 URL'}
             </span>
-            <div className="theme-mode-toggle" style={{ marginBottom: 0 }}>
-              {sttOnlineProviderOptions.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  className={`mode-btn ${sttOnlineProvider === option.value ? 'active' : ''}`}
-                  onClick={() => {
-                    setSttOnlineProvider(option.value)
-
-                    if (option.value === 'aliyun-qwen-asr') {
-                      if (!sttOnlineBaseURL || sttOnlineBaseURL === STT_ONLINE_DEFAULTS['openai-compatible'].baseURL) {
-                        setSttOnlineBaseURL(STT_ONLINE_DEFAULTS['aliyun-qwen-asr'].baseURL)
-                      }
-                      if (!sttOnlineModel || sttOnlineModel === STT_ONLINE_DEFAULTS['openai-compatible'].model) {
-                        setSttOnlineModel(STT_ONLINE_DEFAULTS['aliyun-qwen-asr'].model)
-                      }
-                    } else if (option.value === 'openai-compatible') {
-                      if (!sttOnlineBaseURL || sttOnlineBaseURL === STT_ONLINE_DEFAULTS['aliyun-qwen-asr'].baseURL) {
-                        setSttOnlineBaseURL(STT_ONLINE_DEFAULTS['openai-compatible'].baseURL)
-                      }
-                      if (!sttOnlineModel || sttOnlineModel === STT_ONLINE_DEFAULTS['aliyun-qwen-asr'].model) {
-                        setSttOnlineModel(STT_ONLINE_DEFAULTS['openai-compatible'].model)
-                      }
-                    }
-                  }}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
+            <SegmentedControl<SttOnlineProvider>
+              value={sttOnlineProvider}
+              onChange={handleSttOnlineProviderChange}
+              style={{ marginBottom: 0 }}
+              options={sttOnlineProviderOptions}
+            />
           </div>
 
           <div className="form-group">

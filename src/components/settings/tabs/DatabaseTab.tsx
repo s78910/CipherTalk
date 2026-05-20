@@ -1,11 +1,11 @@
 ﻿import { useEffect, useState } from 'react'
-import { AlertCircle, Check, CheckCircle, ChevronDown, Download, Eye, EyeOff, FolderOpen, FolderSearch, ImageIcon, Key, Plug, RefreshCw, RotateCcw, Save, Search, ShieldCheck, Trash2, User, X, Zap } from 'lucide-react'
+import { AlertCircle, Check, CheckCircle, ChevronDown, Download, FolderSearch, ImageIcon, Key, Plug, RefreshCw, Save, Search, ShieldCheck, Trash2, User, X, Zap } from 'lucide-react'
 import { useAppStore } from '../../../stores/appStore'
 import type { AccountProfile } from '../../../types/account'
 import { dialog } from '../../../services/ipc'
 import * as configService from '../../../services/config'
 import { useSettingsStore } from '../settingsStore'
-import { ConfirmDialog } from '../ui'
+import { ConfirmDialog, PathInput, SecretInput, SettingsField, SettingsTextField } from '../ui'
 
 interface DatabaseTabProps {
   showMessage: (text: string, success: boolean) => void
@@ -56,9 +56,6 @@ function DatabaseTab({ showMessage, reloadConfig, onSave }: DatabaseTabProps) {
   const [isTesting, setIsTesting] = useState(false)
   const [isGettingKey, setIsGettingKey] = useState(false)
   const [keyStatus, setKeyStatus] = useState('')
-  const [showDecryptKey, setShowDecryptKey] = useState(false)
-  const [showXorKey, setShowXorKey] = useState(false)
-  const [showAesKey, setShowAesKey] = useState(false)
   const [securityConfirm, setSecurityConfirm] = useState<{ show: boolean; title: string; message: string; onConfirm: () => void }>({ show: false, title: '', message: '', onConfirm: () => { } })
 
   useEffect(() => {
@@ -561,7 +558,7 @@ function DatabaseTab({ showMessage, reloadConfig, onSave }: DatabaseTabProps) {
   const renderDatabaseTab = () => (
     <div className="tab-content">
       <h3 className="section-title">账号管理</h3>
-      <div className="form-group">
+      <SettingsField>
         <button className="btn btn-secondary" onClick={handleOpenWelcomeWindow}>
           <Zap size={16} /> 新增账号引导
         </button>
@@ -618,47 +615,34 @@ function DatabaseTab({ showMessage, reloadConfig, onSave }: DatabaseTabProps) {
             <Trash2 size={16} /> 删除并清理数据
           </button>
         </div>
-      </div>
+      </SettingsField>
 
       <h3 className="section-title" style={{ marginTop: '2rem' }}>缓存目录</h3>
-      <div className="form-group">
-        <label>缓存目录 <span className="optional">(可选)</span></label>
-        <span className="form-hint">留空使用默认目录，建议选择空间充足的磁盘</span>
-        <input
-          type="text"
+      <SettingsField>
+        <PathInput
+          label={<>缓存目录 <span className="optional">(可选)</span></>}
+          helperText="留空使用默认目录，建议选择空间充足的磁盘"
           placeholder="留空使用默认目录"
           value={cachePath}
-          onChange={(e) => setCachePath(e.target.value)}
+          onChange={setCachePath}
+          onBrowse={handleSelectCachePath}
+          onReset={() => setCachePath('')}
         />
-        <div className="btn-row">
-          <button className="btn btn-secondary" onClick={handleSelectCachePath}>
-            <FolderOpen size={16} /> 浏览选择
-          </button>
-          <button className="btn btn-secondary" onClick={() => setCachePath('')}>
-            <RotateCcw size={16} /> 恢复默认
-          </button>
-        </div>
-      </div>
+      </SettingsField>
 
       <h3 className="section-title" style={{ marginTop: '2rem' }}>数据库配置</h3>
 
-      <div className="form-group">
-        <label>解密密钥</label>
-        <span className="form-hint">64位十六进制密钥，用于验证当前账号数据库连接</span>
-        <div className="input-with-toggle">
-          <input
-            type={showDecryptKey ? 'text' : 'password'}
-            placeholder="请输入或自动获取解密密钥"
-            value={decryptKey}
-            onChange={(e) => {
-              setDecryptKey(e.target.value)
-              setIsAccountVerified(false)
-            }}
-          />
-          <button type="button" className="toggle-visibility" onClick={() => setShowDecryptKey(!showDecryptKey)}>
-            {showDecryptKey ? <EyeOff size={14} /> : <Eye size={14} />}
-          </button>
-        </div>
+      <SettingsField>
+        <SecretInput
+          label="解密密钥"
+          helperText="64位十六进制密钥，用于验证当前账号数据库连接"
+          placeholder="请输入或自动获取解密密钥"
+          value={decryptKey}
+          onChange={(value) => {
+            setDecryptKey(value)
+            setIsAccountVerified(false)
+          }}
+        />
         {keyStatus && <p className="key-status">{keyStatus}</p>}
         <div className="btn-row">
           <button className="btn btn-primary" onClick={handleGetKey} disabled={isGettingKey}>
@@ -670,54 +654,47 @@ function DatabaseTab({ showMessage, reloadConfig, onSave }: DatabaseTabProps) {
             </button>
           )}
         </div>
-      </div>
+      </SettingsField>
 
-      <div className="form-group">
-        <label>数据库根目录</label>
-        <span className="form-hint">选择微信账号数据所在目录，通常是 WeChat Files 的上级或包含 db_storage 的目录</span>
-        <input
-          type="text"
+      <SettingsField>
+        <PathInput
+          label="数据库根目录"
+          helperText="选择微信账号数据所在目录，通常是 WeChat Files 的上级或包含 db_storage 的目录"
           placeholder="请选择微信数据库根目录"
           value={dbPath}
-          onChange={(e) => {
-            setDbPath(e.target.value)
+          onChange={(value) => {
+            setDbPath(value)
             setWxid('')
             setWxidOptions([])
             setShowWxidDropdown(false)
             setIsAccountVerified(false)
           }}
+          onBrowse={handleSelectDbPath}
         />
-        <div className="btn-row">
-          <button className="btn btn-secondary" onClick={handleSelectDbPath}>
-            <FolderOpen size={16} /> 浏览选择
-          </button>
-        </div>
-      </div>
+      </SettingsField>
 
       <h3 className="section-title" style={{ marginTop: '2rem' }}>图片解密</h3>
       <p className="section-desc">您只负责获取密钥，其他的交给密语-CipherTalk</p>
 
-      <div className="form-group">
-        <label>XOR 密钥</label>
-        <span className="form-hint">{isMac ? 'kvcomm 校验成功后返回的 XOR 密钥，格式如 0x53' : '2位十六进制，如 0x53'}</span>
-        <div className="input-with-toggle">
-          <input type={showXorKey ? 'text' : 'password'} placeholder="例如: 0x12" value={imageXorKey} onChange={(e) => setImageXorKey(e.target.value)} />
-          <button type="button" className="toggle-visibility" onClick={() => setShowXorKey(!showXorKey)}>
-            {showXorKey ? <EyeOff size={14} /> : <Eye size={14} />}
-          </button>
-        </div>
-      </div>
+      <SettingsField>
+        <SecretInput
+          label="XOR 密钥"
+          helperText={isMac ? 'kvcomm 校验成功后返回的 XOR 密钥，格式如 0x53' : '2位十六进制，如 0x53'}
+          placeholder="例如: 0x12"
+          value={imageXorKey}
+          onChange={setImageXorKey}
+        />
+      </SettingsField>
 
-      <div className="form-group">
-        <label>AES 密钥</label>
-        <span className="form-hint">{isMac ? '16位字符串；优先走 kvcomm + wxid 验真，失败才回退到内存扫描' : '至少16个字符（V4版本图片需要）'}</span>
-        <div className="input-with-toggle">
-          <input type={showAesKey ? 'text' : 'password'} placeholder="例如: b123456789012345..." value={imageAesKey} onChange={(e) => setImageAesKey(e.target.value)} />
-          <button type="button" className="toggle-visibility" onClick={() => setShowAesKey(!showAesKey)}>
-            {showAesKey ? <EyeOff size={14} /> : <Eye size={14} />}
-          </button>
-        </div>
-      </div>
+      <SettingsField>
+        <SecretInput
+          label="AES 密钥"
+          helperText={isMac ? '16位字符串；优先走 kvcomm + wxid 验真，失败才回退到内存扫描' : '至少16个字符（V4版本图片需要）'}
+          placeholder="例如: b123456789012345..."
+          value={imageAesKey}
+          onChange={setImageAesKey}
+        />
+      </SettingsField>
 
       {imageKeyStatus && <p className="key-status">{imageKeyStatus}</p>}
 
@@ -729,17 +706,16 @@ function DatabaseTab({ showMessage, reloadConfig, onSave }: DatabaseTabProps) {
       </span>
 
       <h3 className="section-title" style={{ marginTop: '2rem' }}>账号验证</h3>
-      <div className="form-group wxid-group">
-        <label>账号验证配置</label>
-        <span className="form-hint">请选择或填写候选账号目录，验证成功后才会作为当前账号配置保存</span>
+      <SettingsField className="wxid-group">
         <div className="wxid-row">
           <div className="input-with-dropdown">
-            <input
-              type="text"
+            <SettingsTextField
+              label="账号验证配置"
+              helperText="请选择或填写候选账号目录，验证成功后才会作为当前账号配置保存"
               placeholder="例如 wxid_xxxxx"
               value={wxid}
-              onChange={(e) => {
-                setWxid(e.target.value)
+              onValueChange={(value) => {
+                setWxid(value)
                 setIsAccountVerified(false)
               }}
               onFocus={() => wxidOptions.length > 0 && setShowWxidDropdown(true)}
@@ -782,7 +758,7 @@ function DatabaseTab({ showMessage, reloadConfig, onSave }: DatabaseTabProps) {
             {isAccountVerified ? '账号目录已验证' : '账号目录未验证'}
           </span>
         </div>
-      </div>
+      </SettingsField>
     </div>
   )
 

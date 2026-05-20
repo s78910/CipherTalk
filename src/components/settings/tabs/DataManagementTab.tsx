@@ -1,10 +1,10 @@
 ﻿import { useEffect, useState } from 'react'
-import { Check, Database, FolderOpen, ImageIcon, Key, Layers, RefreshCw, RotateCcw, Smile, Trash2, User } from 'lucide-react'
+import { Check, Database, FolderOpen, ImageIcon, Key, Layers, RefreshCw, Smile, Trash2, User } from 'lucide-react'
 import { dialog } from '../../../services/ipc'
 import * as configService from '../../../services/config'
 import { formatFileSize } from '../utils'
 import { useSettingsStore } from '../settingsStore'
-import { ConfirmDialog } from '../ui'
+import { ConfirmDialog, PathInput, SettingsField, SettingsSection } from '../ui'
 
 interface DataManagementTabProps {
   showMessage: (text: string, success: boolean) => void
@@ -201,22 +201,20 @@ function DataManagementTab({ showMessage, reloadConfig, onClearCurrentAccountCon
   const renderDataManagementTab = () => (
     <div className="tab-content">
       {/* 导出设置 */}
-      <section className="settings-section">
-        <h3 className="section-title">导出设置</h3>
+      <SettingsSection title="导出设置">
+        <SettingsField>
+          <PathInput
+            label="导出目录"
+            helperText="聊天记录导出的默认保存位置"
+            placeholder={defaultExportPath || '系统下载目录'}
+            value={exportPath || defaultExportPath}
+            onChange={setExportPath}
+            onBrowse={handleSelectExportPath}
+            onReset={handleResetExportPath}
+          />
+        </SettingsField>
 
-        <div className="form-group">
-          <label>导出目录</label>
-          <span className="form-hint">聊天记录导出的默认保存位置</span>
-          <input type="text" placeholder={defaultExportPath || '系统下载目录'} value={exportPath || defaultExportPath} onChange={(e) => setExportPath(e.target.value)} />
-          <div className="btn-row">
-            <button className="btn btn-secondary" onClick={handleSelectExportPath}><FolderOpen size={16} /> 浏览选择</button>
-            <button className="btn btn-secondary" onClick={handleResetExportPath}><RotateCcw size={16} /> 恢复默认</button>
-          </div>
-        </div>
-
-        <div className="form-group">
-          <label>默认日期范围</label>
-          <span className="form-hint">导出时自动填充的日期范围，0表示不限制</span>
+        <SettingsField label="默认日期范围" hint="导出时自动填充的日期范围，0表示不限制">
           <div className="date-range-options">
             {[
               { value: 0, label: '不限制', desc: '全部消息' },
@@ -248,10 +246,9 @@ function DataManagementTab({ showMessage, reloadConfig, onClearCurrentAccountCon
               </label>
             ))}
           </div>
-        </div>
+        </SettingsField>
 
-        <div className="form-group">
-          <label>默认导出选项</label>
+        <SettingsField label="默认导出选项">
           <div className="export-default-options">
             <label className={`export-option-card ${exportDefaultAvatars ? 'active' : ''}`}>
               <input
@@ -273,14 +270,13 @@ function DataManagementTab({ showMessage, reloadConfig, onClearCurrentAccountCon
               )}
             </label>
           </div>
-        </div>
-      </section>
+        </SettingsField>
+      </SettingsSection>
 
       <div className="divider" style={{ margin: '2rem 0', borderBottom: '1px solid var(--border-color)', opacity: 0.1 }} />
 
       {/* 缓存管理 */}
-      <section className="settings-section cache-management">
-        <h3 className="section-title">缓存管理</h3>
+      <SettingsSection title="缓存管理" className="cache-management">
         {isLoadingCacheSize ? (
           <p className="cache-loading">正在计算缓存大小...</p>
         ) : cacheSize ? (
@@ -345,15 +341,13 @@ function DataManagementTab({ showMessage, reloadConfig, onClearCurrentAccountCon
         ) : (
           <p>无法获取缓存信息</p>
         )}
-      </section>
+      </SettingsSection>
 
       <div className="divider" style={{ margin: '2rem 0', borderBottom: '1px solid var(--border-color)', opacity: 0.1 }} />
 
       {/* 日志管理 */}
-      <section className="settings-section">
-        <h3 className="section-title">日志管理</h3>
-
-        <div className="form-group">
+      <SettingsSection title="日志管理">
+        <SettingsField>
           <div className="log-stats-lite" style={{ display: 'flex', gap: '1rem', alignItems: 'center', marginBottom: '1rem' }}>
             <span className="log-value">日志文件: {logFiles.length}个</span>
             <span className="log-value">总大小: {formatFileSize(logSize)}</span>
@@ -383,7 +377,7 @@ function DataManagementTab({ showMessage, reloadConfig, onClearCurrentAccountCon
               <Trash2 size={16} /> 清除所有日志
             </button>
           </div>
-        </div>
+        </SettingsField>
 
         <div className="log-files" style={{ marginTop: '1rem' }}>
           <h4>最近日志</h4>
@@ -416,7 +410,7 @@ function DataManagementTab({ showMessage, reloadConfig, onClearCurrentAccountCon
             </div>
           </div>
         )}
-      </section>
+      </SettingsSection>
     </div>
   )
 

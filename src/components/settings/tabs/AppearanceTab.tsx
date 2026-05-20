@@ -1,6 +1,9 @@
 import { Check, Monitor, Moon, Sun } from 'lucide-react'
 import { themes, useThemeStore } from '../../../stores/themeStore'
 import { useSettingsStore } from '../settingsStore'
+import { SegmentedControl } from '../ui'
+
+type ThemeMode = 'light' | 'dark' | 'system'
 
 function AppearanceTab() {
   const { currentTheme, themeMode, setTheme, setThemeMode } = useThemeStore()
@@ -10,17 +13,15 @@ function AppearanceTab() {
 
   return (
     <div className="tab-content">
-      <div className="theme-mode-toggle">
-        <button className={`mode-btn ${themeMode === 'light' ? 'active' : ''}`} onClick={() => setThemeMode('light')}>
-          <Sun size={16} /> 浅色
-        </button>
-        <button className={`mode-btn ${themeMode === 'dark' ? 'active' : ''}`} onClick={() => setThemeMode('dark')}>
-          <Moon size={16} /> 深色
-        </button>
-        <button className={`mode-btn ${themeMode === 'system' ? 'active' : ''}`} onClick={() => setThemeMode('system')}>
-          <Monitor size={16} /> 跟随系统
-        </button>
-      </div>
+      <SegmentedControl<ThemeMode>
+        value={themeMode}
+        onChange={setThemeMode}
+        options={[
+          { value: 'light', label: <><Sun size={16} /> 浅色</> },
+          { value: 'dark', label: <><Moon size={16} /> 深色</> },
+          { value: 'system', label: <><Monitor size={16} /> 跟随系统</> }
+        ]}
+      />
       <div className="theme-grid">
         {themes.map((theme) => (
           <div key={theme.id} className={`theme-card ${currentTheme === theme.id ? 'active' : ''}`} onClick={() => setTheme(theme.id)}>
