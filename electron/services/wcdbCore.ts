@@ -322,6 +322,15 @@ export class WcdbCore {
       if (openResult.handle <= 0) return { success: false, error: '无效的数据库句柄' }
 
       try {
+        // 先关闭刚打开的测试句柄，再 shutdown。
+        // 带着未关闭的数据库句柄做全局 shutdown 会导致 native 崩溃（整个 app 闪退）。
+        if (this.wcdbCloseAccount && openResult.handle) {
+          try { this.wcdbCloseAccount(openResult.handle) } catch (e) { console.error('关闭测试句柄失败:', e) }
+        }
+        // 同时关闭可能残留的旧连接句柄
+        if (this.wcdbCloseAccount && this.handle !== null) {
+          try { this.wcdbCloseAccount(this.handle) } catch (e) { console.error('关闭旧句柄失败:', e) }
+        }
         this.wcdbShutdown()
         this.handle = null
         this.currentPath = null
