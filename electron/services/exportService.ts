@@ -4,7 +4,7 @@ import * as https from 'https'
 import * as http from 'http'
 import { ConfigService } from './config'
 import { voiceTranscribeService } from './voiceTranscribeService'
-import ExcelJS from 'exceljs'
+import * as ExcelJS from 'exceljs'
 import { HtmlExportGenerator } from './htmlExportGenerator'
 import { imageDecryptService } from './imageDecryptService'
 import { videoService } from './videoService'
@@ -458,6 +458,52 @@ class ExportService {
     return /^[A-Za-z0-9+/=]+$/.test(s)
   }
 
+  private coerceRowNumber(value: any, fallback = 0): number {
+    if (value === null || value === undefined || value === '') return fallback
+    if (typeof value === 'number') return Number.isFinite(value) ? value : fallback
+    if (typeof value === 'bigint') return Number(value)
+    const text = String(value).trim()
+    if (!text) return fallback
+    const parsed = Number(text)
+    return Number.isFinite(parsed) ? parsed : fallback
+  }
+
+  private getRowField(row: Record<string, any>, fieldNames: string[]): any {
+    for (const name of fieldNames) {
+      if (row[name] !== undefined && row[name] !== null) return row[name]
+    }
+    const lowerMap = new Map<string, string>()
+    for (const actual of Object.keys(row || {})) {
+      lowerMap.set(actual.toLowerCase(), actual)
+    }
+    for (const name of fieldNames) {
+      const actual = lowerMap.get(name.toLowerCase())
+      if (actual && row[actual] !== undefined && row[actual] !== null) return row[actual]
+    }
+    return undefined
+  }
+
+  /**
+   * 健壮地解析消息的 local_type：兼容不同微信版本的列名与字符串类型值
+   */
+  private resolveMessageLocalType(row: Record<string, any>, fallback = 1): number {
+    const fieldNames = [
+      'local_type', 'localType', 'type', 'Type',
+      'msg_type', 'msgType', 'MsgType',
+      'message_type', 'messageType', 'WCDB_CT_local_type'
+    ]
+    let zeroCandidate: number | undefined
+    for (const fieldName of fieldNames) {
+      const value = this.getRowField(row, [fieldName])
+      if (value === null || value === undefined || value === '') continue
+      const parsed = this.coerceRowNumber(value, Number.NaN)
+      if (!Number.isFinite(parsed)) continue
+      if (parsed > 0) return parsed
+      if (parsed === 0 && zeroCandidate === undefined) zeroCandidate = parsed
+    }
+    return zeroCandidate ?? fallback
+  }
+
   /**
    * 解析消息内容为可读文本
    */
@@ -489,7 +535,10 @@ class ExportService {
         }
         return '[语音消息]'
       }
-      case 42: return '[名片]'
+      case 42: {
+        const nickname = content.match(/nickname="([^"]*)"/)?.[1]
+        return nickname ? `[名片] ${nickname}` : '[名片]'
+      }
       case 43: {
         if (mediaPathMap && createTime && mediaPathMap.has(createTime)) {
           return `[视频] ${mediaPathMap.get(createTime)}`
@@ -500,40 +549,24 @@ class ExportService {
         if (mediaPathMap && createTime && mediaPathMap.has(createTime)) {
           return `[动画表情] ${mediaPathMap.get(createTime)}`
         }
+        // 未导出本地文件时，回退用表情 XML 里的 cdnurl 直接显示（明文直连地址）
+        const emojiCdnUrl = content.match(/cdnurl\s*=\s*"([^"]+)"/i)?.[1]
+        if (emojiCdnUrl) {
+          return `[动画表情] ${this.decodeHtmlEntities(emojiCdnUrl)}`
+        }
         return '[动画表情]'
       }
-      case 48: return '[位置]'
-      case 49: {
-        const title = this.extractXmlValue(content, 'title')
-        const type = this.extractXmlValue(content, 'type')
-
-        // 群公告消息（type 87）
-        if (type === '87') {
-          const textAnnouncement = this.extractXmlValue(content, 'textannouncement')
-          if (textAnnouncement) {
-            return `[群公告] ${textAnnouncement}`
-          }
-          return '[群公告]'
-        }
-
-        // 转账消息特殊处理
-        if (type === '2000') {
-          const feedesc = this.extractXmlValue(content, 'feedesc')
-          const payMemo = this.extractXmlValue(content, 'pay_memo')
-          if (feedesc) {
-            return payMemo ? `[转账] ${feedesc} ${payMemo}` : `[转账] ${feedesc}`
-          }
-          return '[转账]'
-        }
-
-        if (type === '6') return title ? `[文件] ${title}` : '[文件]'
-        if (type === '19') return title ? `[聊天记录] ${title}` : '[聊天记录]'
-        if (type === '33' || type === '36') return title ? `[小程序] ${title}` : '[小程序]'
-        if (type === '57') return title || '[引用消息]'
-        if (type === '5' || type === '49') return title ? `[链接] ${title}` : '[链接]'
-        return title ? `[链接] ${title}` : '[链接]'
+      case 48: {
+        const poiname = content.match(/poiname="([^"]*)"/)?.[1]
+        const label = content.match(/label="([^"]*)"/)?.[1]
+        return poiname ? `[位置] ${poiname}` : label ? `[位置] ${label}` : '[位置]'
       }
-      case 50: return '[通话]'
+      case 49:
+        return this.parseType49(content)
+      case 50: {
+        const msg = this.extractXmlValue(content, 'msg')
+        return msg ? `[通话] ${msg}` : '[通话]'
+      }
       case 10000: return this.cleanSystemMessage(content)
       case 244813135921: {
         // 引用消息
@@ -541,43 +574,79 @@ class ExportService {
         return title || '[引用消息]'
       }
       default:
-        // 对于未知的 localType，检查 XML type 来判断消息类型
+        // 对于未知的 localType，若带 XML type 则按 appmsg（type 49）逻辑解析
         if (xmlType) {
-          const title = this.extractXmlValue(content, 'title')
-
-          // 群公告消息（type 87）
-          if (xmlType === '87') {
-            const textAnnouncement = this.extractXmlValue(content, 'textannouncement')
-            if (textAnnouncement) {
-              return `[群公告] ${textAnnouncement}`
-            }
-            return '[群公告]'
-          }
-
-          // 转账消息
-          if (xmlType === '2000') {
-            const feedesc = this.extractXmlValue(content, 'feedesc')
-            const payMemo = this.extractXmlValue(content, 'pay_memo')
-            if (feedesc) {
-              return payMemo ? `[转账] ${feedesc} ${payMemo}` : `[转账] ${feedesc}`
-            }
-            return '[转账]'
-          }
-
-          // 其他类型
-          if (xmlType === '6') return title ? `[文件] ${title}` : '[文件]'
-          if (xmlType === '19') return title ? `[聊天记录] ${title}` : '[聊天记录]'
-          if (xmlType === '33' || xmlType === '36') return title ? `[小程序] ${title}` : '[小程序]'
-          if (xmlType === '57') return title || '[引用消息]'
-          if (xmlType === '5' || xmlType === '49') return title ? `[链接] ${title}` : '[链接]'
-
-          // 有 title 就返回 title
-          if (title) return title
+          return this.parseType49(content)
         }
-
         // 最后尝试提取文本内容
         return this.stripSenderPrefix(content) || null
     }
+  }
+
+  /**
+   * 解析 appmsg（type 49）消息：转账、红包、礼物、音乐、链接、文件、小程序等
+   */
+  private parseType49(content: string): string {
+    const title = this.extractXmlValue(content, 'title')
+    const type = this.extractXmlValue(content, 'type')
+
+    // 群公告消息（type 87）
+    if (type === '87') {
+      const textAnnouncement = this.extractXmlValue(content, 'textannouncement')
+      return textAnnouncement ? `[群公告] ${textAnnouncement}` : '[群公告]'
+    }
+
+    // 转账消息（type 2000）
+    if (type === '2000') {
+      const feedesc = this.extractXmlValue(content, 'feedesc')
+      const payMemo = this.extractXmlValue(content, 'pay_memo')
+      if (feedesc) {
+        return payMemo ? `[转账] ${feedesc} ${payMemo}` : `[转账] ${feedesc}`
+      }
+      return '[转账]'
+    }
+
+    // 红包消息（type 2001）
+    if (type === '2001') {
+      const greeting = this.extractXmlValue(content, 'receivertitle') || this.extractXmlValue(content, 'sendertitle')
+      return greeting ? `[红包] ${greeting}` : '[红包]'
+    }
+
+    // 微信礼物（type 115）
+    if (type === '115') {
+      const wish = this.extractXmlValue(content, 'wishmessage')
+      const skutitle = this.extractXmlValue(content, 'skutitle')
+      return skutitle
+        ? `[微信礼物] ${wish || '送你一份心意'} - ${skutitle}`
+        : `[微信礼物] ${wish || '送你一份心意'}`
+    }
+
+    // 音乐分享（type 3）
+    if (type === '3') {
+      const des = this.extractXmlValue(content, 'des')
+      return title ? `[音乐] ${title}${des ? ` - ${des}` : ''}` : '[音乐]'
+    }
+
+    if (title) {
+      switch (type) {
+        case '5':
+        case '49':
+          return `[链接] ${title}`
+        case '6':
+          return `[文件] ${title}`
+        case '19':
+          return `[聊天记录] ${title}`
+        case '33':
+        case '36':
+          return `[小程序] ${title}`
+        case '57':
+          // 引用消息，title 就是回复的内容
+          return title
+        default:
+          return title
+      }
+    }
+    return '[消息]'
   }
 
   private stripSenderPrefix(content: string): string {
@@ -718,7 +787,7 @@ class ExportService {
             }
 
             const content = this.decodeMessageContent(row.message_content, row.compress_content)
-            const localType = row.local_type || row.type || 1
+            const localType = this.resolveMessageLocalType(row, 1)
             const senderUsername = row.sender_username || ''
 
             // 判断是否是自己发送
@@ -1361,6 +1430,9 @@ class ExportService {
         switch (xmlType) {
           case '87': return '群公告'
           case '2000': return '转账消息'
+          case '2001': return '红包消息'
+          case '115': return '微信礼物'
+          case '3': return '音乐分享'
           case '5': return '链接消息'
           case '6': return '文件消息'
           case '19': return '聊天记录'
@@ -1472,7 +1544,7 @@ class ExportService {
             }
 
             const content = this.decodeMessageContent(row.message_content, row.compress_content)
-            const localType = row.local_type || row.type || 1
+            const localType = this.resolveMessageLocalType(row, 1)
             const senderUsername = row.sender_username || ''
             const isSend = row.is_send === 1 || senderUsername === cleanedMyWxid
 
@@ -1688,7 +1760,7 @@ class ExportService {
             }
 
             const content = this.decodeMessageContent(row.message_content, row.compress_content)
-            const localType = row.local_type || row.type || 1
+            const localType = this.resolveMessageLocalType(row, 1)
             const senderUsername = row.sender_username || ''
 
             // 判断是否是自己发送的消息
@@ -1824,7 +1896,7 @@ class ExportService {
       // 创建工作簿，并设置列宽（根据是否导出头像和聊天记录动态调整）
       const workbook = new ExcelJS.Workbook()
       const worksheet = workbook.addWorksheet(sheetName)
-      worksheet.columns = [
+      const columns: Partial<ExcelJS.Column>[] = [
         { header: '序号', key: '序号', width: 6 },
         { header: '时间', key: '时间', width: 20 },
         { header: '日期', key: '日期', width: 12 },
@@ -1835,10 +1907,18 @@ class ExportService {
         { header: '消息类型', key: '消息类型', width: 12 },
         { header: '消息内容', key: '消息内容', width: 50 },
         { header: '原始类型代码', key: '原始类型代码', width: 8 },
-        { header: '时间戳', key: '时间戳', width: 12 },
-        ...(options.exportAvatars ? [{ header: '头像链接', key: '头像链接', width: 50 }] : []),
-        ...(hasChatRecords ? [{ header: '聊天记录详情', key: '聊天记录详情', width: 80 }] : [])
+        { header: '时间戳', key: '时间戳', width: 12 }
       ]
+
+      if (options.exportAvatars) {
+        columns.push({ header: '头像链接', key: '头像链接', width: 50 })
+      }
+
+      if (hasChatRecords) {
+        columns.push({ header: '聊天记录详情', key: '聊天记录详情', width: 80 })
+      }
+
+      worksheet.columns = columns
       worksheet.addRows(excelData)
       worksheet.getRow(1).font = { bold: true }
       worksheet.getColumn('消息内容').alignment = { wrapText: true, vertical: 'top' }
@@ -1920,7 +2000,7 @@ class ExportService {
             }
 
             const content = this.decodeMessageContent(row.message_content, row.compress_content)
-            const localType = row.local_type || row.type || 1
+            const localType = this.resolveMessageLocalType(row, 1)
             const senderUsername = row.sender_username || ''
             const isSend = row.is_send === 1 || senderUsername === cleanedMyWxid
 
@@ -1952,12 +2032,30 @@ class ExportService {
               chatRecordList = this.parseChatHistory(content)
             }
 
+            let parsedContent = this.parseMessageContent(content, localType, sessionId, createTime, options.mediaPathMap)
+
+            // 转账消息：追加 "谁转账给谁" 信息
+            if (parsedContent && parsedContent.startsWith('[转账]')) {
+              const transferDesc = await this.resolveTransferDesc(
+                content,
+                myWxid,
+                new Map<string, string>(),
+                async (username) => {
+                  const info = await this.getContactInfo(username)
+                  return info.displayName || username
+                }
+              )
+              if (transferDesc) {
+                parsedContent = parsedContent.replace('[转账]', `[转账] (${transferDesc})`)
+              }
+            }
+
             allMessages.push({
               timestamp: createTime,
               sender: actualSender,
               senderName: senderInfo.displayName,
               type: localType,
-              content: this.parseMessageContent(content, localType, sessionId, createTime, options.mediaPathMap),
+              content: parsedContent,
               rawContent: content,
               isSend,
               chatRecords: chatRecordList ? this.formatChatRecordsForJson(chatRecordList, options) : undefined
@@ -2128,7 +2226,7 @@ class ExportService {
             }
 
             const content = this.decodeMessageContent(row.message_content, row.compress_content)
-            const localType = row.local_type || row.type || 1
+            const localType = this.resolveMessageLocalType(row, 1)
             const senderUsername = row.sender_username || ''
             const isSend = row.is_send === 1 || senderUsername === cleanedMyWxid
 
@@ -2730,50 +2828,35 @@ class ExportService {
     let emojiTotal = 0
     let emojiProcessed = 0
 
-    // 构建查询条件：只查需要的消息类型
-    const typeConditions: string[] = []
-    if (options.exportImages) typeConditions.push('3')
-    if (options.exportVideos) typeConditions.push('43')
-    if (options.exportEmojis) typeConditions.push('47')
+    // 是否需要处理图片/视频/表情
+    const needMedia = options.exportImages || options.exportVideos || options.exportEmojis
 
     // 图片/视频/表情循环（语音在后面独立处理）
-    if (typeConditions.length > 0) {
+    if (needMedia) {
+      // 读取全部消息行（不在 SQL 里按 local_type 过滤，避免列名/类型差异导致漏查）
+      const allRows: any[] = []
+      for (const { tableName, dbPath } of dbTablePairs) {
+        try {
+          const rows = await dbAdapter.all<any>(
+            'message',
+            dbPath,
+            `SELECT * FROM ${tableName} ORDER BY create_time ASC`
+          )
+          allRows.push(...rows)
+        } catch (e) {
+          console.error(`[Export] 读取媒体消息失败:`, e)
+        }
+      }
+
       // 预先统计表情总数
       if (options.exportEmojis) {
-        for (const { tableName, dbPath } of dbTablePairs) {
-          try {
-            const cnt = await dbAdapter.get<any>(
-              'message',
-              dbPath,
-              `SELECT COUNT(*) as c FROM ${tableName} WHERE local_type = 47`
-            )
-            emojiTotal += cnt?.c || 0
-          } catch { }
-        }
+        emojiTotal = allRows.filter(r => this.resolveMessageLocalType(r, 1) === 47).length
         if (emojiTotal > 0) onDetail?.(`正在导出表情包 (共 ${emojiTotal} 个)...`)
       }
 
-      for (const { tableName, dbPath } of dbTablePairs) {
+      for (const row of allRows) {
         try {
-          const hasName2Id = await dbAdapter.get<any>(
-            'message',
-            dbPath,
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='Name2Id'"
-          )
-
-          const typeFilter = typeConditions.map(t => `local_type = ${t}`).join(' OR ')
-
-          // 用 SELECT * 获取完整行，包含 packed_info_data
-          let sql: string
-          if (hasName2Id) {
-            sql = `SELECT m.* FROM ${tableName} m WHERE (${typeFilter}) ORDER BY m.create_time ASC`
-          } else {
-            sql = `SELECT * FROM ${tableName} WHERE (${typeFilter}) ORDER BY create_time ASC`
-          }
-
-          const rows = await dbAdapter.all<any>('message', dbPath, sql)
-
-          for (const row of rows) {
+          {
             const createTime = row.create_time || 0
 
             // 时间范围过滤
@@ -2783,7 +2866,7 @@ class ExportService {
               }
             }
 
-            const localType = row.local_type || row.type || 1
+            const localType = this.resolveMessageLocalType(row, 1)
             const content = this.decodeMessageContent(row.message_content, row.compress_content)
 
             // 导出图片
@@ -2919,10 +3002,10 @@ class ExportService {
             }
           }
         } catch (e) {
-          console.error(`[Export] 读取媒体消息失败:`, e)
+          // 跳过单行消息的错误
         }
       }
-    } // 结束 typeConditions > 0
+    } // 结束 needMedia
 
     // === 语音导出（独立流程：需要从 MediaDb 读取） ===
     let voiceCount = 0
@@ -2934,18 +3017,23 @@ class ExportService {
 
       onDetail?.('正在导出语音消息...')
 
-      // 1. 收集所有语音消息的 createTime
+      // 1. 收集所有语音消息的 createTime（按 local_type 在 JS 里过滤，兼容列名/类型差异）
       const voiceCreateTimes: number[] = []
       for (const { tableName, dbPath } of dbTablePairs) {
         try {
-          let sql = `SELECT create_time FROM ${tableName} WHERE local_type = 34`
-          if (options.dateRange) {
-            sql += ` AND create_time >= ${options.dateRange.start} AND create_time <= ${options.dateRange.end}`
-          }
-          sql += ` ORDER BY create_time`
-          const rows = await dbAdapter.all<any>('message', dbPath, sql)
+          const rows = await dbAdapter.all<any>(
+            'message',
+            dbPath,
+            `SELECT * FROM ${tableName} ORDER BY create_time ASC`
+          )
           for (const row of rows) {
-            if (row.create_time) voiceCreateTimes.push(row.create_time)
+            if (this.resolveMessageLocalType(row, 1) !== 34) continue
+            const createTime = row.create_time || 0
+            if (!createTime) continue
+            if (options.dateRange && (createTime < options.dateRange.start || createTime > options.dateRange.end)) {
+              continue
+            }
+            voiceCreateTimes.push(createTime)
           }
         } catch { }
       }
