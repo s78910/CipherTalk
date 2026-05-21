@@ -4,7 +4,7 @@ import * as https from 'https'
 import * as http from 'http'
 import { ConfigService } from './config'
 import { voiceTranscribeService } from './voiceTranscribeService'
-import * as XLSX from 'xlsx'
+import * as ExcelJS from 'exceljs'
 import { HtmlExportGenerator } from './htmlExportGenerator'
 import { imageDecryptService } from './imageDecryptService'
 import { videoService } from './videoService'
@@ -1791,46 +1791,47 @@ class ExportService {
       }
 
       // 创建工作簿
-      const wb = XLSX.utils.book_new()
-      const ws = XLSX.utils.json_to_sheet(excelData)
+      const sheetName = sessionInfo.displayName
+        .substring(0, 31)
+        .replace(/[:\\\/\?\*\[\]]/g, '_')
 
-      // 设置列宽（根据是否导出头像和聊天记录动态调整）
-      const colWidths: any[] = [
-        { wch: 6 },   // 序号
-        { wch: 20 },  // 时间
-        { wch: 12 },  // 日期
-        { wch: 10 },  // 时刻
-        { wch: 6 },   // 星期
-        { wch: 15 },  // 发送者
-        { wch: 25 },  // 微信ID
-        { wch: 12 },  // 消息类型
-        { wch: 50 },  // 消息内容
-        { wch: 8 },   // 原始类型代码
-        { wch: 12 }   // 时间戳
+      const wb = new ExcelJS.Workbook()
+      const ws = wb.addWorksheet(sheetName)
+
+      // 定义列并设置宽度
+      const columns: Partial<ExcelJS.Column>[] = [
+        { header: '序号', key: '序号', width: 6 },
+        { header: '时间', key: '时间', width: 20 },
+        { header: '日期', key: '日期', width: 12 },
+        { header: '时刻', key: '时刻', width: 10 },
+        { header: '星期', key: '星期', width: 6 },
+        { header: '发送者', key: '发送者', width: 15 },
+        { header: '微信ID', key: '微信ID', width: 25 },
+        { header: '消息类型', key: '消息类型', width: 12 },
+        { header: '消息内容', key: '消息内容', width: 50 },
+        { header: '原始类型代码', key: '原始类型代码', width: 8 },
+        { header: '时间戳', key: '时间戳', width: 12 }
       ]
 
       if (options.exportAvatars) {
-        colWidths.push({ wch: 50 })  // 头像链接
+        columns.push({ header: '头像链接', key: '头像链接', width: 50 })
       }
 
       // 检查是否有聊天记录消息
       const hasChatRecords = allMessages.some(msg => msg.chatRecordList && msg.chatRecordList.length > 0)
       if (hasChatRecords) {
-        colWidths.push({ wch: 80 })  // 聊天记录详情
+        columns.push({ header: '聊天记录详情', key: '聊天记录详情', width: 80 })
       }
 
-      ws['!cols'] = colWidths
+      ws.columns = columns
 
-      // 添加工作表（工作表名称最多31个字符，且不能包含特殊字符）
-      const sheetName = sessionInfo.displayName
-        .substring(0, 31)
-        .replace(/[:\\\/\?\*\[\]]/g, '_')
-      XLSX.utils.book_append_sheet(wb, ws, sheetName)
+      // 添加数据行
+      ws.addRows(excelData)
 
-      // 写入文件（使用 buffer 方式，避免 xlsx 直接写文件的问题）
+      // 写入文件
       try {
-        const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'buffer' })
-        fs.writeFileSync(outputPath, wbout)
+        const wbout = await wb.xlsx.writeBuffer()
+        fs.writeFileSync(outputPath, Buffer.from(wbout))
       } catch (writeError) {
         console.error('写入文件失败:', writeError)
         return { success: false, error: `文件写入失败: ${String(writeError)}` }
