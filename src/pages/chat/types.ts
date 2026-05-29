@@ -2,19 +2,6 @@ import type { ChatSession, Message } from '../../types/models'
 
 export type QuoteStyle = 'default' | 'wechat'
 
-export interface SessionDetail {
-  wxid: string
-  displayName: string
-  remark?: string
-  nickName?: string
-  alias?: string
-  avatarUrl?: string
-  messageCount: number
-  firstMessageTime?: number
-  latestMessageTime?: number
-  messageTables: { dbName: string; tableName: string; count: number }[]
-}
-
 export type MessageContextHandlers = {
   reTranscribe?: () => void
   editStt?: () => void

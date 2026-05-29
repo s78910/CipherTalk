@@ -1463,38 +1463,6 @@ export interface ElectronAPI {
     removeListeners(): void
   }
 
-  // Agent 通用对话
-  agent: {
-    sendMessage(opts: AgentSendMessageOptions): Promise<AgentSendMessageResult>
-    cancel(requestId: string): Promise<{ success: boolean; error?: string }>
-    listConversations(): Promise<{ success: boolean; conversations?: AgentConversationSummary[]; error?: string }>
-    loadConversation(id: number): Promise<{ success: boolean; messages?: AgentMessageRecord[]; error?: string }>
-    deleteConversation(id: number): Promise<{ success: boolean; error?: string }>
-    newConversation(): Promise<{ success: boolean; id?: number; error?: string }>
-    appendLocalMessages(opts: {
-      conversationId?: number
-      messages: Array<{
-        role: 'user' | 'assistant'
-        content?: string
-        blocks?: unknown[]
-      }>
-    }): Promise<{ success: boolean; conversationId?: number; error?: string }>
-    updateTitle(id: number, title: string): Promise<{ success: boolean; error?: string }>
-    getLastConversationId(): Promise<{ success: boolean; id?: number; error?: string }>
-    generateTitle(opts: {
-      conversationId: number
-      userMessage: string
-      assistantResponse: string
-      provider: string
-      apiKey: string
-      model: string
-    }): Promise<{ success: boolean; title?: string; error?: string }>
-    onStreamEvent(cb: (data: { requestId: string; event: AIStreamEvent }) => void): () => void
-    onDone(cb: (data: { requestId: string; conversationId?: number }) => void): () => void
-    onError(cb: (data: { requestId: string; message: string }) => void): () => void
-    removeListeners(): void
-  }
-
 }
 
 export type AiAgentScope =
@@ -1566,47 +1534,6 @@ export interface AiAgentMessageRecord {
 
 export interface AiAgentConversationDetail extends AiAgentConversationSummary {
   messages: AiAgentMessageRecord[]
-}
-
-export interface AgentSendMessageOptions {
-  requestId?: string
-  conversationId?: number
-  history: Array<{ role: string; content: string }>
-  message: string
-  provider: string
-  apiKey: string
-  model: string
-  enableThinking?: boolean
-  temperature?: number
-  systemPrompt?: string
-  commandHint?: string
-  readLimit?: number
-  enabledTools?: Array<{ type: string; function: { name: string; description?: string; parameters?: Record<string, unknown> } }>
-  scopedSessions?: Array<{ id: string; name: string }>
-  skillIds?: string[]
-}
-
-export interface AgentSendMessageResult {
-  success: boolean
-  requestId: string
-  conversationId?: number
-  error?: string
-}
-
-export interface AgentConversationSummary {
-  id: number
-  title: string
-  preview: string
-  updatedAt: number
-}
-
-export interface AgentMessageRecord {
-  id: number
-  conversationId: number
-  role: string
-  content: string
-  blocksJson?: string | null
-  createdAt: number
 }
 
 export interface ExportOptions {
