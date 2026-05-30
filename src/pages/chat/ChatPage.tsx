@@ -4,7 +4,7 @@ import { useChatStore, MAX_ACTIVE_MESSAGES } from '../../stores/chatStore'
 import { useUpdateStatusStore } from '../../stores/updateStatusStore'
 import ChatBackground from '../../components/ChatBackground'
 import { parseDateValue } from '../../components/AppDatePicker'
-import { getImageXorKey, getImageAesKey, getQuoteStyle } from '../../services/config'
+import { getImageXorKey, getImageAesKey, getQuoteStyle, type QuoteStyleConfig } from '../../services/config'
 import type { ChatSession, Message } from '../../types/models'
 import { BatchDecryptModal } from './components/BatchDecryptModal'
 import { BatchTranscribeModal } from './components/BatchTranscribeModal'
@@ -39,7 +39,7 @@ function getMessageCacheKey(message: Message): string {
 }
 
 function ChatPage(_props: ChatPageProps) {
-  const [quoteStyle, setQuoteStyle] = useState<'default' | 'wechat'>('default')
+  const [quoteStyle, setQuoteStyle] = useState<QuoteStyleConfig>('default')
 
   useEffect(() => {
     getQuoteStyle().then(setQuoteStyle).catch(console.error)

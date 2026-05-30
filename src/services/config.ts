@@ -398,13 +398,15 @@ export async function acceptCurrentAgreement(): Promise<void> {
 }
 
 // 获取引用样式
-export async function getQuoteStyle(): Promise<'default' | 'wechat'> {
+export type QuoteStyleConfig = 'default' | 'wechat' | 'card'
+
+export async function getQuoteStyle(): Promise<QuoteStyleConfig> {
   const value = await config.get(CONFIG_KEYS.QUOTE_STYLE)
-  return (value as 'default' | 'wechat') || 'default'
+  return value === 'wechat' || value === 'card' ? value : 'default'
 }
 
 // 设置引用样式
-export async function setQuoteStyle(style: 'default' | 'wechat'): Promise<void> {
+export async function setQuoteStyle(style: QuoteStyleConfig): Promise<void> {
   await config.set(CONFIG_KEYS.QUOTE_STYLE, style)
 }
 

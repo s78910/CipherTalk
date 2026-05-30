@@ -1,5 +1,5 @@
+import { Button } from '@heroui/react'
 import { Save } from 'lucide-react'
-import './FloatingSaveButton.scss'
 
 interface FloatingSaveButtonProps {
   hasChanges: boolean
@@ -9,14 +9,17 @@ interface FloatingSaveButtonProps {
 
 function FloatingSaveButton({ hasChanges, disabled = false, onClick }: FloatingSaveButtonProps) {
   return (
-    <button
-      className={`floating-save-btn ${hasChanges ? 'has-changes' : ''}`}
-      onClick={onClick}
-      disabled={disabled}
-      title={hasChanges ? '有未保存的更改，点击保存' : '保存配置'}
+    <Button
+      aria-label={hasChanges ? '保存未保存的更改' : '保存配置'}
+      className="fixed right-6 bottom-6 z-[1000]"
+      isDisabled={disabled}
+      isIconOnly
+      onPress={onClick}
+      size="lg"
+      variant={hasChanges ? 'danger' : 'primary'}
     >
       <Save size={20} />
-    </button>
+    </Button>
   )
 }
 

@@ -19,7 +19,7 @@ interface MessageBubbleProps {
   hasImageKey?: boolean;
   onContextMenu?: (e: React.MouseEvent, message: Message, handlers?: any) => void;
   isSelected?: boolean;
-  quoteStyle?: 'default' | 'wechat';
+  quoteStyle?: 'default' | 'wechat' | 'card';
 }
 
 function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat, hasImageKey, onContextMenu, isSelected, quoteStyle = 'default' }: MessageBubbleProps) {
@@ -2082,6 +2082,30 @@ function MessageBubble({ message, session, showTime, myAvatarUrl, isGroupChat, h
                 )}
                 {!quotedImageLocalPath && quotedEmojiLocalPath && (
                   <img src={quotedEmojiLocalPath} alt="表情" className="quote-image-thumb" />
+                )}
+              </div>
+            </div>
+          )}
+
+          {hasQuote && quoteStyle === 'card' && (
+            <div className="bubble-quote-line">
+              <div className="quote-line-content" onClick={(quotedImageLocalPath || quotedEmojiLocalPath) ? (e) => { e.stopPropagation(); window.electronAPI.window.openImageViewerWindow((quotedImageLocalPath || quotedEmojiLocalPath)!) } : undefined} style={(quotedImageLocalPath || quotedEmojiLocalPath) ? { cursor: 'pointer' } : undefined}>
+                <span className="quote-line-text">
+                  {(() => {
+                    let sender = message.quotedSender
+                    if (!sender && message.rawContent) {
+                      const match = message.rawContent.match(/<displayname>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?<\/displayname>/)
+                      if (match) sender = match[1]
+                    }
+                    return sender ? <span className="quote-line-sender">{sender}: </span> : null
+                  })()}
+                  {(quotedImageLocalPath || quotedEmojiLocalPath) ? null : message.quotedContent}
+                </span>
+                {quotedImageLocalPath && (
+                  <img src={quotedImageLocalPath} alt="" className="quote-line-image-thumb" />
+                )}
+                {!quotedImageLocalPath && quotedEmojiLocalPath && (
+                  <img src={quotedEmojiLocalPath} alt="表情" className="quote-line-image-thumb" />
                 )}
               </div>
             </div>

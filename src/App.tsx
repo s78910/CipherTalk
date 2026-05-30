@@ -705,7 +705,9 @@ function App() {
             // 侧栏布局：内容做成内嵌圆角面板，与外壳（侧栏同色）形成夹角圆角
             ...(navLayout === 'sidebar' ? {
               bgcolor: 'var(--bg-primary)',
-              borderTopLeftRadius: '12px',
+              borderRadius: '12px',
+              mr: '12px',
+              mb: '12px',
             } : {}),
           }}
         >

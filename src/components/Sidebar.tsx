@@ -147,10 +147,13 @@ function Sidebar() {
   }
 
   const profileAvatar = (
-    <Avatar size="sm" className="shrink-0">
-      {userInfo?.avatarUrl ? <Avatar.Image src={userInfo.avatarUrl} alt={userDisplayName} /> : null}
-      <Avatar.Fallback>{userInitial}</Avatar.Fallback>
-    </Avatar>
+    <div className="relative">
+      <Avatar size="md">
+        {userInfo?.avatarUrl ? <Avatar.Image src={userInfo.avatarUrl} alt={userDisplayName} /> : null}
+        <Avatar.Fallback>{userInitial}</Avatar.Fallback>
+      </Avatar>
+      <span className="absolute right-0 bottom-0 size-3 rounded-full bg-green-500 ring-2 ring-background" />
+    </div>
   )
 
   return (

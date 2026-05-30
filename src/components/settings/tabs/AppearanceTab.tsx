@@ -1,8 +1,10 @@
 import { useState, type CSSProperties } from 'react'
-import { Label, Slider, Tabs, type Key } from '@heroui/react'
+import { Description, Label, Radio, RadioGroup, Slider, Tabs, type Key } from '@heroui/react'
 import { ImageIcon, Moon, Monitor, PanelBottom, PanelLeft, Sun, Upload, Video } from 'lucide-react'
 import { useThemeStore, type HomeBackgroundSource, type NavLayout } from '../../../stores/themeStore'
+import { useAppStore } from '../../../stores/appStore'
 import { useSettingsStore } from '../settingsStore'
+import QuoteStyleOptionCard, { type QuoteStyle } from '../QuoteStyleOptionCard'
 import Select from '../../Select'
 
 type ThemeMode = 'light' | 'dark' | 'system'
@@ -13,6 +15,15 @@ const toHomeBackgroundSource = (key: Key): HomeBackgroundSource => String(key) a
 
 const getFileName = (filePath: string) => filePath.split(/[\\/]/).filter(Boolean).pop() || '自定义背景'
 const toSliderNumber = (value: number | number[]): number => Array.isArray(value) ? value[0] ?? 0 : value
+const normalizeImageSrc = (value?: string): string | undefined => {
+  const src = value?.trim()
+  if (!src) return undefined
+  return /^(https?:|file:|data:image\/|blob:)/i.test(src) ? src : undefined
+}
+const getAvatarFallback = (name?: string, wxid?: string): string => {
+  const text = (name || wxid || '我').trim()
+  return text.slice(0, 2) || '我'
+}
 
 function AppearanceTab() {
   const {
@@ -30,8 +41,11 @@ function AppearanceTab() {
   const quoteStyle = useSettingsStore(s => s.config.quoteStyle)
   const closeToTray = useSettingsStore(s => s.config.closeToTray)
   const setField = useSettingsStore(s => s.setField)
+  const userInfo = useAppStore(s => s.userInfo)
   const [backgroundImporting, setBackgroundImporting] = useState(false)
   const [backgroundError, setBackgroundError] = useState('')
+  const avatarUrl = normalizeImageSrc(userInfo?.avatarUrl)
+  const avatarFallback = getAvatarFallback(userInfo?.nickName, userInfo?.wxid)
 
   const customBackgroundReady = Boolean(homeBackground.customUrl)
     && (homeBackground.customType === 'image' || homeBackground.customType === 'video')
@@ -74,6 +88,7 @@ function AppearanceTab() {
 
   return (
     <div className="tab-content">
+      <h3 className="section-title">主题模式</h3>
       <Tabs selectedKey={themeMode} onSelectionChange={(key) => setThemeMode(toThemeMode(key))} className="w-full max-w-md">
         <Tabs.ListContainer>
           <Tabs.List aria-label="外观模式" className="*:gap-2">
@@ -136,7 +151,7 @@ function AppearanceTab() {
           <div className="home-background-preview" aria-label="首页背景预览">
             {homeBackground.source === 'custom' && customBackgroundReady ? (
               homeBackground.customType === 'image' ? (
-                <img src={homeBackground.customUrl} alt="" style={backgroundPreviewStyle} />
+                <img src={homeBackground.customUrl} alt="" decoding="async" loading="lazy" style={backgroundPreviewStyle} />
               ) : (
                 <video src={homeBackground.customUrl} autoPlay muted loop playsInline style={backgroundPreviewStyle} />
               )
@@ -187,64 +202,59 @@ function AppearanceTab() {
       </div>
 
       <h3 className="section-title" style={{ marginTop: '2rem' }}>引用消息样式</h3>
-      <div className="quote-style-options">
-        <label className={`radio-label ${quoteStyle === 'default' ? 'active' : ''}`}>
-          <input
-            type="radio"
-            name="quoteStyle"
-            value="default"
-            checked={quoteStyle === 'default'}
-            onChange={() => setField('quoteStyle', 'default')}
-          />
-          <div className="radio-content">
-            <div className="style-preview">
-              <img src="./logo.png" className="preview-avatar" alt="对方" />
-              <div className="preview-bubble default">
-                <div className="preview-quote">张三: 那天去爬山的照片...</div>
-                <div className="preview-text">拍得真不错！</div>
-              </div>
-            </div>
-          </div>
-        </label>
-
-        <label className={`radio-label ${quoteStyle === 'wechat' ? 'active' : ''}`}>
-          <input
-            type="radio"
-            name="quoteStyle"
-            value="wechat"
-            checked={quoteStyle === 'wechat'}
-            onChange={() => setField('quoteStyle', 'wechat')}
-          />
-          <div className="radio-content">
-            <div className="style-preview">
-              <img src="./logo.png" className="preview-avatar" alt="对方" />
-              <div className="preview-group">
-                <div className="preview-bubble wechat">拍得真不错！</div>
-                <div className="preview-quote-bubble">张三: 那天去爬山的照片...</div>
-              </div>
-            </div>
-          </div>
-        </label>
-      </div>
+      <RadioGroup
+        className="quote-style-options"
+        name="quoteStyle"
+        orientation="horizontal"
+        value={quoteStyle}
+        variant="secondary"
+        onChange={(value) => setField('quoteStyle', value as QuoteStyle)}
+      >
+        <QuoteStyleOptionCard
+          avatarFallback={avatarFallback}
+          avatarUrl={avatarUrl}
+          value="default"
+        />
+        <QuoteStyleOptionCard
+          avatarFallback={avatarFallback}
+          avatarUrl={avatarUrl}
+          value="wechat"
+        />
+        <QuoteStyleOptionCard
+          avatarFallback={avatarFallback}
+          avatarUrl={avatarUrl}
+          value="card"
+        />
+      </RadioGroup>
 
       <h3 className="section-title" style={{ marginTop: '2rem' }}>窗口关闭行为</h3>
-      <Select<'tray' | 'quit'>
-        style={{ maxWidth: 460 }}
+      <RadioGroup
+        className="window-close-options"
+        name="closeToTray"
+        orientation="horizontal"
         value={closeToTray ? 'tray' : 'quit'}
-        onChange={(v) => setField('closeToTray', v === 'tray')}
-        options={[
-          {
-            value: 'tray',
-            label: '最小化到托盘',
-            description: '点击关闭按钮后，应用将最小化到系统托盘继续运行'
-          },
-          {
-            value: 'quit',
-            label: '直接退出应用',
-            description: '点击关闭按钮后，应用将完全退出'
-          }
-        ]}
-      />
+        variant="secondary"
+        onChange={(value) => setField('closeToTray', value === 'tray')}
+      >
+        <Radio className="window-close-radio" value="tray">
+          <Radio.Control className="absolute top-3 right-4 size-5">
+            <Radio.Indicator />
+          </Radio.Control>
+          <Radio.Content className="window-close-radio-content">
+            <Label>最小化到托盘</Label>
+            <Description>点击关闭按钮后，应用将最小化到系统托盘继续运行</Description>
+          </Radio.Content>
+        </Radio>
+        <Radio className="window-close-radio" value="quit">
+          <Radio.Control className="absolute top-3 right-4 size-5">
+            <Radio.Indicator />
+          </Radio.Control>
+          <Radio.Content className="window-close-radio-content">
+            <Label>直接退出应用</Label>
+            <Description>点击关闭按钮后，应用将完全退出</Description>
+          </Radio.Content>
+        </Radio>
+      </RadioGroup>
     </div>
   )
 }

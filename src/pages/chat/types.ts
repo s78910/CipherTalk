@@ -1,6 +1,6 @@
 import type { ChatSession, Message } from '../../types/models'
 
-export type QuoteStyle = 'default' | 'wechat'
+export type QuoteStyle = 'default' | 'wechat' | 'card'
 
 export type MessageContextHandlers = {
   reTranscribe?: () => void

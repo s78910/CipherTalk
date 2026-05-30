@@ -130,6 +130,7 @@ function HomePage() {
           className="home-background-media"
           src={homeBackground.customUrl}
           alt=""
+          decoding="async"
           style={backgroundStyle}
           onError={handleBackgroundError}
           aria-hidden="true"

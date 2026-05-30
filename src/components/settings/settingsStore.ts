@@ -37,7 +37,7 @@ export interface SettingsConfig {
   aiModel: string
 
   // —— appearance / misc 切片 ——
-  quoteStyle: 'default' | 'wechat'
+  quoteStyle: 'default' | 'wechat' | 'card'
   exportPath: string
   exportDefaultDateRange: number
   closeToTray: boolean

@@ -1,6 +1,6 @@
 ﻿import { lazy, Suspense, useState, useEffect, useRef } from 'react'
 import { useSearchParams, useLocation } from 'react-router-dom'
-import { Tabs, type Key as HeroKey } from '@heroui/react'
+import { Tabs, ScrollShadow, type Key as HeroKey } from '@heroui/react'
 import { useAppStore } from '../../stores/appStore'
 import type { UpdateDownloadProgressPayload } from '../../types/electron'
 import type { AccountProfile } from '../../types/account'
@@ -166,7 +166,7 @@ function SettingsLayout() {
   const [sttOnlineTimeoutMs, setSttOnlineTimeoutMs] = useState(60000)
   const [sttOnlineMaxConcurrency, setSttOnlineMaxConcurrency] = useState(2)
   const [showSttOnlineLanguageDropdown, setShowSttOnlineLanguageDropdown] = useState(false)
-  const [quoteStyle, setQuoteStyle] = useState<'default' | 'wechat'>('default')
+  const [quoteStyle, setQuoteStyle] = useState<'default' | 'wechat' | 'card'>('default')
   const [skipIntegrityCheck, setSkipIntegrityCheck] = useState(false)
   const [exportDefaultDateRange, setExportDefaultDateRange] = useState<number>(0)
   const [autoUpdateDatabase, setAutoUpdateDatabase] = useState(true)
@@ -1350,7 +1350,7 @@ function SettingsLayout() {
         </Tabs.ListContainer>
       </Tabs>
 
-      <div className="settings-body">
+      <ScrollShadow className="settings-body" hideScrollBar size={64}>
         {activeTab === 'appearance' && <AppearanceTab />}
         {activeTab === 'database' && (
           <Suspense fallback={<div className="tab-content">加载中...</div>}>
@@ -1390,7 +1390,7 @@ function SettingsLayout() {
             onCheckUpdate={handleCheckUpdate}
           />
         )}
-      </div>
+      </ScrollShadow>
 
       <FloatingSaveButton
         hasChanges={storeHasUnsavedChanges}
