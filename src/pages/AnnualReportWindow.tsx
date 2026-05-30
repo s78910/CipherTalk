@@ -257,7 +257,7 @@ function AnnualReportWindow() {
   const [loadingStage, setLoadingStage] = useState('正在初始化...')
   const [reportTheme, setReportTheme] = useState<'default' | 'newyear'>('default')
 
-  const { currentTheme, themeMode, loadTheme } = useThemeStore()
+  const { themeMode, loadTheme } = useThemeStore()
 
   // 加载主题配置
   useEffect(() => {
@@ -266,9 +266,23 @@ function AnnualReportWindow() {
 
   // 应用主题到独立窗口
   useEffect(() => {
-    document.documentElement.setAttribute('data-theme', currentTheme)
-    document.documentElement.setAttribute('data-mode', themeMode)
-  }, [currentTheme, themeMode])
+    const applyMode = (mode: 'light' | 'dark') => {
+      document.documentElement.setAttribute('data-theme', mode)
+      document.documentElement.setAttribute('data-mode', mode)
+      document.documentElement.classList.toggle('light', mode === 'light')
+      document.documentElement.classList.toggle('dark', mode === 'dark')
+    }
+
+    if (themeMode === 'system') {
+      const mq = window.matchMedia('(prefers-color-scheme: dark)')
+      applyMode(mq.matches ? 'dark' : 'light')
+      const handler = (event: MediaQueryListEvent) => applyMode(event.matches ? 'dark' : 'light')
+      mq.addEventListener('change', handler)
+      return () => mq.removeEventListener('change', handler)
+    }
+
+    applyMode(themeMode)
+  }, [themeMode])
 
   // Section refs
   const sectionRefs = {

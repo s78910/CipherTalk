@@ -78,7 +78,7 @@ function App() {
   const navigate = useNavigate()
   const location = useLocation()
   const { setDbConnected } = useAppStore()
-  const { currentTheme, themeMode, navLayout, isLoaded, loadTheme } = useThemeStore()
+  const { themeMode, navLayout, isLoaded, loadTheme } = useThemeStore()
   const { status: activationStatus, checkStatus: checkActivationStatus, initialized: activationInitialized } = useActivationStore()
   const { isLocked, init: initAuth } = useAuthStore()
 
@@ -165,10 +165,12 @@ function App() {
   // 应用主题
   useEffect(() => {
     if (!isLoaded) return
-    document.documentElement.setAttribute('data-theme', currentTheme)
 
-    const applyMode = (mode: string) => {
+    const applyMode = (mode: 'light' | 'dark') => {
+      document.documentElement.setAttribute('data-theme', mode)
       document.documentElement.setAttribute('data-mode', mode)
+      document.documentElement.classList.toggle('light', mode === 'light')
+      document.documentElement.classList.toggle('dark', mode === 'dark')
       window.electronAPI.window.setTitleBarOverlay({ symbolColor: mode === 'dark' ? '#ffffff' : '#1a1a1a' })
     }
 
@@ -181,7 +183,7 @@ function App() {
     } else {
       applyMode(themeMode)
     }
-  }, [currentTheme, themeMode, isLoaded])
+  }, [themeMode, isLoaded])
 
   // 检查是否需要显示协议
   useEffect(() => {

@@ -1,5 +1,30 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { Button, Card, Chip, CloseButton, ComboBox, Description, Drawer, Input, Label, ListBox, Modal, Select as HeroSelect, useOverlayState, type Key } from '@heroui/react'
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
+import {
+  Alert,
+  Button,
+  Card,
+  Chip,
+  CloseButton,
+  ComboBox,
+  Description,
+  Drawer,
+  FieldError,
+  Fieldset,
+  Form,
+  Input,
+  InputGroup,
+  Label,
+  ListBox,
+  Modal,
+  Select,
+  Spinner,
+  Tabs,
+  TextField,
+  Tooltip,
+  Typography,
+  useOverlayState,
+  type Key
+} from '@heroui/react'
 import { ArrowUpRight, Brain, Braces, Coins, Eye, EyeOff, FileText, Gauge, HelpCircle, Image as ImageIcon, Plus, RefreshCw, Settings2, Sparkles, Wrench } from 'lucide-react'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
@@ -8,10 +33,9 @@ import * as configService from '../../services/config'
 import { cn } from '../../lib/utils'
 import { useSettingsStore } from '../settings/settingsStore'
 import AIProviderLogo from './AIProviderLogo'
-import './AISummarySettings.scss'
-import './markdown-content.scss'
 
 type AiProviderProtocol = configService.AiProviderProtocol
+type PresetTab = 'name' | 'provider' | 'config'
 
 interface AISummarySettingsProps {
   showMessage: (text: string, success: boolean) => void
@@ -27,8 +51,8 @@ interface PresetDraft {
 
 interface SelectOption {
   value: string
-  label: ReactNode
-  description?: ReactNode
+  label: string
+  description?: string
   content?: ReactNode
   disabled?: boolean
 }
@@ -58,13 +82,6 @@ const PROTOCOL_LABELS: Record<AiProviderProtocol, string> = {
   anthropic: 'Anthropic',
   google: 'Google Gemini'
 }
-
-const inputCls = 'ai-hero-input text-foreground placeholder:text-muted-foreground'
-const primaryBtnCls = 'ai-hero-button'
-const ghostBtnCls = 'ai-hero-button'
-const iconBtnCls = 'ai-hero-icon-button'
-const cardCls = 'ai-hero-card'
-const modalDialogCls = 'ai-hero-modal'
 
 function normalizeProviderId(providerId: string) {
   return LEGACY_CUSTOM_PROVIDER_MAP[providerId] || providerId
@@ -110,148 +127,17 @@ function formatProtocolLabel(protocol?: AiProviderProtocol) {
   return protocol ? PROTOCOL_LABELS[protocol] || protocol : '未选择'
 }
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="space-y-1.5">
-      <Label className="block text-sm font-medium text-foreground">{label}</Label>
-      {children}
-    </div>
-  )
-}
-
-function HeroSelectField({
-  value,
-  onChange,
-  options,
-  placeholder,
-  className
-}: {
-  value: string
-  onChange: (value: string) => void
-  options: SelectOption[]
-  placeholder: string
-  className?: string
-}) {
-  const selectedOption = options.find(option => option.value === value)
-
-  return (
-    <HeroSelect
-      selectedKey={value || null}
-      onSelectionChange={(key: Key | null) => {
-        if (key != null) onChange(String(key))
-      }}
-      placeholder={placeholder}
-      variant="secondary"
-      fullWidth
-      className={cn('ai-hero-select', className)}
-      disabledKeys={options.filter(option => option.disabled).map(option => option.value)}
-    >
-      <HeroSelect.Trigger>
-        <HeroSelect.Value>
-          {({ defaultChildren, isPlaceholder }) => (
-            isPlaceholder
-              ? defaultChildren
-              : (selectedOption?.content ?? selectedOption?.label ?? defaultChildren)
-          )}
-        </HeroSelect.Value>
-        <HeroSelect.Indicator />
-      </HeroSelect.Trigger>
-      <HeroSelect.Popover className="ai-hero-popover">
-        <ListBox>
-          {options.map(option => (
-            <ListBox.Item
-              key={option.value}
-              id={option.value}
-              textValue={String(option.label)}
-              isDisabled={option.disabled}
-            >
-              {option.content ?? (
-                <span className="flex min-w-0 flex-col">
-                  <span className="truncate text-sm text-foreground">{option.label}</span>
-                  {option.description && (
-                    <Description className="truncate text-xs text-muted-foreground">{option.description}</Description>
-                  )}
-                </span>
-              )}
-              <ListBox.ItemIndicator />
-            </ListBox.Item>
-          ))}
-        </ListBox>
-      </HeroSelect.Popover>
-    </HeroSelect>
-  )
-}
-
-function HeroModelComboBox({
-  value,
-  onChange,
-  options,
-  placeholder,
-  adornment,
-  className
-}: {
-  value: string
-  onChange: (value: string) => void
-  options: SelectOption[]
-  placeholder: string
-  adornment?: ReactNode
-  className?: string
-}) {
-  const selectedKey = options.some(option => option.value === value) ? value : null
-
-  return (
-    <ComboBox
-      allowsCustomValue
-      selectedKey={selectedKey}
-      inputValue={value}
-      onInputChange={onChange}
-      onSelectionChange={(key: Key | null) => {
-        if (key != null) onChange(String(key))
-      }}
-      menuTrigger="focus"
-      variant="secondary"
-      fullWidth
-      className={cn('ai-hero-combobox', className)}
-      disabledKeys={options.filter(option => option.disabled).map(option => option.value)}
-    >
-      <ComboBox.InputGroup>
-        <Input placeholder={placeholder} variant="secondary" />
-        {adornment && <span className="ai-hero-combobox-adornment">{adornment}</span>}
-        <ComboBox.Trigger />
-      </ComboBox.InputGroup>
-      <ComboBox.Popover className="ai-hero-popover">
-        <ListBox>
-          {options.map(option => (
-            <ListBox.Item
-              key={option.value}
-              id={option.value}
-              textValue={String(option.label)}
-              isDisabled={option.disabled}
-            >
-              {option.content ?? option.label}
-              <ListBox.ItemIndicator />
-            </ListBox.Item>
-          ))}
-        </ListBox>
-      </ComboBox.Popover>
-    </ComboBox>
-  )
-}
-
-const CAPABILITY_ICON_TONE: Record<string, string> = {
-  reasoning: 'bg-violet-500/15 text-violet-500',
-  tool: 'bg-sky-500/15 text-sky-500',
-  structured: 'bg-emerald-500/15 text-emerald-500',
-  image: 'bg-amber-500/15 text-amber-500',
-  pdf: 'bg-rose-500/15 text-rose-500'
-}
-
 function ModelCapabilityStrip({ modelDetail, compact = false }: { modelDetail?: AIModelInfo; compact?: boolean }) {
   if (!modelDetail) return null
 
   const context = formatTokenLimit(modelDetail.limits.context)
   const output = formatTokenLimit(modelDetail.limits.output)
   const price = formatModelCost(modelDetail)
+  const metrics = [
+    { key: 'context', label: '上下文', value: context || '--', active: !!context, icon: Gauge, tooltip: context ? `上下文 ${context}` : '上下文未知' },
+    { key: 'output', label: '输出', value: output || '--', active: !!output, icon: ArrowUpRight, tooltip: output ? `最大输出 ${output}` : '最大输出未知' },
+    { key: 'price', label: '价格', value: price || '--', active: !!price, icon: Coins, tooltip: price ? `${modelDetail.cost?.input}/1M input, ${modelDetail.cost?.output}/1M output` : '价格未知' }
+  ]
   const capabilities = [
     { key: 'reasoning', label: '推理', enabled: modelDetail.capabilities.reasoning, icon: Brain },
     { key: 'tool', label: '工具调用', enabled: modelDetail.capabilities.toolCall, icon: Wrench },
@@ -260,51 +146,40 @@ function ModelCapabilityStrip({ modelDetail, compact = false }: { modelDetail?: 
     { key: 'pdf', label: 'PDF', enabled: modelDetail.modalities.input.includes('pdf'), icon: FileText }
   ]
 
-  const metricCls = (active: boolean) => cn(
-    'inline-flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground',
-    !active && 'opacity-50'
-  )
-
   return (
     <span className={cn('flex flex-wrap items-center', compact ? 'gap-1' : 'gap-1.5')}>
-      <span className={metricCls(!!context)} title={context ? `上下文 ${context}` : '上下文未知'}>
-        <Gauge size={13} />
-        <span>{context || '--'}</span>
-      </span>
-      <span className={metricCls(!!output)} title={output ? `最大输出 ${output}` : '最大输出未知'}>
-        <ArrowUpRight size={13} />
-        <span>{output || '--'}</span>
-      </span>
+      {metrics.map(item => {
+        const Icon = item.icon
+        return (
+          <Tooltip key={item.key} delay={0}>
+            <Chip size="md" variant="soft" color={item.active ? 'accent' : 'default'} className={cn(!item.active && 'opacity-60')}>
+              <Icon size={12} />
+              <Chip.Label>{item.value}</Chip.Label>
+            </Chip>
+            <Tooltip.Content>{item.tooltip}</Tooltip.Content>
+          </Tooltip>
+        )
+      })}
       {capabilities.map(item => {
         const Icon = item.icon
         return (
-          <span
-            key={item.key}
-            className={cn(
-              'inline-flex h-5 w-5 items-center justify-center rounded-md',
-              item.enabled ? CAPABILITY_ICON_TONE[item.key] : 'bg-muted text-muted-foreground/40'
-            )}
-            title={`${item.label}: ${item.enabled ? '支持' : '不支持'}`}
-          >
-            <Icon size={13} />
-          </span>
+          <Tooltip key={item.key} delay={0}>
+            <Chip size="md" variant="soft" color={item.enabled ? 'success' : 'default'} className={cn(!item.enabled && 'opacity-60')}>
+              <Icon size={12} />
+              {!compact && <Chip.Label>{item.label}</Chip.Label>}
+            </Chip>
+            <Tooltip.Content>{`${item.label}: ${item.enabled ? '支持' : '不支持'}`}</Tooltip.Content>
+          </Tooltip>
         )
       })}
-      <span
-        className={metricCls(!!price)}
-        title={price ? `${modelDetail.cost?.input}/1M input, ${modelDetail.cost?.output}/1M output` : '价格未知'}
-      >
-        <Coins size={13} />
-        <span>{price || '--'}</span>
-      </span>
     </span>
   )
 }
 
 function ModelOptionContent({ modelId, modelDetail }: { modelId: string; modelDetail?: AIModelInfo }) {
   return (
-    <span className="flex flex-col gap-1">
-      <span className="text-sm text-foreground">{modelDetail?.name || modelId}</span>
+    <span className="flex min-w-0 flex-col gap-1">
+      <span className="truncate text-sm text-foreground">{modelDetail?.name || modelId}</span>
       <ModelCapabilityStrip modelDetail={modelDetail} compact />
     </span>
   )
@@ -312,12 +187,9 @@ function ModelOptionContent({ modelId, modelDetail }: { modelId: string; modelDe
 
 function ProviderOptionContent({ providerInfo }: { providerInfo: AIProviderInfo }) {
   return (
-    <span className="flex items-center gap-2.5">
+    <span className="flex min-w-0 items-center gap-2.5">
       <AIProviderLogo providerId={providerInfo.id} logo={providerInfo.logo} alt={providerInfo.displayName} className="shrink-0" size={18} />
-      <span className="flex min-w-0 flex-col">
-        <strong className="truncate text-sm font-medium text-foreground">{providerInfo.displayName}</strong>
-        <small className="truncate text-xs text-muted-foreground">{providerInfo.description}</small>
-      </span>
+      <strong className="truncate text-sm font-medium text-foreground">{providerInfo.displayName}</strong>
     </span>
   )
 }
@@ -334,15 +206,16 @@ function GuideModal({ title, html, onClose }: { title: string; html: string; onC
     <Modal state={modalState}>
       <Modal.Backdrop variant="blur">
         <Modal.Container size="lg" scroll="inside" placement="center">
-          <Modal.Dialog className={modalDialogCls}>
+          <Modal.Dialog>
             <Modal.Header className="items-center justify-between">
               <Modal.Heading className="text-base font-semibold text-foreground">{title}</Modal.Heading>
               <CloseButton aria-label="关闭指南" onPress={onClose} />
             </Modal.Header>
-            <Modal.Body
-              className="markdown-content"
-              dangerouslySetInnerHTML={{ __html: html || '<p>加载中...</p>' }}
-            />
+            <Modal.Body>
+              <Typography.Prose className="max-w-none">
+                <div dangerouslySetInnerHTML={{ __html: html || '<p>加载中...</p>' }} />
+              </Typography.Prose>
+            </Modal.Body>
           </Modal.Dialog>
         </Modal.Container>
       </Modal.Backdrop>
@@ -370,7 +243,7 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
   const [showPresetDrawer, setShowPresetDrawer] = useState(false)
   const [showSavePresetDialog, setShowSavePresetDialog] = useState(false)
   const [presetName, setPresetName] = useState('')
-  const [presetStep, setPresetStep] = useState(1)
+  const [presetTab, setPresetTab] = useState<PresetTab>('name')
   const [presetDraft, setPresetDraft] = useState<PresetDraft>({
     provider: '',
     apiKey: '',
@@ -399,7 +272,7 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
   const modelDetails = remoteModelDetails.length > 0 ? remoteModelDetails : (currentProvider?.modelDetails || [])
   const modelDetailById = useMemo(() => new Map(modelDetails.map(item => [item.id, item])), [modelDetails])
   const currentModelDetail = modelDetailById.get(model)
-  const modelOptions = useMemo(() => {
+  const modelOptions = useMemo<SelectOption[]>(() => {
     const models = remoteModels.length > 0 ? remoteModels : (currentProvider?.models || [])
     return models.map(item => ({
       value: item,
@@ -407,16 +280,27 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
       content: <ModelOptionContent modelId={item} modelDetail={modelDetailById.get(item)} />
     }))
   }, [currentProvider?.models, modelDetailById, remoteModels])
-  const providerOptions = useMemo(() => providers.map(item => ({
+  const providerOptions = useMemo<SelectOption[]>(() => providers.map(item => ({
     value: item.id,
     label: item.displayName,
+    description: item.description,
     content: <ProviderOptionContent providerInfo={item} />
   })), [providers])
+  const protocolOptions = useMemo<SelectOption[]>(() => (
+    CUSTOM_PROTOCOL_OPTIONS
+      .filter(item => currentProvider?.protocolOptions?.includes(item.value))
+      .map(item => ({ value: item.value, label: item.label }))
+  ), [currentProvider?.protocolOptions])
   const presetDraftProvider = providers.find(p => p.id === presetDraft.provider)
+  const presetDraftProtocolOptions = useMemo<SelectOption[]>(() => (
+    CUSTOM_PROTOCOL_OPTIONS
+      .filter(item => presetDraftProvider?.protocolOptions?.includes(item.value))
+      .map(item => ({ value: item.value, label: item.label }))
+  ), [presetDraftProvider?.protocolOptions])
   const presetDraftModelDetailById = useMemo(() => {
     return new Map((presetDraftProvider?.modelDetails || []).map(item => [item.id, item]))
   }, [presetDraftProvider?.modelDetails])
-  const presetDraftModelOptions = useMemo(() => {
+  const presetDraftModelOptions = useMemo<SelectOption[]>(() => {
     return (presetDraftProvider?.models || []).map(item => ({
       value: item,
       label: item,
@@ -427,6 +311,12 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
   const currentBaseURLLabel = currentProvider?.allowCustomBaseURL
     ? (baseURL || '未填写')
     : (currentProvider?.baseURL || '固定服务地址')
+  const currentProviderOption = providerOptions.find(option => option.value === provider)
+  const currentProtocolOption = protocolOptions.find(option => option.value === customProtocol)
+  const currentModelSelectedKey = modelOptions.some(option => option.value === model) ? model : null
+  const presetProviderOption = providerOptions.find(option => option.value === presetDraft.provider)
+  const presetProtocolOption = presetDraftProtocolOptions.find(option => option.value === presetDraft.protocol)
+  const presetModelSelectedKey = presetDraftModelOptions.some(option => option.value === presetDraft.model) ? presetDraft.model : null
 
   useEffect(() => {
     void loadProviders()
@@ -522,15 +412,48 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
   }
 
   const handlePresetNextStep = () => {
-    if (presetStep === 1 && !presetName.trim()) {
+    if (presetTab === 'name') {
+      if (!presetName.trim()) {
+        showMessage('请输入配置名称', false)
+        return
+      }
+      setPresetTab('provider')
+      return
+    }
+    if (presetTab === 'provider') {
+      if (!presetDraft.provider) {
+        showMessage('请选择服务商', false)
+        return
+      }
+      setPresetTab('config')
+    }
+  }
+
+  const handlePresetPrevStep = () => {
+    setPresetTab(tab => {
+      if (tab === 'config') return 'provider'
+      if (tab === 'provider') return 'name'
+      return tab
+    })
+  }
+
+  const handlePresetTabChange = (key: Key) => {
+    const nextTab = String(key) as PresetTab
+    if (nextTab === 'provider' && !presetName.trim()) {
       showMessage('请输入配置名称', false)
       return
     }
-    if (presetStep === 2 && !presetDraft.provider) {
-      showMessage('请选择服务商', false)
-      return
+    if (nextTab === 'config') {
+      if (!presetName.trim()) {
+        showMessage('请输入配置名称', false)
+        return
+      }
+      if (!presetDraft.provider) {
+        showMessage('请选择服务商', false)
+        return
+      }
     }
-    setPresetStep(step => Math.min(3, step + 1))
+    setPresetTab(nextTab)
   }
 
   const persistProviderConfig = async (
@@ -617,6 +540,12 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
     }
   }
 
+  const handleSaveCurrentProvider = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    await persistProviderConfig()
+    showMessage('AI 接入配置已保存', true)
+  }
+
   const loadGuide = async (guideName: string) => {
     const result = await window.electronAPI.ai.readGuide(guideName)
     if (!result.success || !result.content) {
@@ -645,10 +574,12 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
     const name = presetName.trim()
     if (!name) {
       showMessage('请输入配置名称', false)
+      setPresetTab('name')
       return
     }
     if (!presetDraft.provider) {
       showMessage('请选择服务商', false)
+      setPresetTab('provider')
       return
     }
 
@@ -671,13 +602,14 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
     setShowSavePresetDialog(false)
     setEditingPresetId(null)
     setPresetName('')
+    setPresetTab('name')
     await loadPresets()
   }
 
   const openPresetDialogFromCurrent = () => {
     setEditingPresetId(null)
     setPresetName(currentProvider?.displayName || provider)
-    setPresetStep(1)
+    setPresetTab('name')
     setPresetDraft({
       provider: normalizeProviderId(provider || providers[0]?.id || ''),
       apiKey,
@@ -707,7 +639,7 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
   const handleEditPreset = (preset: configService.AiConfigPreset) => {
     setEditingPresetId(preset.id)
     setPresetName(preset.name)
-    setPresetStep(1)
+    setPresetTab('name')
     const presetProvider = normalizeProviderId(preset.provider)
     setPresetDraft({
       provider: presetProvider,
@@ -728,171 +660,238 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
   const canFetchModels = canFetchProviderModelList(provider, baseURL, currentProvider)
 
   return (
-    <div className="tab-content ai-summary-settings">
-      <div className="mx-auto w-full max-w-[1160px] space-y-6 px-2">
+    <div className="tab-content">
+      <div className="mx-auto w-full max-w-290 space-y-6 px-2">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0">
-            <h2 className="text-lg font-semibold text-foreground">AI 接入配置</h2>
-            <p className="mt-1 text-sm text-muted-foreground">管理第三方 AI 服务商、模型、API 密钥和代理连接。</p>
+            <Typography.Heading level={2} className="text-lg">AI 接入配置</Typography.Heading>
+            <Typography.Paragraph size="sm" color="muted" className="mt-1">管理第三方 AI 服务商、模型、API 密钥和代理连接。</Typography.Paragraph>
           </div>
           <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-            <Button type="button" variant="primary" size="sm" className={primaryBtnCls} onPress={openPresetDialogFromCurrent}>
+            <Button type="button" variant="primary" size="sm" onPress={openPresetDialogFromCurrent}>
               <Plus size={16} /> 添加预设
             </Button>
-            <Button type="button" variant="outline" size="sm" className={ghostBtnCls} onPress={() => setShowPresetDrawer(true)}>
+            <Button type="button" variant="outline" size="sm" onPress={() => setShowPresetDrawer(true)}>
               <Settings2 size={16} /> 预设管理
             </Button>
           </div>
         </div>
 
         <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_330px]">
-          <Card className={cn(cardCls, 'space-y-5 p-5')}>
-            <Card.Header className="flex items-start justify-between gap-4 border-b border-border px-0 pb-4 pt-0">
-              <div>
-                <Card.Title className="text-base font-semibold text-foreground">接入参数</Card.Title>
-                <Card.Description className="mt-1 text-xs text-muted-foreground">选择服务商后填写密钥与模型。</Card.Description>
+          <Card>
+            <Card.Header className="flex-row items-start justify-between gap-4">
+              <div className="min-w-0">
+                <Card.Title>接入参数</Card.Title>
               </div>
               <AIProviderLogo providerId={provider} logo={currentProvider?.logo} alt={currentProvider?.displayName || provider} className="shrink-0" size={28} />
             </Card.Header>
 
-            <Field label="服务商">
-              <HeroSelectField
-                value={provider}
-                onChange={(value) => void handleSelectProvider(String(value))}
-                options={providerOptions}
-                placeholder="请选择服务商"
-              />
-              <div className="flex items-center gap-2 pt-1 text-sm text-muted-foreground">
-                <AIProviderLogo providerId={provider} logo={currentProvider?.logo} alt={currentProvider?.displayName || provider} className="shrink-0" size={16} />
-                <span className="truncate">{currentProvider?.description || 'OpenAI 兼容接口'}</span>
-              </div>
-            </Field>
-
-            <div className="grid gap-4 lg:grid-cols-2">
-              {currentProvider?.allowCustomBaseURL && (
-                <Field label="服务地址">
-                  <div className="flex items-center gap-2">
-                    <Input
-                      type="text"
-                      value={baseURL}
-                      onChange={(event) => setBaseURL(event.target.value)}
-                      placeholder={provider === 'ollama' ? 'http://localhost:11434/v1' : 'https://api.example.com/v1'}
-                      fullWidth
+            <Form onSubmit={handleSaveCurrentProvider}>
+              <Card.Content>
+                <Fieldset className="w-full">
+                  <Fieldset.Group className="grid gap-4">
+                    <Select
+                      selectedKey={provider || null}
+                      onSelectionChange={(key) => {
+                        if (key != null) void handleSelectProvider(String(key))
+                      }}
+                      placeholder="请选择服务商"
                       variant="secondary"
-                      className={cn(inputCls, 'min-w-0 flex-1')}
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      isIconOnly
-                      className={iconBtnCls}
-                      onPress={provider === 'ollama' ? openOllamaGuide : openCustomGuide}
-                      aria-label="查看接入指南"
+                      fullWidth
                     >
-                      <HelpCircle size={18} />
-                    </Button>
+                      <Label>服务商</Label>
+                      <Select.Trigger>
+                        <Select.Value>
+                          {({ defaultChildren, isPlaceholder }) => (
+                            isPlaceholder ? defaultChildren : (currentProviderOption?.content ?? currentProviderOption?.label ?? defaultChildren)
+                          )}
+                        </Select.Value>
+                        <Select.Indicator />
+                      </Select.Trigger>
+                      <Select.Popover>
+                        <ListBox className="max-h-80 overflow-y-auto">
+                          {providerOptions.map(option => (
+                            <ListBox.Item key={option.value} id={option.value} textValue={option.label} isDisabled={option.disabled} className="shrink-0">
+                              {option.content ?? (
+                                <span className="flex min-w-0 flex-col">
+                                  <span className="truncate text-sm text-foreground">{option.label}</span>
+                                  {option.description && <Description className="truncate text-xs">{option.description}</Description>}
+                                </span>
+                              )}
+                              <ListBox.ItemIndicator />
+                            </ListBox.Item>
+                          ))}
+                        </ListBox>
+                      </Select.Popover>
+                    </Select>
+
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    {currentProvider?.allowCustomBaseURL && (
+                      <TextField fullWidth value={baseURL} onChange={setBaseURL}>
+                        <Label>服务地址</Label>
+                        <InputGroup variant="secondary" fullWidth>
+                          <InputGroup.Input placeholder={provider === 'ollama' ? 'http://localhost:11434/v1' : 'https://api.example.com/v1'} />
+                          <InputGroup.Suffix>
+                            <Tooltip delay={0}>
+                              <Button
+                                type="button"
+                                variant="tertiary"
+                                size="sm"
+                                isIconOnly
+                                onPress={provider === 'ollama' ? openOllamaGuide : openCustomGuide}
+                                aria-label="查看接入指南"
+                              >
+                                <HelpCircle size={18} />
+                              </Button>
+                              <Tooltip.Content>查看接入指南</Tooltip.Content>
+                            </Tooltip>
+                          </InputGroup.Suffix>
+                        </InputGroup>
+                      </TextField>
+                    )}
+
+                    {!!currentProvider?.protocolOptions?.length && (
+                      <Select
+                        selectedKey={customProtocol}
+                        onSelectionChange={(key) => {
+                          if (key != null) setCustomProtocol(key as AiProviderProtocol)
+                        }}
+                        placeholder="请选择协议"
+                        variant="secondary"
+                        fullWidth
+                      >
+                        <Label>协议</Label>
+                        <Select.Trigger>
+                          <Select.Value>{({ defaultChildren }) => currentProtocolOption?.label ?? defaultChildren}</Select.Value>
+                          <Select.Indicator />
+                        </Select.Trigger>
+                        <Select.Popover>
+                          <ListBox>
+                            {protocolOptions.map(option => (
+                              <ListBox.Item key={option.value} id={option.value} textValue={option.label} className="shrink-0">
+                                {option.label}
+                                <ListBox.ItemIndicator />
+                              </ListBox.Item>
+                            ))}
+                          </ListBox>
+                        </Select.Popover>
+                      </Select>
+                    )}
                   </div>
-                </Field>
-              )}
 
-              {!!currentProvider?.protocolOptions?.length && (
-                <Field label="协议">
-                  <HeroSelectField
-                    value={customProtocol}
-                    onChange={(value) => setCustomProtocol(value as AiProviderProtocol)}
-                    options={CUSTOM_PROTOCOL_OPTIONS.filter(item => currentProvider.protocolOptions?.includes(item.value))}
-                    placeholder="请选择协议"
-                  />
-                </Field>
-              )}
-            </div>
+                  <TextField fullWidth value={apiKey} onChange={(value) => setField('aiApiKey', value)} type={showApiKey ? 'text' : 'password'}>
+                    <Label>API 密钥</Label>
+                    <InputGroup variant="secondary" fullWidth>
+                      <InputGroup.Input
+                        type={showApiKey ? 'text' : 'password'}
+                        placeholder={provider === 'ollama' ? '本地服务无需密钥（可选）' : '请输入 API 密钥'}
+                      />
+                      <InputGroup.Suffix>
+                        <Tooltip delay={0}>
+                          <Button
+                            type="button"
+                            variant="tertiary"
+                            size="sm"
+                            isIconOnly
+                            onPress={() => setShowApiKey(!showApiKey)}
+                            aria-label={showApiKey ? '隐藏 API 密钥' : '显示 API 密钥'}
+                          >
+                            {showApiKey ? <EyeOff size={18} /> : <Eye size={18} />}
+                          </Button>
+                          <Tooltip.Content>{showApiKey ? '隐藏 API 密钥' : '显示 API 密钥'}</Tooltip.Content>
+                        </Tooltip>
+                      </InputGroup.Suffix>
+                    </InputGroup>
+                  </TextField>
 
-            <Field label="API 密钥">
-              <div className="relative">
-                <Input
-                  type={showApiKey ? 'text' : 'password'}
-                  value={apiKey}
-                  onChange={(event) => setField('aiApiKey', event.target.value)}
-                  placeholder={provider === 'ollama' ? '本地服务无需密钥（可选）' : '请输入 API 密钥'}
-                  fullWidth
-                  variant="secondary"
-                  className={cn(inputCls, 'pr-11')}
-                />
-                <Button
-                  type="button"
-                  variant="tertiary"
-                  size="sm"
-                  isIconOnly
-                  className="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition hover:bg-accent hover:text-foreground"
-                  onPress={() => setShowApiKey(!showApiKey)}
-                >
-                  {showApiKey ? <EyeOff size={18} /> : <Eye size={18} />}
+                  <div className="space-y-2">
+                    <div className="flex min-w-0 items-end gap-2">
+                      <ComboBox
+                        allowsCustomValue
+                        selectedKey={currentModelSelectedKey}
+                        inputValue={model}
+                        onInputChange={(value) => setField('aiModel', normalizeProviderModel(provider, value))}
+                        onSelectionChange={(key) => {
+                          if (key != null) setField('aiModel', normalizeProviderModel(provider, String(key)))
+                        }}
+                        menuTrigger="focus"
+                        variant="secondary"
+                        fullWidth
+                        className="min-w-0 flex-1"
+                      >
+                        <Label>模型</Label>
+                        <ComboBox.InputGroup>
+                          <Input placeholder="请选择或输入模型名称" variant="secondary" />
+                          <ComboBox.Trigger />
+                        </ComboBox.InputGroup>
+                        <ComboBox.Popover>
+                          <ListBox className="max-h-80 overflow-y-auto">
+                            {modelOptions.map(option => (
+                              <ListBox.Item key={option.value} id={option.value} textValue={option.label} isDisabled={option.disabled} className="shrink-0">
+                                {option.content ?? option.label}
+                                <ListBox.ItemIndicator />
+                              </ListBox.Item>
+                            ))}
+                          </ListBox>
+                        </ComboBox.Popover>
+                      </ComboBox>
+                      <Tooltip delay={0}>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          isIconOnly
+                          onPress={handleRefreshModels}
+                          isDisabled={isLoadingModels || !canFetchModels}
+                          aria-label="刷新模型列表"
+                        >
+                          {isLoadingModels ? <Spinner size="sm" /> : <RefreshCw size={16} />}
+                        </Button>
+                        <Tooltip.Content>刷新模型列表</Tooltip.Content>
+                      </Tooltip>
+                    </div>
+                    {currentModelDetail && <Description><ModelCapabilityStrip modelDetail={currentModelDetail} /></Description>}
+                    {modelListError ? (
+                      <Alert status="danger">
+                        <Alert.Content>
+                          <Alert.Title>模型列表刷新失败</Alert.Title>
+                          <Alert.Description>{modelListError}</Alert.Description>
+                        </Alert.Content>
+                      </Alert>
+                    ) : (
+                      <Description>{remoteModels.length > 0 ? '远程模型列表' : '在线模型列表'}</Description>
+                    )}
+                  </div>
+                  </Fieldset.Group>
+                </Fieldset>
+              </Card.Content>
+
+              <Card.Footer className="justify-end gap-3">
+                <Button type="button" variant="outline" size="sm" onPress={handleTestConnection} isDisabled={isTesting}>
+                  {isTesting ? <Spinner size="sm" /> : <Sparkles size={16} />}
+                  {isTesting ? '测试中...' : '测试连接'}
                 </Button>
-              </div>
-            </Field>
-
-            <Field label="模型">
-              <div className="flex min-w-0 items-center gap-2">
-                <HeroModelComboBox
-                  value={model}
-                  onChange={(value) => setField('aiModel', normalizeProviderModel(provider, String(value)))}
-                  options={modelOptions}
-                  placeholder="请选择或输入模型名称"
-                  className="min-w-0 flex-1 [--ai-hero-list-max-height:320px]"
-                  adornment={currentModelDetail ? <ModelCapabilityStrip modelDetail={currentModelDetail} compact /> : undefined}
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  isIconOnly
-                  className={iconBtnCls}
-                  onPress={handleRefreshModels}
-                  isDisabled={isLoadingModels || !canFetchModels}
-                  aria-label="刷新模型列表"
-                >
-                  <RefreshCw size={16} className={isLoadingModels ? 'animate-spin' : ''} />
+                <Button type="submit" variant="primary" size="sm">
+                  保存当前服务商
                 </Button>
-              </div>
-              <p className={cn('pt-1 text-xs', modelListError ? 'text-destructive' : 'text-muted-foreground')}>
-                {modelListError || (remoteModels.length > 0 ? '远程模型列表' : '在线模型列表')}
-              </p>
-            </Field>
-
-            <div className="flex flex-wrap items-center justify-end gap-3 border-t border-border pt-4">
-              <Button type="button" variant="outline" size="sm" className={ghostBtnCls} onPress={handleTestConnection} isDisabled={isTesting}>
-                <Sparkles size={16} className={isTesting ? 'animate-spin' : ''} />
-                {isTesting ? '测试中...' : '测试连接'}
-              </Button>
-              <Button
-                type="button"
-                variant="primary"
-                size="sm"
-                className={primaryBtnCls}
-                onPress={async () => {
-                  await persistProviderConfig()
-                  showMessage('AI 接入配置已保存', true)
-                }}
-              >
-                保存当前服务商
-              </Button>
-            </div>
+              </Card.Footer>
+            </Form>
           </Card>
 
           <aside className="space-y-4">
-            <Card className={cn(cardCls, 'p-5')}>
-              <div className="flex items-center gap-3">
+            <Card>
+              <Card.Header className="flex-row items-center gap-3">
                 <AIProviderLogo providerId={provider} logo={currentProvider?.logo} alt={currentProvider?.displayName || provider} className="shrink-0" size={34} />
                 <div className="min-w-0">
-                  <h3 className="truncate text-base font-semibold text-foreground">{currentProvider?.displayName || provider || '未选择'}</h3>
-                  <p className="truncate text-xs text-muted-foreground">{currentProvider?.description || 'OpenAI 兼容接口'}</p>
+                  <Card.Title className="truncate text-base">{currentProvider?.displayName || provider || '未选择'}</Card.Title>
+                  <Card.Description className="truncate">{currentProvider?.description || 'OpenAI 兼容接口'}</Card.Description>
                 </div>
-              </div>
+              </Card.Header>
 
-              <dl className="mt-5 space-y-3 text-sm">
+              <Card.Content>
+              <dl className="space-y-3 text-sm">
                 <div className="flex items-center justify-between gap-3">
-                  <dt className="text-muted-foreground">协议</dt>
+                  <dt className="text-muted">协议</dt>
                   <dd className="min-w-0">
                     <Chip size="sm" variant="soft" color="accent" className="max-w-full">
                       <Chip.Label className="truncate">{formatProtocolLabel(currentProtocol)}</Chip.Label>
@@ -900,23 +899,27 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
                   </dd>
                 </div>
                 <div className="flex items-center justify-between gap-3">
-                  <dt className="text-muted-foreground">模型</dt>
+                  <dt className="text-muted">模型</dt>
                   <dd className="truncate font-medium text-foreground">{model || '未选择'}</dd>
                 </div>
                 <div className="flex items-center justify-between gap-3">
-                  <dt className="text-muted-foreground">密钥</dt>
+                  <dt className="text-muted">密钥</dt>
                   <dd className="truncate font-medium text-foreground">{maskSecret(apiKey)}</dd>
                 </div>
                 <div className="flex items-start justify-between gap-3">
-                  <dt className="shrink-0 text-muted-foreground">地址</dt>
+                  <dt className="shrink-0 text-muted">地址</dt>
                   <dd className="min-w-0 truncate text-right font-medium text-foreground">{currentBaseURLLabel}</dd>
                 </div>
               </dl>
+              </Card.Content>
             </Card>
 
-            <Card variant="secondary" className="border border-border bg-muted/40 p-4 text-xs leading-5 text-muted-foreground">
-              API 密钥仅保存在本地。连接测试与模型刷新会向当前服务商发起请求。
-            </Card>
+            <Alert status="default">
+              <Alert.Content>
+                <Alert.Title>本地保存</Alert.Title>
+                <Alert.Description>API 密钥仅保存在本地。连接测试与模型刷新会向当前服务商发起请求。</Alert.Description>
+              </Alert.Content>
+            </Alert>
           </aside>
         </div>
       </div>
@@ -933,123 +936,163 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
         <Modal state={savePresetModalState}>
           <Modal.Backdrop variant="blur">
             <Modal.Container size="lg" scroll="inside" placement="center">
-              <Modal.Dialog className={cn(modalDialogCls, 'max-w-[760px]')}>
+              <Modal.Dialog className="max-w-190">
                 <Modal.Header className="items-center justify-between">
                   <Modal.Heading className="text-base font-semibold text-foreground">{editingPresetId ? '编辑配置预设' : '新增配置预设'}</Modal.Heading>
                   <CloseButton aria-label="关闭预设编辑" onPress={() => setShowSavePresetDialog(false)} />
                 </Modal.Header>
 
-                <Modal.Body className="space-y-6">
-                  <div className="flex items-center justify-center gap-3" aria-label="预设配置步骤">
-                    {[1, 2, 3].map(step => (
-                      <span
-                        key={step}
-                        className={cn(
-                          'flex h-7 w-7 items-center justify-center rounded-full text-xs font-medium transition',
-                          presetStep === step
-                            ? 'bg-primary text-primary-foreground'
-                            : presetStep > step
-                              ? 'bg-primary/20 text-primary'
-                              : 'bg-muted text-muted-foreground'
-                        )}
-                      >
-                        {step}
-                      </span>
-                    ))}
-                  </div>
+                <Modal.Body>
+                  <Tabs selectedKey={presetTab} onSelectionChange={handlePresetTabChange} className="w-full" variant="secondary">
+                    <Tabs.ListContainer>
+                      <Tabs.List aria-label="预设配置步骤">
+                        <Tabs.Tab id="name">名称<Tabs.Indicator /></Tabs.Tab>
+                        <Tabs.Tab id="provider">服务商<Tabs.Indicator /></Tabs.Tab>
+                        <Tabs.Tab id="config">接入配置<Tabs.Indicator /></Tabs.Tab>
+                      </Tabs.List>
+                    </Tabs.ListContainer>
 
-                  {presetStep === 1 && (
-                    <section className="space-y-3">
-                      <h3 className="text-sm font-semibold text-foreground">设置名称</h3>
-                      <Input
-                        type="text"
-                        value={presetName}
-                        onChange={(event) => setPresetName(event.target.value)}
-                        className={inputCls}
-                        placeholder="例如：OpenAI 主力配置"
-                        autoFocus
+                    <Tabs.Panel id="name" className="pt-5">
+                      <TextField
                         fullWidth
-                        variant="secondary"
-                      />
-                    </section>
-                  )}
+                        value={presetName}
+                        onChange={setPresetName}
+                        isInvalid={!presetName.trim() && presetTab !== 'name'}
+                        autoFocus
+                      >
+                        <Label>配置名称</Label>
+                        <Input placeholder="例如：OpenAI 主力配置" variant="secondary" />
+                        <Description>用于在预设管理中快速识别这组配置。</Description>
+                        <FieldError>请输入配置名称</FieldError>
+                      </TextField>
+                    </Tabs.Panel>
 
-                  {presetStep === 2 && (
-                    <section className="space-y-3">
-                      <h3 className="text-sm font-semibold text-foreground">选择提供商</h3>
-                      <HeroSelectField
-                        value={presetDraft.provider}
-                        onChange={(value) => setPresetDraft(createPresetDraftFromProvider(String(value)))}
-                        options={providerOptions}
+                    <Tabs.Panel id="provider" className="pt-5">
+                      <Select
+                        selectedKey={presetDraft.provider || null}
+                        onSelectionChange={(key) => {
+                          if (key != null) setPresetDraft(createPresetDraftFromProvider(String(key)))
+                        }}
                         placeholder="请选择服务商"
-                      />
-                    </section>
-                  )}
+                        variant="secondary"
+                        fullWidth
+                      >
+                        <Label>服务商</Label>
+                        <Select.Trigger>
+                          <Select.Value>
+                            {({ defaultChildren, isPlaceholder }) => (
+                              isPlaceholder ? defaultChildren : (presetProviderOption?.content ?? presetProviderOption?.label ?? defaultChildren)
+                            )}
+                          </Select.Value>
+                          <Select.Indicator />
+                        </Select.Trigger>
+                        <Select.Popover>
+                          <ListBox className="max-h-80 overflow-y-auto">
+                            {providerOptions.map(option => (
+                              <ListBox.Item key={option.value} id={option.value} textValue={option.label} isDisabled={option.disabled} className="shrink-0">
+                                {option.content ?? option.label}
+                                <ListBox.ItemIndicator />
+                              </ListBox.Item>
+                            ))}
+                          </ListBox>
+                        </Select.Popover>
+                      </Select>
+                    </Tabs.Panel>
 
-                  {presetStep === 3 && (
-                    <section className="space-y-3">
-                      <h3 className="text-sm font-semibold text-foreground">配置接入</h3>
-                      <div className="grid gap-4">
-                        {!!presetDraftProvider?.protocolOptions?.length && (
-                          <Field label="协议">
-                            <HeroSelectField
-                              value={presetDraft.protocol}
-                              onChange={(value) => updatePresetDraft({ protocol: value as AiProviderProtocol })}
-                              options={CUSTOM_PROTOCOL_OPTIONS.filter(item => presetDraftProvider.protocolOptions?.includes(item.value))}
+                    <Tabs.Panel id="config" className="pt-5">
+                      <Fieldset className="space-y-4">
+                        <Fieldset.Group className="grid gap-4">
+                          {!!presetDraftProvider?.protocolOptions?.length && (
+                            <Select
+                              selectedKey={presetDraft.protocol}
+                              onSelectionChange={(key) => {
+                                if (key != null) updatePresetDraft({ protocol: key as AiProviderProtocol })
+                              }}
                               placeholder="请选择协议"
-                            />
-                          </Field>
-                        )}
-
-                        {presetDraftProvider?.allowCustomBaseURL && (
-                          <Field label="服务地址">
-                            <Input
-                              type="text"
-                              value={presetDraft.baseURL}
-                              onChange={(event) => updatePresetDraft({ baseURL: event.target.value })}
-                              placeholder={presetDraft.provider === 'ollama' ? 'http://localhost:11434/v1' : 'https://api.example.com/v1'}
-                              className={inputCls}
+                              variant="secondary"
                               fullWidth
+                            >
+                              <Label>协议</Label>
+                              <Select.Trigger>
+                                <Select.Value>{({ defaultChildren }) => presetProtocolOption?.label ?? defaultChildren}</Select.Value>
+                                <Select.Indicator />
+                              </Select.Trigger>
+                              <Select.Popover>
+                                <ListBox>
+                                  {presetDraftProtocolOptions.map(option => (
+                                    <ListBox.Item key={option.value} id={option.value} textValue={option.label} className="shrink-0">
+                                      {option.label}
+                                      <ListBox.ItemIndicator />
+                                    </ListBox.Item>
+                                  ))}
+                                </ListBox>
+                              </Select.Popover>
+                            </Select>
+                          )}
+
+                          {presetDraftProvider?.allowCustomBaseURL && (
+                            <TextField fullWidth value={presetDraft.baseURL} onChange={(value) => updatePresetDraft({ baseURL: value })}>
+                              <Label>服务地址</Label>
+                              <Input
+                                placeholder={presetDraft.provider === 'ollama' ? 'http://localhost:11434/v1' : 'https://api.example.com/v1'}
+                                variant="secondary"
+                              />
+                            </TextField>
+                          )}
+
+                          <TextField fullWidth value={presetDraft.apiKey} onChange={(value) => updatePresetDraft({ apiKey: value })} type="password">
+                            <Label>API 密钥</Label>
+                            <Input
+                              type="password"
+                              placeholder={presetDraft.provider === 'ollama' ? '本地服务无需密钥（可选）' : '请输入 API 密钥'}
                               variant="secondary"
                             />
-                          </Field>
-                        )}
+                          </TextField>
 
-                        <Field label="API 密钥">
-                          <Input
-                            type="password"
-                            value={presetDraft.apiKey}
-                            onChange={(event) => updatePresetDraft({ apiKey: event.target.value })}
-                            placeholder={presetDraft.provider === 'ollama' ? '本地服务无需密钥（可选）' : '请输入 API 密钥'}
-                            className={inputCls}
-                            fullWidth
+                          <ComboBox
+                            allowsCustomValue
+                            selectedKey={presetModelSelectedKey}
+                            inputValue={presetDraft.model}
+                            onInputChange={(value) => updatePresetDraft({ model: normalizeProviderModel(presetDraft.provider, value) })}
+                            onSelectionChange={(key) => {
+                              if (key != null) updatePresetDraft({ model: normalizeProviderModel(presetDraft.provider, String(key)) })
+                            }}
+                            menuTrigger="focus"
                             variant="secondary"
-                          />
-                        </Field>
-
-                        <Field label="模型">
-                          <HeroModelComboBox
-                            value={presetDraft.model}
-                            onChange={(value) => updatePresetDraft({ model: normalizeProviderModel(presetDraft.provider, String(value)) })}
-                            options={presetDraftModelOptions}
-                            placeholder="请选择或输入模型名称"
-                            adornment={presetDraftCurrentModelDetail ? <ModelCapabilityStrip modelDetail={presetDraftCurrentModelDetail} compact /> : undefined}
-                          />
-                        </Field>
-                      </div>
-                    </section>
-                  )}
+                            fullWidth
+                          >
+                            <Label>模型</Label>
+                            <ComboBox.InputGroup>
+                              <Input placeholder="请选择或输入模型名称" variant="secondary" />
+                              <ComboBox.Trigger />
+                            </ComboBox.InputGroup>
+                            <ComboBox.Popover>
+                              <ListBox className="max-h-80 overflow-y-auto">
+                                {presetDraftModelOptions.map(option => (
+                                  <ListBox.Item key={option.value} id={option.value} textValue={option.label} isDisabled={option.disabled} className="shrink-0">
+                                    {option.content ?? option.label}
+                                    <ListBox.ItemIndicator />
+                                  </ListBox.Item>
+                                ))}
+                              </ListBox>
+                            </ComboBox.Popover>
+                            {presetDraftCurrentModelDetail && <Description><ModelCapabilityStrip modelDetail={presetDraftCurrentModelDetail} /></Description>}
+                          </ComboBox>
+                        </Fieldset.Group>
+                      </Fieldset>
+                    </Tabs.Panel>
+                  </Tabs>
                 </Modal.Body>
 
                 <Modal.Footer className="justify-end">
-                  <Button type="button" variant="outline" size="sm" className={ghostBtnCls} onPress={() => setShowSavePresetDialog(false)}>取消</Button>
-                  {presetStep > 1 && (
-                    <Button type="button" variant="outline" size="sm" className={ghostBtnCls} onPress={() => setPresetStep(step => Math.max(1, step - 1))}>上一步</Button>
+                  <Button type="button" variant="outline" size="sm" onPress={() => setShowSavePresetDialog(false)}>取消</Button>
+                  {presetTab !== 'name' && (
+                    <Button type="button" variant="outline" size="sm" onPress={handlePresetPrevStep}>上一步</Button>
                   )}
-                  {presetStep < 3 ? (
-                    <Button type="button" variant="primary" size="sm" className={primaryBtnCls} onPress={handlePresetNextStep}>下一步</Button>
+                  {presetTab !== 'config' ? (
+                    <Button type="button" variant="primary" size="sm" onPress={handlePresetNextStep}>下一步</Button>
                   ) : (
-                    <Button type="button" variant="primary" size="sm" className={primaryBtnCls} onPress={handleSavePreset}>保存预设</Button>
+                    <Button type="button" variant="primary" size="sm" onPress={handleSavePreset}>保存预设</Button>
                   )}
                 </Modal.Footer>
               </Modal.Dialog>
@@ -1062,7 +1105,7 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
         <Drawer state={presetDrawerState}>
           <Drawer.Backdrop variant="blur">
             <Drawer.Content placement="right" className="w-full max-w-md">
-              <Drawer.Dialog className="ai-hero-drawer">
+              <Drawer.Dialog>
                 <Drawer.Header className="items-center justify-between">
                   <Drawer.Heading className="text-base font-semibold text-foreground">配置预设管理</Drawer.Heading>
                   <CloseButton aria-label="关闭预设管理" onPress={() => setShowPresetDrawer(false)} />
@@ -1070,23 +1113,22 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
                 <Drawer.Body className="p-5">
                   {presets.length === 0 ? (
                     <div className="flex flex-col items-center justify-center gap-1 py-16 text-center">
-                      <p className="text-sm text-foreground">暂无配置预设</p>
-                      <p className="text-xs text-muted-foreground">保存当前服务商配置后可快速切换。</p>
+                      <Typography.Paragraph size="sm">暂无配置预设</Typography.Paragraph>
+                      <Typography.Paragraph size="xs" color="muted">保存当前服务商配置后可快速切换。</Typography.Paragraph>
                     </div>
                   ) : (
                     <div className="space-y-2">
                       {presets.map(preset => (
-                        <Card key={preset.id} variant="secondary" className="flex items-center justify-between gap-3 border border-border bg-background/70 px-4 py-3">
+                        <Card key={preset.id} variant="secondary" className="flex items-center justify-between gap-3 px-4 py-3">
                           <div className="min-w-0">
-                            <div className="truncate text-sm font-medium text-foreground">{preset.name}</div>
-                            <div className="truncate text-xs text-muted-foreground">{preset.provider} · {preset.model}</div>
+                            <Typography.Paragraph size="sm" weight="medium" truncate>{preset.name}</Typography.Paragraph>
+                            <Typography.Paragraph size="xs" color="muted" truncate>{preset.provider} · {preset.model}</Typography.Paragraph>
                           </div>
                           <div className="flex shrink-0 items-center gap-1.5">
                             <Button
                               type="button"
                               variant="primary"
                               size="sm"
-                              className="h-7 px-2.5 text-xs"
                               onPress={() => { void handleLoadPreset(preset.id); setShowPresetDrawer(false) }}
                             >
                               加载
@@ -1095,7 +1137,6 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
                               type="button"
                               variant="outline"
                               size="sm"
-                              className="h-7 px-2.5 text-xs"
                               onPress={() => handleEditPreset(preset)}
                             >
                               编辑
@@ -1104,7 +1145,6 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
                               type="button"
                               variant="danger-soft"
                               size="sm"
-                              className="h-7 px-2.5 text-xs"
                               onPress={() => void handleDeletePreset(preset.id)}
                             >
                               删除

@@ -1,12 +1,11 @@
 ﻿import { lazy, Suspense, useState, useEffect, useRef } from 'react'
 import { useSearchParams, useLocation } from 'react-router-dom'
+import { Tabs, type Key as HeroKey } from '@heroui/react'
 import { useAppStore } from '../../stores/appStore'
-import { useThemeStore, themes } from '../../stores/themeStore'
 import type { UpdateDownloadProgressPayload } from '../../types/electron'
 import type { AccountProfile } from '../../types/account'
 import { dialog } from '../../services/ipc'
 import * as configService from '../../services/config'
-import BackgroundFx from './BackgroundFx'
 import AboutTab from './tabs/AboutTab'
 import ActivationTab from './tabs/ActivationTab'
 import AppearanceTab from './tabs/AppearanceTab'
@@ -17,7 +16,7 @@ import { useSettingsStore } from './settingsStore'
 import { ConfirmDialog, FloatingSaveButton, Toast } from './ui'
 import {
   Eye, EyeOff, Key, FolderSearch, FolderOpen, Search,
-  RotateCcw, Trash2, Plug, X, Check, Sun, Moon, Monitor,
+  RotateCcw, Trash2, Plug, X, Check,
   Palette, Database, ImageIcon, Download, HardDrive, Info, RefreshCw, Shield, CheckCircle, AlertCircle, Mic,
   Zap, Layers, User, Sparkles, Lock, ShieldCheck, Minus, Plus, Smile, ChevronDown
 } from 'lucide-react'
@@ -88,7 +87,6 @@ function SettingsLayout() {
   const [searchParams] = useSearchParams()
   const location = useLocation()
   const { setDbConnected, setLoading, setMyWxid: setCurrentWxid, userInfo } = useAppStore()
-  const { currentTheme, themeMode, setTheme, setThemeMode } = useThemeStore()
   const hydrateSettings = useSettingsStore(s => s.hydrate)
   const commitSettings = useSettingsStore(s => s.commit)
   const storeHasUnsavedChanges = useSettingsStore(s => s.hasUnsavedChanges)
@@ -1295,9 +1293,6 @@ function SettingsLayout() {
 
   return (
     <div className="settings-page">
-      {/* 动态粒子背景 */}
-      <BackgroundFx />
-
       <Toast message={message} />
 
       {/* 清除确认对话框 */}
@@ -1337,14 +1332,23 @@ function SettingsLayout() {
         />
       )}
 
-      <div className="settings-tabs">
-        {tabs.map(tab => (
-          <button key={tab.id} className={`tab-btn ${activeTab === tab.id ? 'active' : ''}`} onClick={() => setActiveTab(tab.id)}>
-            <tab.icon size={16} />
-            <span>{tab.label}</span>
-          </button>
-        ))}
-      </div>
+      <Tabs
+        selectedKey={activeTab}
+        onSelectionChange={(key: HeroKey) => setActiveTab(String(key) as SettingsTab)}
+        className="settings-tabs"
+      >
+        <Tabs.ListContainer>
+          <Tabs.List aria-label="设置分类">
+            {tabs.map(tab => (
+              <Tabs.Tab key={tab.id} id={tab.id}>
+                <tab.icon size={16} />
+                {tab.label}
+                <Tabs.Indicator />
+              </Tabs.Tab>
+            ))}
+          </Tabs.List>
+        </Tabs.ListContainer>
+      </Tabs>
 
       <div className="settings-body">
         {activeTab === 'appearance' && <AppearanceTab />}

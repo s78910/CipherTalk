@@ -1,52 +1,41 @@
-import { Check, Monitor, Moon, Sun, PanelLeft, LayoutPanelTop } from 'lucide-react'
-import { themes, useThemeStore, type NavLayout } from '../../../stores/themeStore'
+import { Tabs, type Key } from '@heroui/react'
+import { Moon, Monitor, PanelBottom, PanelLeft, Sun } from 'lucide-react'
+import { useThemeStore, type NavLayout } from '../../../stores/themeStore'
 import { useSettingsStore } from '../settingsStore'
 import Select from '../../Select'
-import { SegmentedControl } from '../ui'
 
 type ThemeMode = 'light' | 'dark' | 'system'
 
+const toThemeMode = (key: Key): ThemeMode => String(key) as ThemeMode
+const toNavLayout = (key: Key): NavLayout => String(key) as NavLayout
+
 function AppearanceTab() {
-  const { currentTheme, themeMode, navLayout, dockAutoHide, setTheme, setThemeMode, setNavLayout, setDockAutoHide } = useThemeStore()
+  const { themeMode, navLayout, dockAutoHide, setThemeMode, setNavLayout, setDockAutoHide } = useThemeStore()
   const quoteStyle = useSettingsStore(s => s.config.quoteStyle)
   const closeToTray = useSettingsStore(s => s.config.closeToTray)
   const setField = useSettingsStore(s => s.setField)
 
   return (
     <div className="tab-content">
-      <SegmentedControl<ThemeMode>
-        value={themeMode}
-        onChange={setThemeMode}
-        options={[
-          { value: 'light', label: <><Sun size={16} /> 浅色</> },
-          { value: 'dark', label: <><Moon size={16} /> 深色</> },
-          { value: 'system', label: <><Monitor size={16} /> 跟随系统</> }
-        ]}
-      />
-      <div className="theme-grid">
-        {themes.map((theme) => (
-          <div key={theme.id} className={`theme-card ${currentTheme === theme.id ? 'active' : ''}`} onClick={() => setTheme(theme.id)}>
-            <div className="theme-preview" style={{ background: themeMode === 'dark' ? 'linear-gradient(135deg, #1a1a1a 0%, #2a2a2a 100%)' : `linear-gradient(135deg, ${theme.bgColor} 0%, ${theme.bgColor}dd 100%)` }}>
-              <div className="theme-accent" style={{ background: theme.primaryColor }} />
-            </div>
-            <div className="theme-info">
-              <span className="theme-name">{theme.name}</span>
-              <span className="theme-desc">{theme.description}</span>
-            </div>
-            {currentTheme === theme.id && <div className="theme-check"><Check size={14} /></div>}
-          </div>
-        ))}
-      </div>
+      <Tabs selectedKey={themeMode} onSelectionChange={(key) => setThemeMode(toThemeMode(key))} className="w-full max-w-md">
+        <Tabs.ListContainer>
+          <Tabs.List aria-label="外观模式" className="*:gap-2">
+            <Tabs.Tab id="light"><Sun size={16} aria-hidden />浅色<Tabs.Indicator /></Tabs.Tab>
+            <Tabs.Tab id="dark"><Moon size={16} aria-hidden />深色<Tabs.Indicator /></Tabs.Tab>
+            <Tabs.Tab id="system"><Monitor size={16} aria-hidden />跟随系统<Tabs.Indicator /></Tabs.Tab>
+          </Tabs.List>
+        </Tabs.ListContainer>
+      </Tabs>
 
       <h3 className="section-title" style={{ marginTop: '2rem' }}>导航布局</h3>
-      <SegmentedControl<NavLayout>
-        value={navLayout}
-        onChange={setNavLayout}
-        options={[
-          { value: 'sidebar', label: <><PanelLeft size={16} /> 侧边栏</> },
-          { value: 'dock', label: <><LayoutPanelTop size={16} /> 底部 Dock</> }
-        ]}
-      />
+      <Tabs selectedKey={navLayout} onSelectionChange={(key) => setNavLayout(toNavLayout(key))} className="w-full max-w-md">
+        <Tabs.ListContainer>
+          <Tabs.List aria-label="导航布局" className="*:gap-2">
+            <Tabs.Tab id="sidebar"><PanelLeft size={16} aria-hidden />侧边栏<Tabs.Indicator /></Tabs.Tab>
+            <Tabs.Tab id="dock"><PanelBottom size={16} aria-hidden />底部 Dock<Tabs.Indicator /></Tabs.Tab>
+          </Tabs.List>
+        </Tabs.ListContainer>
+      </Tabs>
 
       {navLayout === 'dock' && (
         <>

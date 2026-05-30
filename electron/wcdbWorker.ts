@@ -17,7 +17,16 @@ if (!parentPort) {
 const core = new WcdbCore()
 let monitorRegistered = false
 
-parentPort.on('message', async (msg: any) => {
+// 串行化所有请求：每个请求（含游标 open→fetch→close 全过程）跑完后下一个才开始。
+// 防止 close/open/shutdown 在某个游标批次的 await 间隙插入，导致 native 句柄被释放后
+// 仍被在飞的 fetch 使用（use-after-free → koffi napi_throw → 进程 fatal）。
+let queue: Promise<void> = Promise.resolve()
+
+parentPort.on('message', (msg: any) => {
+  queue = queue.then(() => handleMessage(msg)).catch(() => undefined)
+})
+
+async function handleMessage(msg: any) {
   const { id, type, payload } = msg || {}
   try {
     let result: any
@@ -117,6 +126,6 @@ parentPort.on('message', async (msg: any) => {
   } catch (e: any) {
     parentPort!.postMessage({ id, error: e?.message || String(e) })
   }
-})
+}
 
 parentPort.postMessage({ id: 0, type: 'ready' })
