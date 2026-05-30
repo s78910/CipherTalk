@@ -461,6 +461,14 @@ export abstract class BaseAIProvider implements AIProvider {
     return displayName
   }
 
+  protected getRequestedModel(options?: ChatOptions): string {
+    const model = String(options?.model || this.models[0] || '').trim()
+    if (!model) {
+      throw new Error('未配置模型，请先选择或输入模型名称')
+    }
+    return this.resolveModelId(model)
+  }
+
   getModelIdentity(model: string): string {
     return String(this.resolveModelId(model) || model || '').trim().toLowerCase()
   }
@@ -500,7 +508,7 @@ export abstract class BaseAIProvider implements AIProvider {
   }
 
   async chat(messages: OpenAI.Chat.ChatCompletionMessageParam[], options?: ChatOptions): Promise<string> {
-    const model = this.resolveModelId(options?.model || this.models[0])
+    const model = this.getRequestedModel(options)
     const response = await generateText({
       model: this.getModelProvider(model),
       messages: normalizeMessages(messages),
@@ -518,7 +526,7 @@ export abstract class BaseAIProvider implements AIProvider {
     messages: OpenAI.Chat.ChatCompletionMessageParam[],
     options: ChatWithToolsOptions
   ): Promise<NativeToolCallResult> {
-    const model = this.resolveModelId(options?.model || this.models[0])
+    const model = this.getRequestedModel(options)
 
     try {
       const response = await generateText({
@@ -553,7 +561,7 @@ export abstract class BaseAIProvider implements AIProvider {
     options: ChatWithToolsOptions,
     onEvent: (event: AIStreamEvent) => void
   ): Promise<NativeToolCallResult> {
-    const model = this.resolveModelId(options?.model || this.models[0])
+    const model = this.getRequestedModel(options)
 
     try {
       const result = streamText({
@@ -640,7 +648,7 @@ export abstract class BaseAIProvider implements AIProvider {
     options: ChatOptions,
     onEvent: (event: AIStreamEvent) => void
   ): Promise<void> {
-    const model = this.resolveModelId(options?.model || this.models[0])
+    const model = this.getRequestedModel(options)
     const result = streamText({
       model: this.getModelProvider(model),
       messages: normalizeMessages(messages),

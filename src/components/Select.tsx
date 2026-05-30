@@ -21,6 +21,7 @@ interface SelectProps<T extends string | number = string> {
   layout?: 'vertical' | 'horizontal'
   /** 可编辑模式：触发器变成文本输入框，允许填写列表以外的自定义值 */
   editable?: boolean
+  adornment?: ReactNode
   className?: string
   style?: CSSProperties
 }
@@ -32,6 +33,7 @@ function Select<T extends string | number = string>({
   placeholder = '请选择',
   layout = 'vertical',
   editable = false,
+  adornment,
   className = '',
   style
 }: SelectProps<T>) {
@@ -131,6 +133,11 @@ function Select<T extends string | number = string>({
                 }
               }}
             />
+            {adornment && (
+              <div className="glass-select-adornment" aria-hidden="true">
+                {adornment}
+              </div>
+            )}
             <button
               type="button"
               className="glass-select-toggle"
@@ -155,6 +162,11 @@ function Select<T extends string | number = string>({
             onClick={() => setOpen((v) => !v)}
           >
             <span className="glass-select-value">{displayText}</span>
+            {adornment && (
+              <span className="glass-select-adornment" aria-hidden="true">
+                {adornment}
+              </span>
+            )}
             <ChevronDown size={16} className="glass-select-arrow" />
           </button>
         )}

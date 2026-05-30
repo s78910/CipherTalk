@@ -1,5 +1,6 @@
 import type { ChatSession, Message, Contact, ContactInfo } from './models'
 import type { AccountProfile } from './account'
+import type { AIModelInfo } from './ai'
 
 
 export interface ImageListItem {
@@ -1117,7 +1118,9 @@ export interface ElectronAPI {
       name: string
       displayName: string
       description: string
+      baseURL?: string
       models: string[]
+      modelDetails?: AIModelInfo[]
       pricing: string
       pricingDetail: {
         input: number
@@ -1125,6 +1128,10 @@ export interface ElectronAPI {
       }
       website?: string
       logo?: string
+      protocol?: 'openai-responses' | 'openai-compatible' | 'anthropic' | 'google'
+      protocolOptions?: Array<'openai-responses' | 'openai-compatible' | 'anthropic' | 'google'>
+      allowCustomBaseURL?: boolean
+      optionalApiKey?: boolean
     }>>
     getProxyStatus: () => Promise<{
       success: boolean
@@ -1144,14 +1151,15 @@ export interface ElectronAPI {
       message?: string
       error?: string
     }>
-    testConnection: (provider: string, apiKey: string, baseURL?: string) => Promise<{
+    testConnection: (provider: string, apiKey: string, baseURL?: string, protocol?: 'openai-responses' | 'openai-compatible' | 'anthropic' | 'google') => Promise<{
       success: boolean
       error?: string
       needsProxy?: boolean
     }>
-    listModels: (options: { provider: string; apiKey?: string; baseURL?: string }) => Promise<{
+    listModels: (options: { provider: string; apiKey?: string; baseURL?: string; protocol?: 'openai-responses' | 'openai-compatible' | 'anthropic' | 'google' }) => Promise<{
       success: boolean
       models?: string[]
+      modelDetails?: AIModelInfo[]
       error?: string
     }>
     estimateCost: (messageCount: number, provider: string) => Promise<{

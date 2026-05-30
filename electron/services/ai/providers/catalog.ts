@@ -1,4 +1,7 @@
+import fs from 'fs'
+import path from 'path'
 import { BaseAIProvider, type ProviderKind } from './base'
+import { getAppPath, getUserDataPath, isElectronPackaged } from '../../runtimePaths'
 
 export type AIProviderProtocol = ProviderKind
 
@@ -10,6 +13,7 @@ export interface AIProviderMetadata {
   protocol: AIProviderProtocol
   baseURL: string
   models: string[]
+  modelDetails?: AIModelInfo[]
   pricing: string
   pricingDetail: {
     input: number
@@ -19,19 +23,64 @@ export interface AIProviderMetadata {
   logo?: string
   optionalApiKey?: boolean
   allowCustomBaseURL?: boolean
+  protocolOptions?: AIProviderProtocol[]
 }
 
-const OPENAI_COMPATIBLE_MODELS = [
-  'gpt-4o',
-  'gpt-4o-mini',
-  'claude-3-5-sonnet-20241022',
-  'gemini-2.5-flash',
-  'deepseek-chat',
-  'qwen-plus',
-  'custom-model'
-]
+type ProviderConnectionMetadata = Omit<AIProviderMetadata, 'models' | 'modelDetails' | 'pricing' | 'pricingDetail'>
 
-const PROVIDERS: AIProviderMetadata[] = [
+export interface AIModelInfo {
+  id: string
+  name: string
+  providerId: string
+  family?: string
+  modalities: {
+    input: string[]
+    output: string[]
+  }
+  capabilities: {
+    attachment: boolean
+    reasoning: boolean
+    toolCall: boolean
+    structuredOutput: boolean
+    temperature: boolean
+    openWeights: boolean
+  }
+  limits: {
+    context?: number
+    input?: number
+    output?: number
+  }
+  cost?: {
+    input?: number
+    output?: number
+    cacheRead?: number
+    cacheWrite?: number
+    inputAudio?: number
+    outputAudio?: number
+    reasoning?: number
+    tiers?: unknown[]
+    contextOver200k?: unknown
+  }
+  status?: string
+  knowledge?: string
+  releaseDate?: string
+  lastUpdated?: string
+  interleaved?: {
+    field?: string
+  }
+  provider?: {
+    npm?: string
+    api?: string
+    shape?: string
+  }
+}
+
+const EMPTY_PRICING = {
+  pricing: '在线获取',
+  pricingDetail: { input: 0, output: 0 }
+}
+
+const PROVIDERS: ProviderConnectionMetadata[] = [
   {
     id: 'openai',
     name: 'openai',
@@ -39,25 +88,8 @@ const PROVIDERS: AIProviderMetadata[] = [
     description: 'OpenAI Responses API',
     protocol: 'openai-responses',
     baseURL: 'https://api.openai.com/v1',
-    models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'o4-mini'],
-    pricing: '按量计费',
-    pricingDetail: { input: 0.0025, output: 0.01 },
     website: 'https://openai.com/',
     logo: './AI-logo/openai.svg'
-  },
-  {
-    id: 'openai-compatible',
-    name: 'openai-compatible',
-    displayName: 'OpenAI 兼容',
-    description: 'OpenAI-compatible Chat Completions 协议',
-    protocol: 'openai-compatible',
-    baseURL: 'https://api.openai.com/v1',
-    models: OPENAI_COMPATIBLE_MODELS,
-    pricing: '根据实际服务商定价',
-    pricingDetail: { input: 0, output: 0 },
-    website: '',
-    logo: './AI-logo/custom.svg',
-    allowCustomBaseURL: true
   },
   {
     id: 'anthropic',
@@ -66,25 +98,8 @@ const PROVIDERS: AIProviderMetadata[] = [
     description: 'Claude Messages API',
     protocol: 'anthropic',
     baseURL: 'https://api.anthropic.com/v1',
-    models: ['claude-opus-4-5', 'claude-sonnet-4-5', 'claude-haiku-4-5', 'claude-3-7-sonnet-latest'],
-    pricing: '按量计费',
-    pricingDetail: { input: 0.003, output: 0.015 },
     website: 'https://www.anthropic.com/',
     logo: ''
-  },
-  {
-    id: 'custom-responses',
-    name: 'custom-responses',
-    displayName: '自定义（OpenAI Responses）',
-    description: 'OpenAI Responses API，可填写兼容 Responses 的服务地址',
-    protocol: 'openai-responses',
-    baseURL: 'https://api.openai.com/v1',
-    models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'o4-mini', 'gpt-5-mini'],
-    pricing: '根据实际服务商定价',
-    pricingDetail: { input: 0, output: 0 },
-    website: '',
-    logo: './AI-logo/openai.svg',
-    allowCustomBaseURL: true
   },
   {
     id: 'gemini',
@@ -93,9 +108,6 @@ const PROVIDERS: AIProviderMetadata[] = [
     description: 'Google Gemini 原生协议',
     protocol: 'google',
     baseURL: 'https://generativelanguage.googleapis.com/v1beta',
-    models: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash'],
-    pricing: '按量计费',
-    pricingDetail: { input: 0.00015, output: 0.0006 },
     website: 'https://ai.google.dev/',
     logo: './AI-logo/gemini-color.svg'
   },
@@ -106,9 +118,6 @@ const PROVIDERS: AIProviderMetadata[] = [
     description: 'OpenAI-compatible 协议',
     protocol: 'openai-compatible',
     baseURL: 'https://api.deepseek.com',
-    models: ['deepseek-chat', 'deepseek-reasoner'],
-    pricing: '¥0.001/1K tokens',
-    pricingDetail: { input: 0.001, output: 0.002 },
     website: 'https://www.deepseek.com/',
     logo: './AI-logo/deepseek-color.svg'
   },
@@ -119,9 +128,6 @@ const PROVIDERS: AIProviderMetadata[] = [
     description: 'DashScope OpenAI-compatible 协议',
     protocol: 'openai-compatible',
     baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    models: ['qwen-plus', 'qwen-max', 'qwen-turbo', 'qwen-long'],
-    pricing: '¥0.004/1K tokens',
-    pricingDetail: { input: 0.004, output: 0.012 },
     website: 'https://dashscope.aliyun.com/',
     logo: './AI-logo/qwen-color.svg'
   },
@@ -132,9 +138,6 @@ const PROVIDERS: AIProviderMetadata[] = [
     description: '火山方舟 OpenAI-compatible 协议',
     protocol: 'openai-compatible',
     baseURL: 'https://ark.cn-beijing.volces.com/api/v3',
-    models: ['doubao-seed-1-6', 'doubao-seed-1-6-thinking', 'doubao-pro-32k'],
-    pricing: '按量计费',
-    pricingDetail: { input: 0.0008, output: 0.002 },
     website: 'https://www.volcengine.com/product/ark',
     logo: './AI-logo/doubao-color.svg'
   },
@@ -145,9 +148,6 @@ const PROVIDERS: AIProviderMetadata[] = [
     description: 'Moonshot OpenAI-compatible 协议',
     protocol: 'openai-compatible',
     baseURL: 'https://api.moonshot.cn/v1',
-    models: ['kimi-k2-0905-preview', 'moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k'],
-    pricing: '¥0.012/1K tokens',
-    pricingDetail: { input: 0.012, output: 0.012 },
     website: 'https://platform.moonshot.cn/',
     logo: './AI-logo/kimi-color.svg'
   },
@@ -158,9 +158,6 @@ const PROVIDERS: AIProviderMetadata[] = [
     description: 'MiniMax OpenAI-compatible 协议',
     protocol: 'openai-compatible',
     baseURL: 'https://api.minimaxi.com/v1',
-    models: ['MiniMax-M2.7', 'MiniMax-M2.7-highspeed', 'MiniMax-M2.5'],
-    pricing: '¥0.0021/1K tokens 起（估算）',
-    pricingDetail: { input: 0.0021, output: 0.0084 },
     website: 'https://platform.minimaxi.com/',
     logo: './AI-logo/minimax.svg'
   },
@@ -171,9 +168,6 @@ const PROVIDERS: AIProviderMetadata[] = [
     description: 'OpenAI-compatible 聚合接口',
     protocol: 'openai-compatible',
     baseURL: 'https://api.siliconflow.cn/v1',
-    models: ['deepseek-ai/DeepSeek-V3', 'deepseek-ai/DeepSeek-R1', 'Qwen/Qwen3-235B-A22B'],
-    pricing: '按模型计费',
-    pricingDetail: { input: 0.001, output: 0.002 },
     website: 'https://siliconflow.cn/',
     logo: './AI-logo/siliconflow-color.svg'
   },
@@ -184,9 +178,6 @@ const PROVIDERS: AIProviderMetadata[] = [
     description: 'OpenAI-compatible 协议',
     protocol: 'openai-compatible',
     baseURL: 'https://api.xiaomimimo.com/v1',
-    models: ['mimo-v2.5-pro', 'mimo-v2.5', 'mimo-v2-pro', 'mimo-v2-flash'],
-    pricing: '免费',
-    pricingDetail: { input: 0, output: 0 },
     website: 'https://api.xiaomimimo.com/',
     logo: './AI-logo/xiaomimimo.svg'
   },
@@ -197,9 +188,6 @@ const PROVIDERS: AIProviderMetadata[] = [
     description: '腾讯混元 OpenAI-compatible 协议',
     protocol: 'openai-compatible',
     baseURL: 'https://api.hunyuan.cloud.tencent.com/v1',
-    models: ['hunyuan-turbos-latest', 'hunyuan-t1-latest', 'hunyuan-large-role-latest'],
-    pricing: '¥0.01/1K tokens (Std)',
-    pricingDetail: { input: 0.01, output: 0.01 },
     website: 'https://cloud.tencent.com/product/hunyuan',
     logo: './AI-logo/yuanbao-color.svg'
   },
@@ -210,9 +198,6 @@ const PROVIDERS: AIProviderMetadata[] = [
     description: 'xAI OpenAI-compatible 协议',
     protocol: 'openai-compatible',
     baseURL: 'https://api.x.ai/v1',
-    models: ['grok-4', 'grok-3', 'grok-3-mini'],
-    pricing: '按量计费',
-    pricingDetail: { input: 0.003, output: 0.015 },
     website: 'https://x.ai/',
     logo: './AI-logo/xai.svg'
   },
@@ -223,9 +208,6 @@ const PROVIDERS: AIProviderMetadata[] = [
     description: '智谱 OpenAI-compatible 协议',
     protocol: 'openai-compatible',
     baseURL: 'https://open.bigmodel.cn/api/paas/v4',
-    models: ['glm-4.5', 'glm-4.5-flash', 'glm-4-plus'],
-    pricing: '¥0.005/1K tokens',
-    pricingDetail: { input: 0.005, output: 0.005 },
     website: 'https://open.bigmodel.cn/',
     logo: './AI-logo/zhipu-color.svg'
   },
@@ -236,9 +218,6 @@ const PROVIDERS: AIProviderMetadata[] = [
     description: '本地 OpenAI-compatible 协议',
     protocol: 'openai-compatible',
     baseURL: 'http://localhost:11434/v1',
-    models: ['qwen2.5:latest', 'llama3.3:latest', 'deepseek-r1:latest', 'gemma2:latest'],
-    pricing: '免费（本地运行）',
-    pricingDetail: { input: 0, output: 0 },
     website: 'https://ollama.com/',
     logo: './AI-logo/ollama.svg',
     optionalApiKey: true,
@@ -247,28 +226,350 @@ const PROVIDERS: AIProviderMetadata[] = [
   {
     id: 'custom',
     name: 'custom',
-    displayName: '自定义（OpenAI 兼容）',
-    description: '支持任何 OpenAI-compatible API 服务',
-    protocol: 'openai-compatible',
+    displayName: '自定义',
+    description: '自选 OpenAI Responses、OpenAI-compatible、Anthropic 或 Google 协议',
+    protocol: 'openai-responses',
     baseURL: '',
-    models: OPENAI_COMPATIBLE_MODELS,
-    pricing: '根据实际服务商定价',
-    pricingDetail: { input: 0, output: 0 },
     website: '',
     logo: './AI-logo/custom.svg',
-    allowCustomBaseURL: true
+    allowCustomBaseURL: true,
+    protocolOptions: ['openai-responses', 'openai-compatible', 'anthropic', 'google']
   }
 ]
 
 const PROVIDER_BY_ID = new Map(PROVIDERS.map(provider => [provider.id, provider]))
+const PROVIDER_ID_ALIASES: Record<string, string> = {
+  'openai-compatible': 'custom',
+  'custom-responses': 'custom'
+}
+let modelsDevCache: { updatedAt: number; data: any } | null = null
+const MODELS_DEV_CACHE_MS = 1000 * 60 * 5
+const MODELS_DEV_SOURCE = process.env.CIPHERTALK_MODELS_URL || 'https://models.dev'
+const MODELS_DEV_CACHE_PATH = process.env.CIPHERTALK_MODELS_PATH || path.join(
+  getUserDataPath(),
+  MODELS_DEV_SOURCE === 'https://models.dev' ? 'models-dev.json' : `models-dev-${Buffer.from(MODELS_DEV_SOURCE).toString('hex').slice(0, 16)}.json`
+)
 
-export function getProviderDefinitions(): AIProviderMetadata[] {
-  return PROVIDERS.map(provider => ({ ...provider, models: [...provider.models], pricingDetail: { ...provider.pricingDetail } }))
+function toMetadata(provider: ProviderConnectionMetadata, modelDetails: AIModelInfo[] = [], pricing = EMPTY_PRICING): AIProviderMetadata {
+  return {
+    ...provider,
+    models: modelDetails.map(model => model.id),
+    modelDetails,
+    pricing: pricing.pricing,
+    pricingDetail: { ...pricing.pricingDetail }
+  }
+}
+
+function cloneMetadata(provider: AIProviderMetadata): AIProviderMetadata {
+  return {
+    ...provider,
+    models: [...provider.models],
+    protocolOptions: provider.protocolOptions ? [...provider.protocolOptions] : undefined,
+    modelDetails: provider.modelDetails?.map(model => ({
+      ...model,
+      modalities: { input: [...model.modalities.input], output: [...model.modalities.output] },
+      capabilities: { ...model.capabilities },
+      limits: { ...model.limits },
+      cost: model.cost ? { ...model.cost, tiers: model.cost.tiers ? [...model.cost.tiers] : undefined } : undefined,
+      interleaved: model.interleaved ? { ...model.interleaved } : undefined,
+      provider: model.provider ? { ...model.provider } : undefined
+    })),
+    pricingDetail: { ...provider.pricingDetail }
+  }
+}
+
+export function normalizeProviderId(providerId: string): string {
+  return PROVIDER_ID_ALIASES[providerId] || providerId
+}
+
+function readModelsDevCacheFile(): { updatedAt: number; data: any } | null {
+  try {
+    if (!fs.existsSync(MODELS_DEV_CACHE_PATH)) return null
+    const stat = fs.statSync(MODELS_DEV_CACHE_PATH)
+    const data = JSON.parse(fs.readFileSync(MODELS_DEV_CACHE_PATH, 'utf-8'))
+    return { updatedAt: stat.mtimeMs, data }
+  } catch (error) {
+    console.warn('[AIProviderCatalog] 读取 models.dev 缓存失败:', error instanceof Error ? error.message : String(error))
+    return null
+  }
+}
+
+function writeModelsDevCacheFile(data: any): void {
+  try {
+    fs.mkdirSync(path.dirname(MODELS_DEV_CACHE_PATH), { recursive: true })
+    fs.writeFileSync(MODELS_DEV_CACHE_PATH, JSON.stringify(data), 'utf-8')
+  } catch (error) {
+    console.warn('[AIProviderCatalog] 写入 models.dev 缓存失败:', error instanceof Error ? error.message : String(error))
+  }
+}
+
+function getBundledModelsDevPath(): string {
+  return isElectronPackaged()
+    ? path.join(process.resourcesPath, 'assets', 'models-dev.json')
+    : path.join(getAppPath(), 'electron', 'assets', 'models-dev.json')
+}
+
+function readBundledModelsDevData(): any | null {
+  try {
+    const bundledPath = getBundledModelsDevPath()
+    if (!fs.existsSync(bundledPath)) return null
+    return JSON.parse(fs.readFileSync(bundledPath, 'utf-8'))
+  } catch (error) {
+    console.warn('[AIProviderCatalog] 读取内置 models.dev 快照失败:', error instanceof Error ? error.message : String(error))
+    return null
+  }
+}
+
+async function fetchModelsDevData(): Promise<any> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 10000)
+  try {
+    const response = await fetch(`${MODELS_DEV_SOURCE.replace(/\/+$/, '')}/api.json`, {
+      signal: controller.signal,
+      headers: { 'User-Agent': 'CipherTalk' }
+    })
+    if (!response.ok) {
+      throw new Error(`models.dev 请求失败: ${response.status}`)
+    }
+    return await response.json()
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+async function getModelsDevData(): Promise<any> {
+  const now = Date.now()
+  if (modelsDevCache && now - modelsDevCache.updatedAt < MODELS_DEV_CACHE_MS) {
+    return modelsDevCache.data
+  }
+
+  const diskCache = readModelsDevCacheFile()
+  if (diskCache && now - diskCache.updatedAt < MODELS_DEV_CACHE_MS) {
+    modelsDevCache = diskCache
+    return diskCache.data
+  }
+
+  if (process.env.CIPHERTALK_DISABLE_MODELS_FETCH === '1') {
+    if (diskCache) {
+      modelsDevCache = diskCache
+      return diskCache.data
+    }
+    const bundled = readBundledModelsDevData()
+    if (bundled) {
+      modelsDevCache = { updatedAt: now, data: bundled }
+      return bundled
+    }
+    return {}
+  }
+
+  try {
+    const data = await fetchModelsDevData()
+    modelsDevCache = { updatedAt: now, data }
+    writeModelsDevCacheFile(data)
+    return data
+  } catch (error) {
+    if (diskCache) {
+      console.warn('[AIProviderCatalog] models.dev 在线获取失败，使用本地缓存:', error instanceof Error ? error.message : String(error))
+      modelsDevCache = diskCache
+      return diskCache.data
+    }
+    const bundled = readBundledModelsDevData()
+    if (bundled) {
+      console.warn('[AIProviderCatalog] models.dev 在线获取失败，使用内置快照:', error instanceof Error ? error.message : String(error))
+      modelsDevCache = { updatedAt: now, data: bundled }
+      return bundled
+    }
+    throw error
+  }
+}
+
+export async function refreshModelsDevCache(force = false): Promise<void> {
+  const now = Date.now()
+  const diskCache = readModelsDevCacheFile()
+  if (!force && diskCache && now - diskCache.updatedAt < MODELS_DEV_CACHE_MS) {
+    modelsDevCache = diskCache
+    return
+  }
+
+  if (process.env.CIPHERTALK_DISABLE_MODELS_FETCH === '1') {
+    if (diskCache) modelsDevCache = diskCache
+    return
+  }
+
+  const data = await fetchModelsDevData()
+  modelsDevCache = { updatedAt: Date.now(), data }
+  writeModelsDevCacheFile(data)
+}
+
+function normalizeModelsDevProviderId(providerId: string): string[] {
+  const aliases: Record<string, string[]> = {
+    gemini: ['google', 'google-generative-ai', 'gemini'],
+    qwen: ['alibaba', 'dashscope', 'qwen'],
+    doubao: ['bytedance', 'volcengine', 'doubao'],
+    kimi: ['moonshotai', 'moonshot', 'kimi'],
+    siliconflow: ['siliconflow'],
+    zhipu: ['zhipuai', 'zhipu', 'bigmodel'],
+    tencent: ['tencent-tokenhub', 'tencent', 'hunyuan'],
+    xai: ['xai'],
+    minimax: ['minimax']
+  }
+  return aliases[providerId] || [providerId]
+}
+
+function getModelsDevProvider(data: any, providerId: string): any | undefined {
+  const providers = data?.providers || data
+  for (const candidate of normalizeModelsDevProviderId(providerId)) {
+    if (providers?.[candidate]) return providers[candidate]
+  }
+  return undefined
+}
+
+function getModelsDevModelEntries(provider: any): any[] {
+  const models = provider?.models || provider
+  if (Array.isArray(models)) return models
+  if (models && typeof models === 'object') return Object.values(models)
+  return []
+}
+
+function isTextChatModel(model: any): boolean {
+  const input = Array.isArray(model?.modalities?.input) ? model.modalities.input : []
+  const output = Array.isArray(model?.modalities?.output) ? model.modalities.output : []
+  if (output.length > 0 && !output.includes('text')) return false
+  if (input.length > 0 && !input.includes('text')) return false
+  const id = String(model?.id || model?.name || '').toLowerCase()
+  return !['embedding', 'rerank', 'whisper', 'tts', 'transcribe', 'speech', 'moderation', 'dall-e', 'image'].some(pattern => id.includes(pattern))
+}
+
+function toStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(item => String(item || '').trim()).filter(Boolean) : []
+}
+
+function optionalNumber(value: unknown): number | undefined {
+  const numberValue = Number(value)
+  return Number.isFinite(numberValue) ? numberValue : undefined
+}
+
+function readModelDetailsFromModelsDevProvider(providerId: string, provider: any): AIModelInfo[] {
+  return getModelsDevModelEntries(provider)
+    .filter(isTextChatModel)
+    .map((model: any): AIModelInfo | null => {
+      const id = String(model?.id || model?.name || '').replace(/^models\//, '').trim()
+      if (!id) return null
+
+      return {
+        id,
+        name: String(model?.name || id),
+        providerId,
+        family: model?.family ? String(model.family) : undefined,
+        modalities: {
+          input: toStringArray(model?.modalities?.input),
+          output: toStringArray(model?.modalities?.output)
+        },
+        capabilities: {
+          attachment: Boolean(model?.attachment),
+          reasoning: Boolean(model?.reasoning),
+          toolCall: Boolean(model?.tool_call),
+          structuredOutput: Boolean(model?.structured_output),
+          temperature: model?.temperature !== false,
+          openWeights: Boolean(model?.open_weights)
+        },
+        limits: {
+          context: optionalNumber(model?.limit?.context),
+          input: optionalNumber(model?.limit?.input),
+          output: optionalNumber(model?.limit?.output)
+        },
+        cost: model?.cost ? {
+          input: optionalNumber(model.cost.input),
+          output: optionalNumber(model.cost.output),
+          cacheRead: optionalNumber(model.cost.cache_read),
+          cacheWrite: optionalNumber(model.cost.cache_write),
+          inputAudio: optionalNumber(model.cost.input_audio),
+          outputAudio: optionalNumber(model.cost.output_audio),
+          reasoning: optionalNumber(model.cost.reasoning),
+          tiers: Array.isArray(model.cost.tiers) ? model.cost.tiers : undefined,
+          contextOver200k: model.cost.context_over_200k
+        } : undefined,
+        status: model?.status ? String(model.status) : undefined,
+        knowledge: model?.knowledge ? String(model.knowledge) : undefined,
+        releaseDate: model?.release_date ? String(model.release_date) : undefined,
+        lastUpdated: model?.last_updated ? String(model.last_updated) : undefined,
+        interleaved: model?.interleaved ? { field: model.interleaved.field ? String(model.interleaved.field) : undefined } : undefined,
+        provider: model?.provider ? {
+          npm: model.provider.npm ? String(model.provider.npm) : undefined,
+          api: model.provider.api ? String(model.provider.api) : undefined,
+          shape: model.provider.shape ? String(model.provider.shape) : undefined
+        } : undefined
+      }
+    })
+    .filter((model): model is AIModelInfo => Boolean(model))
+}
+
+function getPricingFromModelsDevProvider(provider: any): { pricing: string; pricingDetail: { input: number; output: number } } {
+  const pricedModels = getModelsDevModelEntries(provider)
+    .filter(isTextChatModel)
+    .map((model: any) => ({
+      input: Number(model?.cost?.input),
+      output: Number(model?.cost?.output)
+    }))
+    .filter(item => Number.isFinite(item.input) && Number.isFinite(item.output))
+
+  if (pricedModels.length === 0) return EMPTY_PRICING
+
+  const cheapest = pricedModels.reduce((best, item) => (
+    item.input + item.output < best.input + best.output ? item : best
+  ), pricedModels[0])
+
+  return {
+    pricing: `$${cheapest.input}/1M input, $${cheapest.output}/1M output 起`,
+    pricingDetail: {
+      input: cheapest.input / 1000,
+      output: cheapest.output / 1000
+    }
+  }
+}
+
+async function enrichProvider(provider: ProviderConnectionMetadata): Promise<AIProviderMetadata> {
+  try {
+    const data = await getModelsDevData()
+    const modelsDevProvider = getModelsDevProvider(data, provider.id)
+    if (!modelsDevProvider) return toMetadata(provider)
+
+    return toMetadata(
+      provider,
+      readModelDetailsFromModelsDevProvider(provider.id, modelsDevProvider),
+      getPricingFromModelsDevProvider(modelsDevProvider)
+    )
+  } catch (error) {
+    console.warn('[AIProviderCatalog] models.dev 获取失败:', error instanceof Error ? error.message : String(error))
+    return toMetadata(provider)
+  }
+}
+
+export async function getProviderDefinitions(): Promise<AIProviderMetadata[]> {
+  return Promise.all(PROVIDERS.map(enrichProvider))
 }
 
 export function getProviderDefinition(providerId: string): AIProviderMetadata | undefined {
-  const provider = PROVIDER_BY_ID.get(providerId)
-  return provider ? { ...provider, models: [...provider.models], pricingDetail: { ...provider.pricingDetail } } : undefined
+  const resolvedProviderId = normalizeProviderId(providerId)
+  const provider = PROVIDER_BY_ID.get(resolvedProviderId)
+  if (!provider) return undefined
+
+  const data = modelsDevCache?.data
+  if (!data) return toMetadata(provider)
+
+  const modelsDevProvider = getModelsDevProvider(data, resolvedProviderId)
+  if (!modelsDevProvider) return toMetadata(provider)
+
+  return cloneMetadata(toMetadata(
+    provider,
+    readModelDetailsFromModelsDevProvider(resolvedProviderId, modelsDevProvider),
+    getPricingFromModelsDevProvider(modelsDevProvider)
+  ))
+}
+
+export async function getProviderDefinitionOnline(providerId: string): Promise<AIProviderMetadata | undefined> {
+  const provider = PROVIDER_BY_ID.get(normalizeProviderId(providerId))
+  return provider ? enrichProvider(provider) : undefined
 }
 
 export class CatalogAIProvider extends BaseAIProvider {
@@ -299,58 +600,16 @@ export class CatalogAIProvider extends BaseAIProvider {
   }
 }
 
-let modelsDevCache: { updatedAt: number; data: any } | null = null
-const MODELS_DEV_CACHE_MS = 1000 * 60 * 60
-
-function normalizeModelsDevProviderId(providerId: string): string[] {
-  const aliases: Record<string, string[]> = {
-    gemini: ['google', 'google-generative-ai', 'gemini'],
-    qwen: ['alibaba', 'dashscope', 'qwen'],
-    doubao: ['bytedance', 'volcengine', 'doubao'],
-    kimi: ['moonshotai', 'moonshot', 'kimi'],
-    siliconflow: ['siliconflow'],
-    zhipu: ['zhipu', 'bigmodel'],
-    tencent: ['tencent', 'hunyuan'],
-    xai: ['xai'],
-    minimax: ['minimax']
-  }
-  return aliases[providerId] || [providerId]
-}
-
-function readModelsFromModelsDevProvider(provider: any): string[] {
-  const models = provider?.models || provider
-  if (Array.isArray(models)) {
-    return models
-      .map((item: any) => String(item?.id || item?.name || item || '').replace(/^models\//, '').trim())
-      .filter(Boolean)
-  }
-
-  if (models && typeof models === 'object') {
-    return Object.entries(models)
-      .map(([id, value]: [string, any]) => String(value?.id || value?.name || id || '').replace(/^models\//, '').trim())
-      .filter(Boolean)
-  }
-
-  return []
-}
-
 export async function getModelsDevModels(providerId: string): Promise<string[]> {
-  const now = Date.now()
-  if (!modelsDevCache || now - modelsDevCache.updatedAt > MODELS_DEV_CACHE_MS) {
-    const response = await fetch('https://models.dev/api.json')
-    if (!response.ok) {
-      throw new Error(`models.dev 请求失败: ${response.status}`)
-    }
-    modelsDevCache = { updatedAt: now, data: await response.json() }
-  }
+  const data = await getModelsDevData()
+  const resolvedProviderId = normalizeProviderId(providerId)
+  const provider = getModelsDevProvider(data, resolvedProviderId)
+  return provider ? Array.from(new Set(readModelDetailsFromModelsDevProvider(resolvedProviderId, provider).map(model => model.id))) : []
+}
 
-  const data = modelsDevCache.data
-  const providers = data?.providers || data
-  for (const candidate of normalizeModelsDevProviderId(providerId)) {
-    const provider = providers?.[candidate]
-    const models = readModelsFromModelsDevProvider(provider)
-    if (models.length > 0) return Array.from(new Set(models))
-  }
-
-  return []
+export async function getModelsDevModelDetails(providerId: string): Promise<AIModelInfo[]> {
+  const data = await getModelsDevData()
+  const resolvedProviderId = normalizeProviderId(providerId)
+  const provider = getModelsDevProvider(data, resolvedProviderId)
+  return provider ? readModelDetailsFromModelsDevProvider(resolvedProviderId, provider) : []
 }

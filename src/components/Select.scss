@@ -76,6 +76,15 @@
     }
   }
 
+  .glass-select-adornment {
+    display: inline-flex;
+    align-items: center;
+    min-width: 0;
+    max-width: 58%;
+    flex: 0 1 auto;
+    margin-left: 6px;
+  }
+
   // 彻底重置，避免被设置页全局 input 样式污染（边框/背景/圆角/阴影）
   &.glass-select--editable {
     .glass-select-trigger.glass-select-trigger--editable > input.glass-select-input.glass-select-input {

@@ -118,6 +118,9 @@ jobs:
       - name: Generate embedded release body
         run: npm run build:release-body
 
+      - name: Refresh models.dev snapshot
+        run: npm run build:models-snapshot
+
       - name: Build app
         run: npm run build:win
 
@@ -179,6 +182,9 @@ jobs:
 
       - name: Generate embedded release body
         run: npm run build:release-body
+
+      - name: Refresh models.dev snapshot
+        run: npm run build:models-snapshot
 
       - name: Build mac app
         run: npm run build:mac

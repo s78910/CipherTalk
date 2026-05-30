@@ -2,9 +2,13 @@ import { ConfigService } from '../config'
 import { AIProvider } from './providers/base'
 import {
   CatalogAIProvider,
-  getModelsDevModels,
+  getModelsDevModelDetails,
   getProviderDefinition,
-  getProviderDefinitions
+  getProviderDefinitionOnline,
+  getProviderDefinitions,
+  normalizeProviderId,
+  type AIModelInfo,
+  type AIProviderProtocol
 } from './providers/catalog'
 
 class AIService {
@@ -14,7 +18,7 @@ class AIService {
     this.configService = new ConfigService()
   }
 
-  getAllProviders() {
+  async getAllProviders() {
     return getProviderDefinitions()
   }
 
@@ -22,14 +26,26 @@ class AIService {
     return this.getProvider(providerName, apiKey, baseURLOverride)
   }
 
-  private getProvider(providerName?: string, apiKey?: string, baseURLOverride?: string): AIProvider {
-    const name = providerName || this.configService.getAICurrentProvider() || 'deepseek'
+  private resolveProviderDefinition(providerName?: string, protocolOverride?: AIProviderProtocol) {
+    const rawName = providerName || this.configService.getAICurrentProvider() || 'deepseek'
+    const name = normalizeProviderId(rawName)
     const definition = getProviderDefinition(name)
     if (!definition) {
       throw new Error(`不支持的提供商: ${name}`)
     }
 
     const providerConfig = this.configService.getAIProviderConfig(name)
+      || (rawName !== name ? this.configService.getAIProviderConfig(rawName) : null)
+    const protocol = protocolOverride || providerConfig?.protocol
+    if (name === 'custom' && protocol && definition.protocolOptions?.includes(protocol)) {
+      return { name, definition: { ...definition, protocol }, providerConfig }
+    }
+
+    return { name, definition, providerConfig }
+  }
+
+  private getProvider(providerName?: string, apiKey?: string, baseURLOverride?: string, protocolOverride?: AIProviderProtocol): AIProvider {
+    const { name, definition, providerConfig } = this.resolveProviderDefinition(providerName, protocolOverride)
     const key = apiKey || providerConfig?.apiKey || ''
     const baseURL = baseURLOverride || providerConfig?.baseURL || definition.baseURL
 
@@ -54,9 +70,9 @@ class AIService {
     return (tokenCount / 1000) * provider.pricing.input
   }
 
-  async testConnection(providerName: string, apiKey: string, baseURL?: string): Promise<{ success: boolean; error?: string; needsProxy?: boolean }> {
+  async testConnection(providerName: string, apiKey: string, baseURL?: string, protocol?: AIProviderProtocol): Promise<{ success: boolean; error?: string; needsProxy?: boolean }> {
     try {
-      const provider = this.getProvider(providerName, apiKey, baseURL)
+      const provider = this.getProvider(providerName, apiKey, baseURL, protocol)
       return await provider.testConnection()
     } catch (error) {
       return {
@@ -154,21 +170,26 @@ class AIService {
     return result
   }
 
-  async listProviderModels(options: { provider: string; apiKey?: string; baseURL?: string }): Promise<{ success: boolean; models?: string[]; error?: string }> {
+  async listProviderModels(options: { provider: string; apiKey?: string; baseURL?: string; protocol?: AIProviderProtocol }): Promise<{ success: boolean; models?: string[]; modelDetails?: AIModelInfo[]; error?: string }> {
     try {
-      const definition = getProviderDefinition(options.provider)
+      const providerId = normalizeProviderId(options.provider)
+      const onlineDefinition = await getProviderDefinitionOnline(providerId)
+      const definition = providerId === 'custom' && options.protocol && onlineDefinition?.protocolOptions?.includes(options.protocol)
+        ? { ...onlineDefinition, protocol: options.protocol }
+        : onlineDefinition
       if (!definition) {
-        throw new Error(`不支持的提供商: ${options.provider}`)
+        throw new Error(`不支持的提供商: ${providerId}`)
       }
-      const providerConfig = this.configService.getAIProviderConfig(options.provider)
+      const providerConfig = this.configService.getAIProviderConfig(providerId)
+        || (options.provider !== providerId ? this.configService.getAIProviderConfig(options.provider) : null)
       const key = options.apiKey || providerConfig?.apiKey || ''
       const provider = new CatalogAIProvider(
         definition,
-        key || options.provider,
+        key || providerId,
         options.baseURL || providerConfig?.baseURL || definition.baseURL
       )
-      const [modelsDevModels, remoteModels] = await Promise.all([
-        getModelsDevModels(options.provider).catch((error) => {
+      const [modelsDevDetails, remoteModels] = await Promise.all([
+        getModelsDevModelDetails(providerId).catch((error) => {
           console.warn('[AIService] models.dev 获取模型列表失败:', error instanceof Error ? error.message : String(error))
           return []
         }),
@@ -179,6 +200,7 @@ class AIService {
             })
           : Promise.resolve([])
       ])
+      const modelsDevModels = modelsDevDetails.map(model => model.id)
 
       const models = this.mergeModelLists(
         provider,
@@ -188,7 +210,14 @@ class AIService {
       if (models.length === 0) {
         return { success: false, error: '服务商未返回可用模型列表' }
       }
-      return { success: true, models }
+      const modelDetailsById = new Map(modelsDevDetails.map(model => [provider.getModelIdentity(model.id), model]))
+      return {
+        success: true,
+        models,
+        modelDetails: models
+          .map(model => modelDetailsById.get(provider.getModelIdentity(model)))
+          .filter((model): model is AIModelInfo => Boolean(model))
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       console.error('[AIService] 获取模型列表失败:', message)

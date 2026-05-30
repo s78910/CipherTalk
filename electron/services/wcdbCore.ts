@@ -1,4 +1,4 @@
-import { basename, join } from 'path'
+import { basename, delimiter, dirname, join } from 'path'
 import { existsSync, readdirSync, statSync } from 'fs'
 
 /**
@@ -65,6 +65,24 @@ export class WcdbCore {
     return join(baseDir, 'WCDB.dll')
   }
 
+  private prepareWindowsDllSearchPath(libraryPath: string): { success: boolean; error?: string } {
+    if (process.platform !== 'win32') return { success: true }
+
+    const wcdbCorePath = this.getWindowsCoreLibraryPath()
+    if (!existsSync(wcdbCorePath)) {
+      return { success: false, error: `WCDB 依赖库不存在: ${wcdbCorePath}` }
+    }
+
+    const dllDir = dirname(libraryPath)
+    const pathParts = (process.env.PATH || '').split(delimiter).filter(Boolean)
+    const hasDllDir = pathParts.some(item => item.toLowerCase() === dllDir.toLowerCase())
+    if (!hasDllDir) {
+      process.env.PATH = [dllDir, ...pathParts].join(delimiter)
+    }
+
+    return { success: true }
+  }
+
   async initialize(): Promise<{ success: boolean; error?: string }> {
     if (this.initialized) return { success: true }
 
@@ -75,16 +93,8 @@ export class WcdbCore {
         return { success: false, error: `WCDB 原生库不存在: ${libraryPath}` }
       }
 
-      if (process.platform === 'win32') {
-        const wcdbCorePath = this.getWindowsCoreLibraryPath()
-        if (existsSync(wcdbCorePath)) {
-          try {
-            this.koffi.load(wcdbCorePath)
-          } catch (e: any) {
-            console.warn('预加载 WCDB.dll 失败:', e.message || e)
-          }
-        }
-      }
+      const dllSearchRes = this.prepareWindowsDllSearchPath(libraryPath)
+      if (!dllSearchRes.success) return dllSearchRes
 
       this.lib = this.koffi.load(libraryPath)
 

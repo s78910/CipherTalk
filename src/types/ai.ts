@@ -1,4 +1,56 @@
 /**
+ * AI 模型信息
+ */
+export interface AIModelInfo {
+  id: string
+  name: string
+  providerId: string
+  family?: string
+  modalities: {
+    input: string[]
+    output: string[]
+  }
+  capabilities: {
+    attachment: boolean
+    reasoning: boolean
+    toolCall: boolean
+    structuredOutput: boolean
+    temperature: boolean
+    openWeights: boolean
+  }
+  limits: {
+    context?: number
+    input?: number
+    output?: number
+  }
+  cost?: {
+    input?: number
+    output?: number
+    cacheRead?: number
+    cacheWrite?: number
+    inputAudio?: number
+    outputAudio?: number
+    reasoning?: number
+    tiers?: unknown[]
+    contextOver200k?: unknown
+  }
+  status?: string
+  knowledge?: string
+  releaseDate?: string
+  lastUpdated?: string
+  interleaved?: {
+    field?: string
+  }
+  provider?: {
+    npm?: string
+    api?: string
+    shape?: string
+  }
+}
+
+export type AIProviderProtocol = 'openai-responses' | 'openai-compatible' | 'anthropic' | 'google'
+
+/**
  * AI 提供商信息
  */
 export interface AIProviderInfo {
@@ -6,7 +58,9 @@ export interface AIProviderInfo {
   name: string
   displayName: string
   description: string
+  baseURL?: string
   models: string[]
+  modelDetails?: AIModelInfo[]
   pricing: string
   pricingDetail: {
     input: number
@@ -14,7 +68,8 @@ export interface AIProviderInfo {
   }
   website?: string
   logo?: string
-  protocol?: 'openai-responses' | 'openai-compatible' | 'anthropic' | 'google'
+  protocol?: AIProviderProtocol
+  protocolOptions?: AIProviderProtocol[]
   allowCustomBaseURL?: boolean
   optionalApiKey?: boolean
 }

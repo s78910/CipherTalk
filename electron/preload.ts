@@ -518,8 +518,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getProxyStatus: () => ipcRenderer.invoke('ai:getProxyStatus'),
     refreshProxy: () => ipcRenderer.invoke('ai:refreshProxy'),
     testProxy: (proxyUrl: string, testUrl?: string) => ipcRenderer.invoke('ai:testProxy', proxyUrl, testUrl),
-    testConnection: (provider: string, apiKey: string, baseURL?: string) => ipcRenderer.invoke('ai:testConnection', provider, apiKey, baseURL),
-    listModels: (options: { provider: string; apiKey?: string; baseURL?: string }) => ipcRenderer.invoke('ai:listModels', options),
+    testConnection: (provider: string, apiKey: string, baseURL?: string, protocol?: 'openai-responses' | 'openai-compatible' | 'anthropic' | 'google') => ipcRenderer.invoke('ai:testConnection', provider, apiKey, baseURL, protocol),
+    listModels: (options: { provider: string; apiKey?: string; baseURL?: string; protocol?: 'openai-responses' | 'openai-compatible' | 'anthropic' | 'google' }) => ipcRenderer.invoke('ai:listModels', options),
     estimateCost: (messageCount: number, provider: string) => ipcRenderer.invoke('ai:estimateCost', messageCount, provider),
     readGuide: (guideName: string) => ipcRenderer.invoke('ai:readGuide', guideName)
   }

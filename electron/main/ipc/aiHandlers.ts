@@ -57,16 +57,16 @@ export function registerAiHandlers(_ctx: MainProcessContext): void {
     }
   })
 
-  ipcMain.handle('ai:testConnection', async (_, provider: string, apiKey: string, baseURL?: string) => {
+  ipcMain.handle('ai:testConnection', async (_, provider: string, apiKey: string, baseURL?: string, protocol?: 'openai-responses' | 'openai-compatible' | 'anthropic' | 'google') => {
     try {
       const { aiService } = await import('../../services/ai/aiService')
-      return await aiService.testConnection(provider, apiKey, baseURL)
+      return await aiService.testConnection(provider, apiKey, baseURL, protocol)
     } catch (e) {
       return { success: false, error: String(e) }
     }
   })
 
-  ipcMain.handle('ai:listModels', async (_, options: { provider: string; apiKey?: string; baseURL?: string }) => {
+  ipcMain.handle('ai:listModels', async (_, options: { provider: string; apiKey?: string; baseURL?: string; protocol?: 'openai-responses' | 'openai-compatible' | 'anthropic' | 'google' }) => {
     try {
       const { aiService } = await import('../../services/ai/aiService')
       return await aiService.listProviderModels(options)
