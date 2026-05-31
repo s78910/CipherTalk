@@ -1354,7 +1354,7 @@ function SettingsLayout() {
         {activeTab === 'appearance' && <AppearanceTab />}
         {activeTab === 'database' && (
           <Suspense fallback={<div className="tab-content">加载中...</div>}>
-            <DatabaseTab showMessage={showMessage} reloadConfig={loadConfig} onSave={handleSaveConfig} />
+            <DatabaseTab showMessage={showMessage} />
           </Suspense>
         )}
         {activeTab === 'security' && <SecurityTab isMac={isMac} showMessage={showMessage} />}
