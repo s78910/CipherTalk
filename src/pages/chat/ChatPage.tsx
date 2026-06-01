@@ -906,7 +906,8 @@ function ChatPage(_props: ChatPageProps) {
         }
 
         const currentId = currentSessionIdRef.current
-        if (!currentId || (!shouldRefreshMessages && !shouldRefreshSessions)) return
+        // 仅在消息表变更时拉取当前会话增量；纯会话变更只刷新会话列表，避免多余的 getNewMessages
+        if (!currentId || !shouldRefreshMessages) return
 
         const currentMessages = useChatStore.getState().messages || []
         const lastMsg = currentMessages[currentMessages.length - 1]
