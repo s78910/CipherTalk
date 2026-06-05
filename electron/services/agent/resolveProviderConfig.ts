@@ -13,7 +13,10 @@ export function resolveProviderConfig(override?: AgentProviderConfigOverride | n
     const def = getProviderDefinition(name)
     if (!def) throw new Error(`不支持的 AI 服务商: ${name}`)
 
-    const providerConfig = override || config.getAIProviderConfig(name)
+    const providerConfig = {
+      ...(config.getAIProviderConfig(name) || {}),
+      ...(override || {}),
+    }
     const apiKey = providerConfig?.apiKey || ''
     const model = providerConfig?.model || def.models?.[0] || ''
     if (!apiKey) throw new Error('未配置 AI 服务商的 API Key，请先在设置中配置')
@@ -25,6 +28,7 @@ export function resolveProviderConfig(override?: AgentProviderConfigOverride | n
       apiKey,
       baseURL: providerConfig?.baseURL || def.baseURL || '',
       model,
+      reasoningEffort: providerConfig?.reasoningEffort,
     }
   } finally {
     config.close()

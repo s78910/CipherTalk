@@ -14,14 +14,36 @@ import {
 import { cn } from "@/lib/utils";
 import type { FileUIPart, UIMessage } from "ai";
 import {
+  CheckIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
+  CodeIcon,
+  CopyIcon,
+  EyeIcon,
   PaperclipIcon,
   XIcon,
 } from "lucide-react";
 import type { ComponentProps, HTMLAttributes, ReactElement } from "react";
 import { createContext, memo, useContext, useEffect, useState } from "react";
 import { Streamdown } from "streamdown";
+import { bundledLanguages, type BundledLanguage } from "shiki";
+import {
+  Artifact,
+  ArtifactAction,
+  ArtifactActions,
+  ArtifactContent,
+  ArtifactDescription,
+  ArtifactHeader,
+  ArtifactTitle,
+} from "./artifact";
+import { CodeBlock } from "./code-block";
+import { Terminal, TerminalContent } from "./terminal";
+import {
+  WebPreview,
+  WebPreviewBody,
+  WebPreviewNavigation,
+  WebPreviewUrl,
+} from "./web-preview";
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
   from: UIMessage["role"];
@@ -306,6 +328,133 @@ export const MessageBranchPage = ({
 
 export type MessageResponseProps = ComponentProps<typeof Streamdown>;
 
+const DEFAULT_CODE_LANGUAGE: BundledLanguage = "md";
+
+const LANGUAGE_ALIASES: Record<string, BundledLanguage> = {
+  plain: "md",
+  plaintext: "md",
+  text: "md",
+};
+
+const TERMINAL_LANGUAGES = new Set([
+  "ansi",
+  "bash",
+  "bat",
+  "cmd",
+  "console",
+  "fish",
+  "log",
+  "powershell",
+  "ps1",
+  "sh",
+  "shell",
+  "shellsession",
+  "terminal",
+  "text",
+  "txt",
+  "zsh",
+]);
+
+function normalizeCodeLanguage(language?: string): BundledLanguage {
+  const normalized = language?.trim().toLowerCase();
+  if (!normalized) return DEFAULT_CODE_LANGUAGE;
+  const aliased = LANGUAGE_ALIASES[normalized] || normalized;
+  if (Object.prototype.hasOwnProperty.call(bundledLanguages, aliased)) {
+    return aliased as BundledLanguage;
+  }
+  return DEFAULT_CODE_LANGUAGE;
+}
+
+function getRawCodeLanguage(className?: string): string | undefined {
+  return className?.match(/language-([^\s]+)/)?.[1]?.trim().toLowerCase();
+}
+
+function isHtmlCode(language: string | undefined, code: string): boolean {
+  if (language === "html" || language === "htm" || language === "xhtml") {
+    return true;
+  }
+  return /^\s*(?:<!doctype\s+html|<html[\s>])/i.test(code);
+}
+
+function isTerminalCode(language: string | undefined): boolean {
+  return Boolean(language && TERMINAL_LANGUAGES.has(language));
+}
+
+type MessageCodeProps = ComponentProps<"code"> & {
+  node?: unknown;
+  "data-block"?: boolean | string;
+};
+
+const MessageCode = ({ children, className, ...props }: MessageCodeProps) => {
+  const [isCopied, setIsCopied] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
+  const isBlock = "data-block" in props;
+  if (!isBlock) {
+    return (
+      <code className={cn(className, "rounded bg-muted px-1 py-0.5 font-mono text-[0.85em] text-foreground")}>
+        {children}
+      </code>
+    );
+  }
+
+  const code = String(children ?? "").replace(/\n$/, "");
+  const rawLanguage = getRawCodeLanguage(className);
+  const canPreviewHtml = isHtmlCode(rawLanguage, code);
+  const canRenderTerminal = isTerminalCode(rawLanguage);
+  const language = normalizeCodeLanguage(canPreviewHtml && !rawLanguage ? "html" : rawLanguage);
+  const handleCopy = async () => {
+    if (typeof window === "undefined" || !navigator?.clipboard?.writeText) return;
+    await navigator.clipboard.writeText(code);
+    setIsCopied(true);
+    window.setTimeout(() => setIsCopied(false), 2000);
+  };
+
+  return (
+    <Artifact className="my-2 h-[32rem] max-h-[70vh] w-full max-w-full">
+      <ArtifactHeader>
+        <div className="min-w-0">
+          <ArtifactTitle className="font-mono">{rawLanguage || language}</ArtifactTitle>
+          <ArtifactDescription>
+            {showPreview && canPreviewHtml ? "HTML Preview" : canRenderTerminal ? "Terminal" : "Code"}
+          </ArtifactDescription>
+        </div>
+        <ArtifactActions>
+          {canPreviewHtml && (
+            <ArtifactAction
+              icon={showPreview ? CodeIcon : EyeIcon}
+              label={showPreview ? "查看代码" : "预览 HTML"}
+              onClick={() => setShowPreview((value) => !value)}
+              tooltip={showPreview ? "查看代码" : "预览 HTML"}
+            />
+          )}
+          <ArtifactAction
+            icon={isCopied ? CheckIcon : CopyIcon}
+            label="复制代码"
+            onClick={handleCopy}
+            tooltip={isCopied ? "已复制" : "复制代码"}
+          />
+        </ArtifactActions>
+      </ArtifactHeader>
+      <ArtifactContent className="p-0">
+        {showPreview && canPreviewHtml ? (
+          <WebPreview className="rounded-none border-0" defaultUrl="about:srcdoc">
+            <WebPreviewNavigation>
+              <WebPreviewUrl readOnly value="about:srcdoc" />
+            </WebPreviewNavigation>
+            <WebPreviewBody className="bg-white" sandbox="" srcDoc={code} />
+          </WebPreview>
+        ) : canRenderTerminal ? (
+          <Terminal autoScroll className="h-full rounded-none border-0" output={code}>
+            <TerminalContent className="h-full max-h-none" />
+          </Terminal>
+        ) : (
+          <CodeBlock className="min-h-full rounded-none border-0" code={code} language={language} />
+        )}
+      </ArtifactContent>
+    </Artifact>
+  );
+};
+
 export const MessageResponse = memo(
   ({ className, ...props }: MessageResponseProps) => (
     <Streamdown
@@ -313,6 +462,7 @@ export const MessageResponse = memo(
         "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
         className
       )}
+      components={{ code: MessageCode }}
       {...props}
     />
   ),

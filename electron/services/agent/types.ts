@@ -15,14 +15,18 @@ export interface AgentProviderConfig {
   baseURL: string
   model: string
   headers?: Record<string, string>
+  reasoningEffort?: AgentReasoningEffort
 }
 
+export type AgentReasoningEffort = 'auto' | 'minimal' | 'low' | 'medium' | 'high'
+
 export interface AgentProviderConfigOverride {
-  provider: string
-  apiKey: string
-  model: string
+  provider?: string
+  apiKey?: string
+  model?: string
   baseURL?: string
   protocol?: ProviderKind
+  reasoningEffort?: AgentReasoningEffort
 }
 
 /** 提问范围：全局 / 限定单个会话。 */

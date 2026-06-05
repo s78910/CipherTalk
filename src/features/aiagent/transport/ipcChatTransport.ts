@@ -6,12 +6,14 @@
 import type { ChatTransport, UIMessage, UIMessageChunk } from 'ai'
 
 type AgentScope = { kind: 'global' } | { kind: 'session'; sessionId: string }
+export type AgentReasoningEffort = 'auto' | 'minimal' | 'low' | 'medium' | 'high'
 export type AgentModelConfig = {
-  provider: string
-  apiKey: string
-  model: string
+  provider?: string
+  apiKey?: string
+  model?: string
   baseURL?: string
   protocol?: 'openai-responses' | 'openai-compatible' | 'anthropic' | 'google'
+  reasoningEffort?: AgentReasoningEffort
 }
 
 interface AgentBridge {
