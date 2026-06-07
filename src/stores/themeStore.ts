@@ -4,9 +4,12 @@ export type ThemeMode = 'light' | 'dark' | 'system'
 export type NavLayout = 'sidebar' | 'dock'
 export type HomeBackgroundSource = 'preset' | 'custom'
 export type HomeBackgroundMediaType = 'image' | 'video' | ''
+
+const publicAsset = (fileName: string): string => `${import.meta.env.BASE_URL}${fileName}`
+
 export const HOME_BACKGROUND_PRESETS = [
-  { id: 'beijing', label: '默认背景', description: '原始预设视频', src: '/beijing.mp4' },
-  { id: 'beijing2', label: '备用背景', description: '新增预设视频', src: '/beijing2.mp4' }
+  { id: 'beijing', label: '默认背景', description: '原始预设视频', src: publicAsset('beijing.mp4') },
+  { id: 'beijing2', label: '备用背景', description: '新增预设视频', src: publicAsset('beijing2.mp4') }
 ] as const
 export type HomeBackgroundPreset = typeof HOME_BACKGROUND_PRESETS[number]['id']
 
@@ -57,7 +60,7 @@ export const normalizeHomeBackgroundPreset = (value: unknown): HomeBackgroundPre
 
 export const getHomeBackgroundPresetSrc = (value: unknown): string => {
   const preset = normalizeHomeBackgroundPreset(value)
-  return HOME_BACKGROUND_PRESETS.find((item) => item.id === preset)?.src || '/beijing.mp4'
+  return HOME_BACKGROUND_PRESETS.find((item) => item.id === preset)?.src || publicAsset('beijing.mp4')
 }
 
 const clampHomeBackgroundBlur = (value: unknown): number => {

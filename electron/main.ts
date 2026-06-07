@@ -29,11 +29,16 @@ type AppWithQuitFlag = typeof app & {
 
 const appWithQuitFlag = app as AppWithQuitFlag
 
-function configureWindowsStartupStability(): void {
+function configureWindowsGpuPolicy(): void {
   if (process.platform !== 'win32') return
   if (!app.isPackaged) return
-  if (process.env.CIPHERTALK_ENABLE_GPU === '1') {
-    markStartupMilestone('startup:gpu-enabled-by-env')
+
+  const shouldDisableGpu = process.env.CIPHERTALK_DISABLE_GPU === '1'
+    || process.argv.includes('--disable-gpu')
+    || process.argv.includes('--disable-hardware-acceleration')
+
+  if (!shouldDisableGpu) {
+    markStartupMilestone('startup:windows-gpu-enabled')
     return
   }
 
@@ -41,13 +46,13 @@ function configureWindowsStartupStability(): void {
     app.disableHardwareAcceleration()
     app.commandLine.appendSwitch('disable-gpu')
     app.commandLine.appendSwitch('disable-gpu-compositing')
-    markStartupMilestone('startup:windows-gpu-disabled')
+    markStartupMilestone('startup:windows-gpu-disabled-by-env')
   } catch (error) {
     logStartupError('startup:windows-gpu-disable-failed', error)
   }
 }
 
-configureWindowsStartupStability()
+configureWindowsGpuPolicy()
 installElectronStartupDiagnostics(app)
 
 // 注册自定义协议为特权协议（必须在 app ready 之前）
