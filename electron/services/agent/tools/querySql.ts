@@ -36,16 +36,12 @@ function sanitizeCell(value: unknown): unknown {
 
 export const querySql = tool({
   description:
-    '【高级·只读】直接对原微信库跑你自己写的 SQL，用于结构化工具覆盖不到的灵活查询。' +
-    '仅允许单条只读 SELECT / WITH / EXPLAIN / PRAGMA table_info；写入/DDL 会被直接拒绝。\n' +
-    'kind 选库：\n' +
-    '- contact：联系人/群。表 contact(username,remark,nick_name,alias,…)、chatroom_member(room_id,member_id)、name2id(rowid,username)。\n' +
-    '- session：会话表 SessionTable(username,sort_timestamp,last_timestamp,…)；群 username 以 @chatroom 结尾。\n' +
-    '- message：聊天正文，按库分片，需传 dbPath；表名形如 msg_<hash>，列含 local_type/create_time/is_send/real_sender_id；群发送者经 Name2Id(rowid,user_name) 映射 real_sender_id。\n' +
-    "探索结构：SELECT name FROM sqlite_master WHERE type='table'，或 PRAGMA table_info(\"表名\")。" +
-    '别 SELECT 头像/图片等大字段。优先用结构化工具，本工具留给特殊查询。',
+    '【兜底·只读·最后手段】仅当 search_messages / semantic_search / chat_stats / get_timeline / get_context / list_groups / group_members / group_member_ranking 这些结构化工具都无法回答时，才用它直接写只读 SQL 查原微信库。\n' +
+    '调用前必须先在思考里写明：你试过哪个结构化工具、它为什么不够用——没尝试过结构化工具就直接写 SQL 属于错误用法；能用结构化工具回答的一律不准用本工具。\n' +
+    '表结构不提供文档，需自己探查：先 SELECT name FROM sqlite_master WHERE type=\'table\' 看有哪些表，再 PRAGMA table_info("表名") 看列。\n' +
+    '仅允许单条只读 SELECT / WITH / EXPLAIN / PRAGMA table_info；写入/DDL/事务会被直接拒绝。别 SELECT 头像/图片等大字段。',
   inputSchema: z.object({
-    kind: z.enum(['contact', 'session', 'message']).describe('目标库'),
+    kind: z.enum(['contact', 'session', 'message']).describe('目标库：contact=联系人/群，session=会话列表，message=聊天正文（按库分片，需配合 dbPath）'),
     sql: z.string().describe('单条只读 SQL'),
     dbPath: z.string().optional().describe("kind='message' 时指定分片库的绝对路径；不传会返回可用 dbPath 列表"),
     params: z.array(z.union([z.string(), z.number(), z.null()])).optional().describe('SQL 中 ? 占位对应的参数值'),

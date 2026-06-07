@@ -3,6 +3,7 @@ import { existsSync, readFileSync, writeFileSync, readdirSync, rmSync, mkdirSync
 import { join } from 'path'
 import AdmZip from 'adm-zip'
 import type { AgentSkillContextItem } from './agent/types'
+import { agentResourceVectorService, type SkillResourceDocument } from './agent/agentResourceVectorService'
 import { rerankCandidates } from './ai/rerankService'
 
 type AdmZipFull = InstanceType<typeof AdmZip> & {
@@ -344,6 +345,22 @@ export class SkillManagerService {
     }
   }
 
+  getSkillResourceDocuments(): SkillResourceDocument[] {
+    return this.listSkills()
+      .map((skill) => {
+        const loaded = this.readSkillContent(skill.name)
+        if (!loaded.success || !loaded.content) return null
+        const meta = parseSkillFrontmatter(loaded.content)
+        return {
+          name: meta.name || skill.name,
+          version: meta.version || skill.version,
+          description: meta.description || skill.description,
+          content: loaded.content,
+        }
+      })
+      .filter((item): item is SkillResourceDocument => Boolean(item))
+  }
+
   async selectSkillsForAgent(
     query: string,
     limit = DEFAULT_AGENT_SKILL_LIMIT,
@@ -352,20 +369,36 @@ export class SkillManagerService {
     const safeLimit = Math.max(0, Math.floor(limit))
     if (!query.trim() || safeLimit === 0 || totalBudget <= 0) return []
 
-    const scored = this.listSkills()
-      .map((skill) => {
-        const loaded = this.readSkillContent(skill.name)
-        if (!loaded.success || !loaded.content) return null
-        const score = scoreSkillForQuery(query, skill, loaded.content)
+    const documents = this.getSkillResourceDocuments()
+    let vectorDocuments: SkillResourceDocument[] = []
+    if (agentResourceVectorService.isReady()) {
+      try {
+        vectorDocuments = await agentResourceVectorService.searchSkills(query, documents, DEFAULT_AGENT_SKILL_CANDIDATES)
+      } catch (error) {
+        console.warn('[skills] vector candidate selection failed, fallback to token scoring:', error)
+      }
+    }
+
+    const sourceDocuments = vectorDocuments.length > 0 ? vectorDocuments : documents
+    const scored = sourceDocuments
+      .map((doc) => {
+        const skill = {
+          name: doc.name,
+          version: doc.version,
+          description: doc.description,
+          builtin: BUILTIN_SKILLS.has(doc.name),
+        }
+        const score = vectorDocuments.length > 0
+          ? 1
+          : scoreSkillForQuery(query, skill, doc.content)
         if (score <= 0) return null
-        const meta = parseSkillFrontmatter(loaded.content)
         return {
           score,
           skill: {
-            name: meta.name || skill.name,
-            version: meta.version || skill.version,
-            description: meta.description || skill.description,
-            rawContent: loaded.content,
+            name: doc.name,
+            version: doc.version,
+            description: doc.description,
+            rawContent: doc.content,
           },
         }
       })
@@ -373,7 +406,14 @@ export class SkillManagerService {
       .sort((a, b) => b.score - a.score || a.skill.name.localeCompare(b.skill.name))
       .slice(0, DEFAULT_AGENT_SKILL_CANDIDATES)
 
-    const { items: reranked } = await rerankCandidates(query, scored, {
+    const { items: reranked } = await rerankCandidates(query, scored.map((entry) => ({
+      item: entry,
+      text: [
+        `Skill ${entry.skill.name}`,
+        entry.skill.description,
+        compactSkillContent(entry.skill.rawContent, 2400),
+      ].filter(Boolean).join('\n'),
+    })), {
       topN: safeLimit,
     })
 

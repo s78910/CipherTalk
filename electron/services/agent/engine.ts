@@ -2,7 +2,7 @@
  * 编排引擎 —— 用 AI SDK 的 ToolLoopAgent 跑 ReAct 循环，流式产出 UIMessageChunk。
  * 运行在 AI utilityProcess 子进程内（见文档 §3.1/§5.2）。
  */
-import { generateText, ToolLoopAgent, stepCountIs, type ModelMessage, type ProviderOptions, type UIMessageChunk } from 'ai'
+import { generateText, ToolLoopAgent, stepCountIs, type ModelMessage, type ProviderOptions, type StepResult, type ToolSet, type UIMessageChunk } from 'ai'
 import { createLanguageModel } from './provider'
 import { buildSystemPrompt } from './prompts'
 import { buildTools } from './tools'
@@ -14,6 +14,21 @@ import { reportAgentProgress, withAgentProgress } from './progress'
 import type { AgentProgressReporter, AgentProviderConfig, AgentRunInput } from './types'
 
 const MAX_STEPS = 24
+
+/**
+ * query_sql 门控：只有当模型已经实际用过下列结构化检索/统计工具后，才把 query_sql 放进
+ * activeTools 解锁。防止模型一上来就绕过专用工具直接写 SQL —— 结构化工具是一步到位的首选，
+ * SQL 只是兜底。模型最差也得先尝试一次结构化工具，下一步才能拿到 SQL，不会卡死。见 prompts.ts「选工具速查」。
+ */
+const SQL_GATE_UNLOCK_TOOLS = new Set([
+  'search_messages', 'semantic_search', 'chat_stats',
+  'get_timeline', 'get_context', 'list_groups', 'group_members', 'group_member_ranking',
+])
+
+function activeToolsFor(steps: ReadonlyArray<StepResult<ToolSet>>, toolNames: string[]): string[] {
+  const unlocked = steps.some((step) => step.toolCalls.some((call) => SQL_GATE_UNLOCK_TOOLS.has(call.toolName)))
+  return unlocked ? toolNames : toolNames.filter((name) => name !== 'query_sql')
+}
 
 function toCamelCase(value: string): string {
   return value.replace(/[-_\s]+([a-zA-Z0-9])/g, (_match, char: string) => char.toUpperCase())
@@ -143,15 +158,20 @@ export async function runAgent(
   await withAgentProgress(onProgress, async () => {
     reportAgentProgress({ stage: 'run_started', title: '开始分析聊天记录' })
     const memoryContext = await buildMemoryContext(input.scope)
+    const tools = withToolTimeouts(buildTools(input.scope, input.providerConfig, input.mcpTools))
+    const toolNames = Object.keys(tools)
     const agent = new ToolLoopAgent({
       model: createLanguageModel(input.providerConfig),
       instructions: buildSystemPrompt(input.scope, input.skills) + memoryContext,
-      tools: withToolTimeouts(buildTools(input.scope, input.providerConfig, input.mcpTools)),
+      tools,
       // 步数上限 + 死循环检测（连续 N 步相同工具调用即停），见 guards.ts
       stopWhen: [stepCountIs(MAX_STEPS), loopGuardCondition()],
       providerOptions: buildReasoningProviderOptions(input),
-      // 每步压缩上下文：裁掉旧工具结果/推理痕迹，防长对话或多工具循环爆上下文（见 compaction.ts）
-      prepareStep: ({ messages }) => ({ messages: compactMessages(messages) }),
+      // 每步压缩上下文（裁旧工具结果/推理痕迹，见 compaction.ts）+ query_sql 门控（见 activeToolsFor）
+      prepareStep: ({ messages, steps }) => ({
+        messages: compactMessages(messages),
+        activeTools: activeToolsFor(steps, toolNames),
+      }),
     })
 
     const result = await agent.stream({ messages: input.messages, abortSignal: signal })

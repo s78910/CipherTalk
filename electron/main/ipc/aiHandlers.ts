@@ -58,10 +58,20 @@ export function registerAiHandlers(_ctx: MainProcessContext): void {
       const { buildReadOnlyMcpToolDescriptors } = await import('../../services/agent/mcpToolPolicy')
       const { skillManagerService } = await import('../../services/skillManagerService')
       const { rerankCandidates } = await import('../../services/ai/rerankService')
+      const { agentResourceVectorService } = await import('../../services/agent/agentResourceVectorService')
       const readOnlyMcpTools = buildReadOnlyMcpToolDescriptors(mcpClientService.getConnectedToolSchemas())
+      let mcpCandidates = readOnlyMcpTools
+      if (agentResourceVectorService.isReady()) {
+        try {
+          const vectorMcpTools = await agentResourceVectorService.searchMcpTools(lastUserText, readOnlyMcpTools, 24)
+          if (vectorMcpTools.length > 0) mcpCandidates = vectorMcpTools
+        } catch (error) {
+          console.warn('[agent:run] MCP vector candidate selection failed, fallback to all read-only tools:', error)
+        }
+      }
       const mcpTools = (await rerankCandidates(
         lastUserText,
-        readOnlyMcpTools.map((tool) => ({
+        mcpCandidates.map((tool) => ({
           item: tool,
           text: [
             `MCP ${tool.serverName}/${tool.toolName}`,
@@ -246,6 +256,55 @@ export function registerAiHandlers(_ctx: MainProcessContext): void {
       await refreshResolvedProxyUrl()
       const indexed = await messageVectorService.ensureSessionVectors(sessionId, cfg, undefined, (progress) => {
         if (!sender.isDestroyed()) sender.send('embedding:buildProgress', progress)
+      })
+      return { success: true, indexed }
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : String(e) }
+    }
+  })
+
+  ipcMain.handle('embedding:agentResourceStatus', async (_e, kind: 'skill' | 'mcp_tool') => {
+    try {
+      const { getEmbeddingConfig } = await import('../../services/ai/embeddingService')
+      const { agentResourceVectorService } = await import('../../services/agent/agentResourceVectorService')
+      const cfg = getEmbeddingConfig()
+      if (kind === 'skill') {
+        const { skillManagerService } = await import('../../services/skillManagerService')
+        return { success: true, status: agentResourceVectorService.getSkillStatus(skillManagerService.getSkillResourceDocuments(), cfg) }
+      }
+      const { mcpClientService } = await import('../../services/mcpClientService')
+      const { buildReadOnlyMcpToolDescriptors } = await import('../../services/agent/mcpToolPolicy')
+      const tools = buildReadOnlyMcpToolDescriptors(mcpClientService.getConnectedToolSchemas())
+      return { success: true, status: agentResourceVectorService.getMcpStatus(tools, cfg) }
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : String(e) }
+    }
+  })
+
+  ipcMain.handle('embedding:buildAgentResources', async (event, kind: 'skill' | 'mcp_tool') => {
+    try {
+      const { getEmbeddingConfig } = await import('../../services/ai/embeddingService')
+      const { refreshResolvedProxyUrl } = await import('../../services/ai/proxyFetch')
+      const { agentResourceVectorService } = await import('../../services/agent/agentResourceVectorService')
+      const cfg = getEmbeddingConfig()
+      if (!agentResourceVectorService.isReady(cfg)) {
+        return { success: false, error: '未启用或未配置嵌入模型（请先在设置 → 嵌入中配置并启用）' }
+      }
+      const sender = event.sender
+      await refreshResolvedProxyUrl()
+      if (kind === 'skill') {
+        const { skillManagerService } = await import('../../services/skillManagerService')
+        const indexed = await agentResourceVectorService.buildSkills(skillManagerService.getSkillResourceDocuments(), cfg, (progress) => {
+          if (!sender.isDestroyed()) sender.send('embedding:agentResourceBuildProgress', progress)
+        })
+        return { success: true, indexed }
+      }
+      const { mcpClientService } = await import('../../services/mcpClientService')
+      const { buildReadOnlyMcpToolDescriptors } = await import('../../services/agent/mcpToolPolicy')
+      const tools = buildReadOnlyMcpToolDescriptors(mcpClientService.getConnectedToolSchemas())
+      if (tools.length === 0) return { success: false, error: '暂无可向量化的已连接只读 MCP 工具' }
+      const indexed = await agentResourceVectorService.buildMcpTools(tools, cfg, (progress) => {
+        if (!sender.isDestroyed()) sender.send('embedding:agentResourceBuildProgress', progress)
       })
       return { success: true, indexed }
     } catch (e) {
