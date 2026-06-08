@@ -253,6 +253,129 @@ function toolPartProgressKey(part: unknown, toolName: string) {
   return toolProgressKey(toolName, toolCallId)
 }
 
+const SUB_AGENT_PROGRESS_LIMIT = 6
+
+function subAgentProgressKey(progress: AgentProgressEvent) {
+  if (progress.toolCallId) return `call:${progress.toolCallId}`
+  if (progress.toolName && (progress.stage === 'tool_started' || progress.stage === 'tool_finished' || progress.stage === 'error')) {
+    return `tool:${progress.depth ?? 0}:${progress.toolName}`
+  }
+  return `event:${progress.depth ?? 0}:${progress.stage}:${progress.title}:${progress.sessionId ?? ''}`
+}
+
+function mergeSubAgentProgress(prev: AgentProgressEvent[], progress: AgentProgressEvent) {
+  const key = subAgentProgressKey(progress)
+  const next = prev.filter((item) => subAgentProgressKey(item) !== key)
+  return [...next, progress].slice(-SUB_AGENT_PROGRESS_LIMIT)
+}
+
+function formatSubAgentStage(progress: AgentProgressEvent) {
+  switch (progress.stage) {
+    case 'tool_started':
+      return '开始'
+    case 'tool_finished':
+      return '完成'
+    case 'indexing':
+      return '索引'
+    case 'searching':
+      return '检索'
+    case 'error':
+      return '出错'
+    case 'run_finished':
+      return '完成'
+    case 'run_started':
+    default:
+      return '启动'
+  }
+}
+
+function formatSubAgentProgressTitle(progress: AgentProgressEvent) {
+  if (progress.toolName) return `${formatToolName(progress.toolName)} · ${formatSubAgentStage(progress)}`
+  return progress.title
+}
+
+function formatSubAgentProgressMeta(progress: AgentProgressEvent): string[] {
+  const meta: string[] = []
+  if (progress.messagesScanned != null) meta.push(`扫描 ${progress.messagesScanned} 条`)
+  if (progress.indexedCount != null) meta.push(`索引 ${progress.indexedCount} 条`)
+  if (progress.sessionsScanned != null) meta.push(`会话 ${progress.sessionsScanned}`)
+  if (progress.coverage) meta.push(progress.coverage)
+  if (progress.elapsedMs != null) meta.push(formatElapsed(progress.elapsedMs))
+  if (progress.detail) meta.push(progress.detail)
+  return meta
+}
+
+function subAgentProgressIcon(progress: AgentProgressEvent) {
+  if (progress.stage === 'searching') return Search
+  if (progress.stage === 'indexing') return Sparkles
+  if (progress.stage === 'error') return Info
+  return Wrench
+}
+
+function subAgentProgressDotClass(progress: AgentProgressEvent) {
+  if (progress.stage === 'error') return 'bg-destructive'
+  if (progress.stage === 'tool_finished' || progress.stage === 'run_finished') return 'bg-emerald-500'
+  return 'bg-foreground/70'
+}
+
+function SubAgentProgressPanel({ events }: { events: AgentProgressEvent[] }) {
+  if (events.length === 0) return null
+  const latestKey = subAgentProgressKey(events[events.length - 1])
+
+  return (
+    <section
+      aria-live="polite"
+      className="mt-3 rounded-(--agent-radius,12px) border border-border bg-surface/80 px-3 py-2 text-xs shadow-xs"
+    >
+      <div className="mb-1.5 flex min-w-0 items-center gap-2 font-medium text-foreground">
+        <Sparkles className="size-3.5 shrink-0" />
+        <span className="shrink-0">子助手运行中</span>
+        <span className="min-w-0 truncate text-muted-foreground font-normal">
+          {formatSubAgentProgressTitle(events[events.length - 1])}
+        </span>
+      </div>
+      <div className="space-y-1">
+        {events.map((progress) => {
+          const Icon = subAgentProgressIcon(progress)
+          const itemKey = subAgentProgressKey(progress)
+          const meta = formatSubAgentProgressMeta(progress)
+          const active = itemKey === latestKey
+            && progress.stage !== 'tool_finished'
+            && progress.stage !== 'run_finished'
+            && progress.stage !== 'error'
+          return (
+            <div
+              className="flex min-w-0 items-start gap-2 rounded-(--agent-radius,12px) px-1.5 py-1 text-muted-foreground"
+              key={itemKey}
+            >
+              <span className="relative mt-0.5 inline-flex size-4 shrink-0 items-center justify-center">
+                <Icon className="size-3.5" />
+                <span className={`absolute -right-0.5 -top-0.5 size-1.5 rounded-full ${subAgentProgressDotClass(progress)} ${active ? 'animate-pulse' : ''}`} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-foreground">{formatSubAgentProgressTitle(progress)}</div>
+                {meta.length > 0 && (
+                  <div className="mt-0.5 flex min-w-0 flex-wrap gap-1">
+                    {meta.map((item) => (
+                      <span
+                        className="max-w-full truncate rounded-(--agent-radius,12px) bg-muted/60 px-1.5 py-0.5"
+                        key={item}
+                        title={item}
+                      >
+                        {item}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </section>
+  )
+}
+
 function collectToolBadges(value: unknown, badges: string[] = []): string[] {
   if (badges.length >= 6 || value == null) return badges
   if (typeof value === 'string') {
@@ -1062,6 +1185,7 @@ export default function AgentPage() {
   const [currentProviderId, setCurrentProviderId] = useState('')
   const [currentModelId, setCurrentModelId] = useState('')
   const [toolElapsedByKey, setToolElapsedByKey] = useState<Record<string, number>>({})
+  const [subAgentProgress, setSubAgentProgress] = useState<AgentProgressEvent[]>([])
   const [agentNotice, setAgentNotice] = useState('')
   const [usageDetailsModal, setUsageDetailsModal] = useState<AgentMessageMetadata | null>(null)
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
@@ -1158,6 +1282,12 @@ export default function AgentPage() {
       : { kind: 'global' }
 
   const handleAgentProgress = useCallback((progress: AgentProgressEvent) => {
+    if ((progress.depth ?? 0) > 0) {
+      setSubAgentProgress((prev) => mergeSubAgentProgress(prev, progress))
+    } else if (progress.stage === 'run_started') {
+      setSubAgentProgress([])
+    }
+
     if (progress.stage === 'tool_finished' && progress.toolName && progress.elapsedMs) {
       setToolElapsedByKey((prev) => ({
         ...prev,
@@ -1354,6 +1484,7 @@ export default function AgentPage() {
     setTitleDraft('')
     setTitleLoading(false)
     setToolElapsedByKey({})
+    setSubAgentProgress([])
     setAgentNotice('')
     activeScopeRef.current = { kind: 'global' }
     lastSavedMessagesRef.current = ''
@@ -1380,6 +1511,7 @@ export default function AgentPage() {
       activeScopeRef.current = loaded.scope || { kind: 'global' }
       setMentions([])
       setToolElapsedByKey({})
+      setSubAgentProgress([])
       setAgentNotice('')
       setTitleLoading(false)
       titleRequestSeqRef.current += 1
@@ -1400,6 +1532,7 @@ export default function AgentPage() {
         activeScopeRef.current = { kind: 'global' }
         lastSavedMessagesRef.current = ''
         setToolElapsedByKey({})
+        setSubAgentProgress([])
       }
     })
   }, [setMessages])
@@ -1504,6 +1637,7 @@ export default function AgentPage() {
   const handleSubmit = (message: PromptInputMessage) => {
     if (busy) {
       void stop()
+      setSubAgentProgress([])
       return
     }
     if (!selectedModelSupportsTools) {
@@ -1528,6 +1662,7 @@ export default function AgentPage() {
       activeScopeRef.current = submitScope
       submitScopeRef.current = submitScope
       setAgentNotice('')
+      setSubAgentProgress([])
 
       if (!conversationIdRef.current) {
         const fallback = buildFallbackConversationTitle(firstMessageForTitle || text)
@@ -1825,6 +1960,7 @@ export default function AgentPage() {
               {agentNotice}
             </div>
           )}
+          {busy && subAgentProgress.length > 0 && <SubAgentProgressPanel events={subAgentProgress} />}
           {status === 'submitted' && <Loader />}
         </ConversationContent>
         <ConversationScrollButton />

@@ -35,6 +35,21 @@ function toCamelCase(value: string): string {
   return value.replace(/[-_\s]+([a-zA-Z0-9])/g, (_match, char: string) => char.toUpperCase())
 }
 
+function hostFromUrl(url: string): string | null {
+  if (!url) return null
+  try {
+    return new URL(url).host || null
+  } catch {
+    return null
+  }
+}
+
+function isOfficialOpenAIResponsesEndpoint(input: AgentRunInput): boolean {
+  return input.providerConfig.providerKind === 'openai-responses' &&
+    input.providerConfig.name !== 'custom' &&
+    hostFromUrl(input.providerConfig.baseURL) === 'api.openai.com'
+}
+
 function buildProviderOptions(input: AgentRunInput): ProviderOptions | undefined {
   const effort = input.providerConfig.reasoningEffort
   const isOpenAIProtocol = input.providerConfig.providerKind === 'openai-responses' || input.providerConfig.providerKind === 'openai-compatible'
@@ -44,7 +59,9 @@ function buildProviderOptions(input: AgentRunInput): ProviderOptions | undefined
 
   const option: Record<string, unknown> = {}
   if (effort && effort !== 'auto') option.reasoningEffort = effort
-  if (input.providerConfig.providerKind === 'openai-responses') option.store = true
+  if (input.providerConfig.providerKind === 'openai-responses') {
+    option.store = isOfficialOpenAIResponsesEndpoint(input)
+  }
   if (Object.keys(option).length === 0) return undefined
 
   const keys = new Set(['openai'])
