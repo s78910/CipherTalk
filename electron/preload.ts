@@ -110,14 +110,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // AI 长期记忆管理（agent_memory.db）
   memory: {
-    list: (opts?: { sourceType?: 'profile' | 'fact'; sessionId?: string; limit?: number }) =>
+    list: (opts?: {
+      sourceType?: 'profile' | 'fact' | 'relationship'
+      sourceTypes?: Array<'profile' | 'fact' | 'relationship'>
+      sessionId?: string
+      tags?: string[]
+      withoutTags?: string[]
+      minConfidence?: number
+      limit?: number
+    }) =>
       ipcRenderer.invoke('memory:list', opts) as Promise<{ success: boolean; items?: unknown[]; stats?: { itemCount: number }; error?: string }>,
     delete: (id: number) =>
       ipcRenderer.invoke('memory:delete', id) as Promise<{ success: boolean; error?: string }>,
-    update: (payload: { id: number; sourceType?: 'profile' | 'fact'; content?: string; importance?: number; tags?: string[] }) =>
+    update: (payload: { id: number; sourceType?: 'profile' | 'fact' | 'relationship'; content?: string; importance?: number; confidence?: number; tags?: string[] }) =>
       ipcRenderer.invoke('memory:update', payload) as Promise<{ success: boolean; item?: unknown; error?: string }>,
     consolidate: () =>
       ipcRenderer.invoke('memory:consolidate') as Promise<{ success: boolean; result?: { removed: number; groups: number; scanned: number }; error?: string }>,
+    exportMarkdown: (outputDir: string) =>
+      ipcRenderer.invoke('memory:exportMarkdown', outputDir) as Promise<{ success: boolean; result?: { files: string[]; itemCount: number }; error?: string }>,
   },
 
   // 嵌入模型（语义/向量检索）

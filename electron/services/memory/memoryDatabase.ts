@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3'
 import { cosineSimilarity } from 'ai'
 import { createHash } from 'crypto'
-import { existsSync, mkdirSync } from 'fs'
+import { existsSync, mkdirSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { ConfigService } from '../config'
 import {
@@ -30,6 +30,22 @@ export type MemoryKeywordSearchHit = {
   rank: number
   score: number
   retrievalSource: 'memory_fts' | 'memory_like'
+}
+
+export type MemoryListOptions = {
+  sourceType?: MemorySourceType
+  sourceTypes?: MemorySourceType[]
+  sessionId?: string
+  tags?: string[]
+  withoutTags?: string[]
+  minConfidence?: number
+  limit?: number
+  offset?: number
+}
+
+export type MemoryMarkdownExportResult = {
+  files: string[]
+  itemCount: number
 }
 
 function nowMs(): number {
@@ -178,6 +194,19 @@ function safeSourceType(value: string): MemorySourceType {
   return MEMORY_SOURCE_TYPES.includes(value as MemorySourceType)
     ? value as MemorySourceType
     : 'message'
+}
+
+function markdownEscape(value: string): string {
+  return String(value || '').replace(/\r\n/g, '\n').trim()
+}
+
+function safeFileSegment(value: string): string {
+  const text = String(value || 'global').trim() || 'global'
+  return text.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').slice(0, 120) || 'global'
+}
+
+function memoryAbout(item: MemoryItem): string {
+  return item.sessionId || item.contactId || item.groupId || 'global'
 }
 
 function toMemoryItem(row: MemoryItemRow): MemoryItem {
@@ -440,22 +469,39 @@ export class MemoryDatabase {
     return row ? toMemoryItem(row) : null
   }
 
-  listMemoryItems(options: {
-    sourceType?: MemorySourceType
-    sessionId?: string
-    limit?: number
-    offset?: number
-  } = {}): MemoryItem[] {
+  listMemoryItems(options: MemoryListOptions = {}): MemoryItem[] {
     const clauses: string[] = []
     const params: Record<string, unknown> = {}
 
-    if (options.sourceType) {
-      clauses.push('source_type = @sourceType')
-      params.sourceType = options.sourceType
+    const sourceTypes = options.sourceTypes?.length
+      ? Array.from(new Set(options.sourceTypes.filter((type) => MEMORY_SOURCE_TYPES.includes(type))))
+      : options.sourceType
+        ? [options.sourceType]
+        : []
+    if (sourceTypes.length > 0) {
+      const placeholders = sourceTypes.map((_, index) => `@sourceType${index}`)
+      sourceTypes.forEach((sourceType, index) => {
+        params[`sourceType${index}`] = sourceType
+      })
+      clauses.push(`source_type IN (${placeholders.join(', ')})`)
     }
     if (options.sessionId) {
       clauses.push('session_id = @sessionId')
       params.sessionId = options.sessionId
+    }
+    if (options.minConfidence !== undefined) {
+      clauses.push('confidence >= @minConfidence')
+      params.minConfidence = clamp01(options.minConfidence, 0)
+    }
+    for (const tag of options.tags || []) {
+      const key = `tag${Object.keys(params).length}`
+      clauses.push(`tags_json LIKE @${key}`)
+      params[key] = `%"${String(tag).trim()}"%`
+    }
+    for (const tag of options.withoutTags || []) {
+      const key = `withoutTag${Object.keys(params).length}`
+      clauses.push(`tags_json NOT LIKE @${key}`)
+      params[key] = `%"${String(tag).trim()}"%`
     }
 
     const limit = Math.max(1, Math.min(Math.floor(options.limit || 100), 1000))
@@ -788,6 +834,54 @@ export class MemoryDatabase {
     return {
       itemCount: Number(itemRow.count || 0)
     }
+  }
+
+  exportMarkdown(outputDir: string): MemoryMarkdownExportResult {
+    const targetDir = String(outputDir || '').trim()
+    if (!targetDir) throw new Error('outputDir is required')
+    mkdirSync(targetDir, { recursive: true })
+    const sessionsDir = join(targetDir, 'sessions')
+    mkdirSync(sessionsDir, { recursive: true })
+
+    const items = this.listMemoryItems({ limit: 1000 })
+      .sort((a, b) => b.importance - a.importance || b.confidence - a.confidence || b.updatedAt - a.updatedAt)
+    const files: string[] = []
+    const write = (relativePath: string, content: string) => {
+      const filePath = join(targetDir, relativePath)
+      mkdirSync(dirname(filePath), { recursive: true })
+      writeFileSync(filePath, content, 'utf8')
+      files.push(filePath)
+    }
+    const formatItem = (item: MemoryItem) => (
+      `- [${item.id}] ${markdownEscape(item.content)} ` +
+      `(type=${item.sourceType}, confidence=${item.confidence.toFixed(2)}, importance=${item.importance.toFixed(2)}, about=${memoryAbout(item)})`
+    )
+
+    write('MEMORY.md', [
+      '# CipherTalk Memory Index',
+      '',
+      ...items.slice(0, 200).map(formatItem),
+      '',
+    ].join('\n'))
+
+    for (const type of ['profile', 'fact', 'relationship', 'timeline_summary'] as MemorySourceType[]) {
+      const typed = items.filter((item) => item.sourceType === type)
+      if (typed.length === 0) continue
+      write(`${type}.md`, [`# ${type}`, '', ...typed.map(formatItem), ''].join('\n'))
+    }
+
+    const bySession = new Map<string, MemoryItem[]>()
+    for (const item of items) {
+      if (!item.sessionId) continue
+      const bucket = bySession.get(item.sessionId)
+      if (bucket) bucket.push(item)
+      else bySession.set(item.sessionId, [item])
+    }
+    for (const [sessionId, sessionItems] of bySession) {
+      write(`sessions/${safeFileSegment(sessionId)}.md`, [`# ${sessionId}`, '', ...sessionItems.map(formatItem), ''].join('\n'))
+    }
+
+    return { files, itemCount: items.length }
   }
 }
 

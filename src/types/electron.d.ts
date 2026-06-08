@@ -128,14 +128,16 @@ export interface StatsPartialError {
 
 export interface AgentMemoryItem {
   id: number
-  sourceType: 'profile' | 'fact' | string
+  sourceType: 'profile' | 'fact' | 'relationship' | string
   sessionId: string | null
   contactId: string | null
+  groupId?: string | null
   title: string
   content: string
   importance: number
   confidence: number
   tags: string[]
+  sourceRefs?: Array<{ sessionId: string; localId: number; createTime: number; sortSeq: number; senderUsername?: string; excerpt?: string }>
   createdAt: number
   updatedAt: number
 }
@@ -1015,10 +1017,11 @@ export interface ElectronAPI {
     getLastConversation: (scope?: unknown) => Promise<{ success: boolean; conversation?: unknown; error?: string }>
   }
   memory: {
-    list: (opts?: { sourceType?: 'profile' | 'fact'; sessionId?: string; limit?: number }) => Promise<{ success: boolean; items?: AgentMemoryItem[]; stats?: { itemCount: number }; error?: string }>
+    list: (opts?: { sourceType?: 'profile' | 'fact' | 'relationship'; sourceTypes?: Array<'profile' | 'fact' | 'relationship'>; sessionId?: string; tags?: string[]; withoutTags?: string[]; minConfidence?: number; limit?: number }) => Promise<{ success: boolean; items?: AgentMemoryItem[]; stats?: { itemCount: number }; error?: string }>
     delete: (id: number) => Promise<{ success: boolean; error?: string }>
-    update: (payload: { id: number; sourceType?: 'profile' | 'fact'; content?: string; importance?: number; tags?: string[] }) => Promise<{ success: boolean; item?: AgentMemoryItem; error?: string }>
+    update: (payload: { id: number; sourceType?: 'profile' | 'fact' | 'relationship'; content?: string; importance?: number; confidence?: number; tags?: string[] }) => Promise<{ success: boolean; item?: AgentMemoryItem; error?: string }>
     consolidate: () => Promise<{ success: boolean; result?: { removed: number; groups: number; scanned: number }; error?: string }>
+    exportMarkdown: (outputDir: string) => Promise<{ success: boolean; result?: { files: string[]; itemCount: number }; error?: string }>
   }
   embedding: {
     getConfig: () => Promise<{ success: boolean; config?: EmbeddingConfig; error?: string }>

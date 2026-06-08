@@ -7,7 +7,7 @@ import type { ProviderOptions } from '@ai-sdk/provider-utils'
 import { createLanguageModel } from './provider'
 import { buildSystemPrompt } from './prompts'
 import { buildTools } from './tools'
-import { buildMemoryContext, extractMemories } from './tools/memory'
+import { buildMemoryContext, extractMemories, preloadRelevantMemories } from './tools/memory'
 import { compactMessages } from './compaction'
 import { runFinalReview, summarizeToolOutput, type ToolOutputSummary } from './finalReview'
 import { loopGuardCondition, withToolTimeouts } from './guards'
@@ -166,12 +166,14 @@ export async function runAgent(
 ): Promise<void> {
   await withAgentProgress(onProgress, async () => {
     reportAgentProgress({ stage: 'run_started', title: '开始分析聊天记录' })
+    const userText = lastUserText(input.messages)
     const memoryContext = await buildMemoryContext(input.scope)
+    const relevantMemoryContext = await preloadRelevantMemories(userText, input.scope)
     const tools = withToolTimeouts(buildTools(input.scope, input.providerConfig, input.mcpTools))
     const activeToolNames = Object.keys(tools)
     const agent = new ToolLoopAgent({
       model: createLanguageModel(input.providerConfig),
-      instructions: buildSystemPrompt(input.scope, input.skills) + memoryContext,
+      instructions: buildSystemPrompt(input.scope, input.skills) + memoryContext + relevantMemoryContext,
       tools,
       temperature: DEFAULT_AGENT_TEMPERATURE,
       // 步数上限 + 死循环检测（连续 N 步相同工具调用即停），见 guards.ts
