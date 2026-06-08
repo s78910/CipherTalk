@@ -37,7 +37,7 @@ function sanitizeCell(value: unknown): unknown {
 export const querySql = tool({
   description:
     '【兜底·只读·最后手段】仅当 search_messages / semantic_search / chat_stats / get_timeline / get_context / list_groups / group_members / group_member_ranking 这些结构化工具都无法回答时，才用它直接写只读 SQL 查原微信库。\n' +
-    '调用前必须先在思考里写明：你试过哪个结构化工具、它为什么不够用——没尝试过结构化工具就直接写 SQL 属于错误用法；能用结构化工具回答的一律不准用本工具。\n' +
+    '调用时必须填写 reason、attemptedTools、whyStructuredToolsInsufficient 三个审计字段；没尝试过结构化工具就直接写 SQL 属于错误用法；能用结构化工具回答的一律不准用本工具。\n' +
     '表结构不提供文档，需自己探查：先 SELECT name FROM sqlite_master WHERE type=\'table\' 看有哪些表，再 PRAGMA table_info("表名") 看列。\n' +
     '仅允许单条只读 SELECT / WITH / EXPLAIN / PRAGMA table_info；写入/DDL/事务会被直接拒绝。别 SELECT 头像/图片等大字段。',
   inputSchema: z.object({
@@ -46,9 +46,19 @@ export const querySql = tool({
     dbPath: z.string().optional().describe("kind='message' 时指定分片库的绝对路径；不传会返回可用 dbPath 列表"),
     params: z.array(z.union([z.string(), z.number(), z.null()])).optional().describe('SQL 中 ? 占位对应的参数值'),
     limit: z.number().int().min(1).max(1000).default(100).describe('返回行数上限'),
+    reason: z.string().optional().describe('为什么本次必须使用 SQL 兜底'),
+    attemptedTools: z.array(z.string()).optional().describe('已经尝试过且不足以回答的结构化工具名，如 chat_stats/search_messages'),
+    whyStructuredToolsInsufficient: z.string().optional().describe('这些结构化工具为什么无法覆盖本次查询'),
   }),
-  execute: async ({ kind, sql, dbPath, params, limit }) => {
+  execute: async ({ kind, sql, dbPath, params, limit, reason, attemptedTools, whyStructuredToolsInsufficient }) => {
     try {
+      if (!reason?.trim()) return { error: 'query_sql 需要填写 reason 审计字段' }
+      if (!Array.isArray(attemptedTools) || attemptedTools.filter((item) => item.trim()).length === 0) {
+        return { error: 'query_sql 需要填写 attemptedTools，且至少包含一个已尝试的结构化工具' }
+      }
+      if (!whyStructuredToolsInsufficient?.trim()) {
+        return { error: 'query_sql 需要填写 whyStructuredToolsInsufficient 审计字段' }
+      }
       const safe = assertReadOnly(sql)
       const { dbAdapter } = await import('../../dbAdapter')
 
@@ -67,7 +77,16 @@ export const querySql = tool({
         for (const key of Object.keys(row)) out[key] = sanitizeCell(row[key])
         return out
       })
-      return { rowCount: rows.length, truncated: rows.length > limit, rows: limited }
+      return {
+        audit: {
+          reason,
+          attemptedTools,
+          whyStructuredToolsInsufficient,
+        },
+        rowCount: rows.length,
+        truncated: rows.length > limit,
+        rows: limited,
+      }
     } catch (error) {
       return { error: error instanceof Error ? error.message : String(error) }
     }

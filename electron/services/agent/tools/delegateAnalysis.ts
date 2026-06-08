@@ -17,6 +17,7 @@ import type { AgentProviderConfig, AgentScope } from '../types'
 
 const SUB_AGENT_MAX_STEPS = 12
 const MAX_DELEGATED_EVIDENCE = 15
+const DEFAULT_SUB_AGENT_TEMPERATURE = 0.2
 
 /** 从子 Agent 的各步工具结果里聚合 evidence（去重、限量），供主 Agent 标注可点出处。 */
 function collectEvidence(steps: ReadonlyArray<{ toolResults?: ReadonlyArray<{ output?: unknown }> }>): AgentEvidenceItem[] {
@@ -65,6 +66,7 @@ export function createDelegateAnalysis(opts: {
           model: createLanguageModel(opts.providerConfig),
           instructions: buildSystemPrompt(opts.scope) + DELEGATE_SUFFIX,
           tools: opts.buildSubTools(),
+          temperature: DEFAULT_SUB_AGENT_TEMPERATURE,
           stopWhen: [stepCountIs(SUB_AGENT_MAX_STEPS), loopGuardCondition()],
         })
         const result = await withSubAgentScope(() => subAgent.generate({ prompt: task, abortSignal }))

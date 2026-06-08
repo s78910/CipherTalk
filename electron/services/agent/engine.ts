@@ -15,6 +15,7 @@ import { reportAgentProgress, withAgentProgress } from './progress'
 import type { AgentProgressReporter, AgentProviderConfig, AgentRunInput } from './types'
 
 const MAX_STEPS = 24
+const DEFAULT_AGENT_TEMPERATURE = 0.2
 
 /**
  * query_sql 门控：只有当模型已经实际用过下列结构化检索/统计工具后，才把 query_sql 放进
@@ -186,6 +187,7 @@ export async function runAgent(
       model: createLanguageModel(input.providerConfig),
       instructions: buildSystemPrompt(input.scope, input.skills) + memoryContext,
       tools,
+      temperature: DEFAULT_AGENT_TEMPERATURE,
       // 步数上限 + 死循环检测（连续 N 步相同工具调用即停），见 guards.ts
       stopWhen: [stepCountIs(MAX_STEPS), loopGuardCondition()],
       providerOptions: buildProviderOptions(input),
