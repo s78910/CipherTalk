@@ -185,11 +185,11 @@ export interface ElectronAPI {
     onChanged: (callback: (payload: { key: string; value: unknown }) => void) => () => void
   }
   pet: {
-    listInstalled: () => Promise<{ success: boolean; pets?: Array<{ slug: string; displayName: string; description: string }>; error?: string }>
+    listInstalled: () => Promise<{ success: boolean; pets?: Array<{ slug: string; displayName: string; description: string; builtin?: boolean }>; error?: string }>
     manifest: (force?: boolean) => Promise<{ success: boolean; pets?: Array<{ slug: string; displayName: string; kind?: string; submittedBy?: string; spritesheetUrl: string; petJsonUrl: string }>; error?: string }>
-    install: (slug: string) => Promise<{ success: boolean; pet?: { slug: string; displayName: string; description: string }; error?: string }>
+    install: (slug: string) => Promise<{ success: boolean; pet?: { slug: string; displayName: string; description: string; builtin?: boolean }; error?: string }>
     remove: (slug: string) => Promise<{ success: boolean; error?: string }>
-    importZip: () => Promise<{ success: boolean; canceled?: boolean; pet?: { slug: string; displayName: string; description: string }; error?: string }>
+    importZip: () => Promise<{ success: boolean; canceled?: boolean; pet?: { slug: string; displayName: string; description: string; builtin?: boolean }; error?: string }>
     getSprite: (slug: string) => Promise<{ success: boolean; dataUrl?: string; error?: string }>
     setAgentState: (state: string) => void
     toggleDesktopWindow: (enabled: boolean) => Promise<{ success: boolean }>
@@ -197,6 +197,7 @@ export interface ElectronAPI {
     onAgentState: (callback: (state: string) => void) => () => void
     onWindowMove: (callback: (x: number) => void) => () => void
     onBubbleFrame: (callback: (frame: { expanded: boolean; baseLeft: number; baseTop: number; baseWidth: number; baseHeight: number }) => void) => () => void
+    onContextMenuOpened: (callback: () => void) => () => void
     onNotify: (callback: (payload: { username: string; displayName: string; avatarUrl?: string; preview: string; timestamp: number }) => void) => () => void
   }
   notify: {

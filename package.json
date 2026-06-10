@@ -198,6 +198,10 @@
         "to": "icon.ico"
       },
       {
+        "from": "public/miyuji",
+        "to": "builtin-pets/miyuji"
+      },
+      {
         "from": ".tmp/release-announcement.json",
         "to": "release-announcement.json"
       },

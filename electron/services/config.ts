@@ -148,9 +148,10 @@ interface ConfigSchema {
   }
   // 主进程探测到的系统代理 URL（写入后供 AI 子进程/嵌入跨进程读取；子进程无 session API 探测不了）
   aiResolvedProxyUrl: string
-  // AI 宠物（petdex 宠物包格式，宠物包存放在 userData/pets/<slug>/）
+  // AI 宠物（petdex 宠物包格式，用户宠物包存放在 cachePath/pets/<slug>/）
   petCurrent: string         // 当前宠物 slug，空 = 不展示
   petDesktopEnabled: boolean  // 桌面悬浮桌宠开关
+  petDefaultInitialized: boolean // 是否已执行过内置默认宠物初始化
   // 消息提醒：开启了"新消息提醒"的私聊会话用户名列表（默认全关，空数组）
   notifySessions: string[]
   mcpEnabled: boolean
@@ -242,6 +243,7 @@ const defaults: ConfigSchema = {
   aiResolvedProxyUrl: '',
   petCurrent: '',
   petDesktopEnabled: false,
+  petDefaultInitialized: false,
   notifySessions: [],
   mcpEnabled: false,
   mcpExposeMediaPaths: true,
