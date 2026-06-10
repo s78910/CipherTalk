@@ -3,6 +3,7 @@ import type { MainProcessContext } from '../context'
 import {
   fetchPetManifest,
   getPetSpriteDataUrl,
+  hasBuiltinPet,
   importPetZip,
   installPet,
   listInstalledPets,
@@ -10,9 +11,23 @@ import {
 } from '../../services/petService'
 
 export function registerPetHandlers(ctx: MainProcessContext): void {
+  const ensureDefaultPet = (): void => {
+    const config = ctx.getConfigService()
+    if (!config || config.get('petDefaultInitialized')) return
+
+    if (!config.get('petCurrent') && hasBuiltinPet()) {
+      config.set('petCurrent', 'miyuji')
+      ctx.broadcastToWindows('config:changed', { key: 'petCurrent', value: 'miyuji' })
+    }
+    config.set('petDefaultInitialized', true)
+  }
+
+  ensureDefaultPet()
+
   ipcMain.handle('pet:listInstalled', async () => {
     try {
-      return { success: true, pets: listInstalledPets() }
+      ensureDefaultPet()
+      return { success: true, pets: listInstalledPets(ctx.getConfigService()) }
     } catch (error) {
       return { success: false, error: String(error) }
     }
@@ -28,7 +43,7 @@ export function registerPetHandlers(ctx: MainProcessContext): void {
 
   ipcMain.handle('pet:install', async (_, slug: string) => {
     try {
-      return { success: true, pet: await installPet(slug) }
+      return { success: true, pet: await installPet(slug, ctx.getConfigService()) }
     } catch (error) {
       return { success: false, error: String(error) }
     }
@@ -36,7 +51,7 @@ export function registerPetHandlers(ctx: MainProcessContext): void {
 
   ipcMain.handle('pet:remove', async (_, slug: string) => {
     try {
-      removePet(slug)
+      removePet(slug, ctx.getConfigService())
       const config = ctx.getConfigService()
       if (config?.get('petCurrent') === slug) {
         config.set('petCurrent', '')
@@ -48,7 +63,7 @@ export function registerPetHandlers(ctx: MainProcessContext): void {
     }
   })
 
-  // 从本地压缩包导入宠物：弹文件选择框 → 解压校验 → 落到 userData/pets/
+  // 从本地压缩包导入宠物：弹文件选择框 → 解压校验 → 落到 cachePath/pets/
   ipcMain.handle('pet:importZip', async () => {
     const result = await dialog.showOpenDialog({
       title: '选择宠物压缩包',
@@ -58,14 +73,14 @@ export function registerPetHandlers(ctx: MainProcessContext): void {
     const zipPath = result.filePaths[0]
     if (result.canceled || !zipPath) return { success: false, canceled: true }
     try {
-      return { success: true, pet: importPetZip(zipPath) }
+      return { success: true, pet: importPetZip(zipPath, ctx.getConfigService()) }
     } catch (error) {
       return { success: false, error: String(error) }
     }
   })
 
   ipcMain.handle('pet:getSprite', async (_, slug: string) => {
-    const dataUrl = getPetSpriteDataUrl(slug)
+    const dataUrl = getPetSpriteDataUrl(slug, ctx.getConfigService())
     return dataUrl ? { success: true, dataUrl } : { success: false, error: '宠物精灵图不存在' }
   })
 

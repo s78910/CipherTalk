@@ -12,4 +12,10 @@ export function registerLocalProtocols(): void {
     console.log('[Protocol] 加载视频:', filePath)
     return net.fetch(`file:///${filePath}`)
   })
+
+  protocol.handle('local-image', (request) => {
+    let filePath = decodeURIComponent(request.url.replace('local-image://', ''))
+    filePath = filePath.replace(/\\/g, '/')
+    return net.fetch(`file:///${filePath}`)
+  })
 }

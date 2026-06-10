@@ -250,6 +250,7 @@ export function createWindowManager(ctx: MainProcessContext): WindowManager {
 
   const showPetContextMenu = (): void => {
     if (!petWindow || petWindow.isDestroyed()) return
+    petWindow.webContents.send('pet:contextMenuOpened')
     const menu = Menu.buildFromTemplate([
       {
         label: '退出宠物',

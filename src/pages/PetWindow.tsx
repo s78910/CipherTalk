@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { X } from 'lucide-react'
 import { useCurrentPetLoader } from '@/features/pets/PetContext'
 import { PetSprite } from '@/features/pets/PetSprite'
-import { petStateForAgent, type PetAgentState, type PetStateId } from '@/features/pets/petStates'
-import { useIdleFlair } from '@/features/pets/useIdleFlair'
+import { PET_STATES, petStateForAgent, type PetAgentState, type PetStateId } from '@/features/pets/petStates'
+import { DEFAULT_FLAIR_POOL, useIdleFlair } from '@/features/pets/useIdleFlair'
 
 type NotifyPayload = {
   username: string
@@ -85,10 +85,29 @@ export default function PetWindow() {
   const [dragState, setDragState] = useState<PetStateId | null>(null)
   const [notice, setNotice] = useState<NotifyPayload | null>(null)
   const [bubbleFrame, setBubbleFrame] = useState<BubbleFrame>(DEFAULT_BUBBLE_FRAME)
+  const [isPointerInside, setIsPointerInside] = useState(false)
+  const [hoverFlair, setHoverFlair] = useState<PetStateId | null>(null)
 
   const queueRef = useRef<NotifyPayload[]>([])
   const showingRef = useRef(false)
   const dismissTimerRef = useRef(0)
+  const hoverFlairTimerRef = useRef(0)
+
+  const clearHoverState = useCallback(() => {
+    setIsPointerInside(false)
+    setHoverFlair(null)
+    window.clearTimeout(hoverFlairTimerRef.current)
+  }, [])
+
+  const triggerHoverFlair = useCallback(() => {
+    if (agentState !== 'idle' || dragState !== null) return
+    const next = DEFAULT_FLAIR_POOL[Math.floor(Math.random() * DEFAULT_FLAIR_POOL.length)]
+    setHoverFlair(next)
+    window.clearTimeout(hoverFlairTimerRef.current)
+    hoverFlairTimerRef.current = window.setTimeout(() => {
+      setHoverFlair(null)
+    }, PET_STATES[next].durationMs * 2)
+  }, [agentState, dragState])
 
   useEffect(() => {
     document.documentElement.style.background = 'transparent'
@@ -131,6 +150,7 @@ export default function PetWindow() {
     return () => {
       off()
       window.clearTimeout(dismissTimerRef.current)
+      window.clearTimeout(hoverFlairTimerRef.current)
       window.electronAPI.pet.setBubble(false)
     }
   }, [showNext])
@@ -141,6 +161,11 @@ export default function PetWindow() {
     })
     return off
   }, [])
+
+  useEffect(() => {
+    const off = window.electronAPI.pet.onContextMenuOpened(clearHoverState)
+    return off
+  }, [clearHoverState])
 
   useEffect(() => {
     let doneTimer = 0
@@ -190,11 +215,11 @@ export default function PetWindow() {
     }
   }, [])
 
-  // 空闲彩蛋（Codex 同款）：待机且没在拖动时，不定时来一段随机小动作
-  const flair = useIdleFlair(agentState === 'idle' && dragState === null)
+  // 空闲彩蛋（Codex 同款）：待机且没在拖动/悬停时，不定时来一段随机小动作
+  const flair = useIdleFlair(agentState === 'idle' && dragState === null && !isPointerInside)
 
   const state: PetStateId = dragState
-    ?? (agentState === 'idle' && flair ? flair : petStateForAgent(agentState))
+    ?? (agentState === 'idle' && hoverFlair ? hoverFlair : agentState === 'idle' && flair ? flair : petStateForAgent(agentState))
 
   const petStageStyle: React.CSSProperties = {
     WebkitAppRegion: 'drag',
@@ -226,7 +251,13 @@ export default function PetWindow() {
 
   return (
     <div
-      className="group relative h-screen w-screen overflow-hidden"
+      className="relative h-screen w-screen overflow-hidden"
+      onContextMenu={clearHoverState}
+      onPointerEnter={() => {
+        setIsPointerInside(true)
+        triggerHoverFlair()
+      }}
+      onPointerLeave={clearHoverState}
       style={{ WebkitAppRegion: 'drag', background: 'transparent' } as React.CSSProperties}
     >
       {notice && (
@@ -237,7 +268,7 @@ export default function PetWindow() {
       <div className="flex flex-col items-center justify-end overflow-hidden pb-1" style={petStageStyle}>
         <button
           aria-label="收起桌宠"
-          className="absolute top-1 right-1 rounded-full bg-black/30 p-1 text-white/80 opacity-0 transition-opacity hover:bg-black/50 group-hover:opacity-100"
+          className={`absolute top-1 right-1 rounded-full bg-black/30 p-1 text-white/80 transition-opacity hover:bg-black/50 ${isPointerInside ? 'opacity-100' : 'opacity-0'}`}
           onClick={() => void window.electronAPI.pet.toggleDesktopWindow(false)}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           type="button"
@@ -247,7 +278,7 @@ export default function PetWindow() {
         {pet ? (
           <>
             <PetSprite label={pet.displayName} scale={0.62} src={pet.spriteUrl} state={state} />
-            <span className="mt-0.5 rounded-full bg-black/30 px-2 py-0.5 text-[10px] text-white/90 opacity-0 transition-opacity group-hover:opacity-100">
+            <span className={`mt-0.5 rounded-full bg-black/30 px-2 py-0.5 text-[10px] text-white/90 transition-opacity ${isPointerInside ? 'opacity-100' : 'opacity-0'}`}>
               {pet.displayName}
             </span>
           </>

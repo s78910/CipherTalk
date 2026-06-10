@@ -4,7 +4,7 @@ import { Check, Download, FileArchive, HelpCircle, Loader2, Monitor, Search, Tra
 import { cn } from '../lib/utils'
 import { PetSprite } from '../features/pets/PetSprite'
 
-type InstalledPet = { slug: string; displayName: string; description: string; spriteUrl: string }
+type InstalledPet = { slug: string; displayName: string; description: string; spriteUrl: string; builtin?: boolean }
 type OnlinePet = { slug: string; displayName: string; submittedBy?: string; spritesheetUrl: string }
 
 const ONLINE_PAGE_SIZE = 30
@@ -65,7 +65,11 @@ export default function PetsPage() {
   }
 
   const removePet = async (slug: string) => {
-    await window.electronAPI.pet.remove(slug)
+    const res = await window.electronAPI.pet.remove(slug)
+    if (!res.success) {
+      toast.danger(res.error || '删除失败')
+      return
+    }
     if (currentSlug === slug) setCurrentSlug('')
     void loadInstalled()
   }
@@ -219,7 +223,7 @@ export default function PetsPage() {
         ) : (
           <section>
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <span className="text-muted text-sm">点击宠物选用或取消，悬停可删除</span>
+              <span className="text-muted text-sm">点击宠物选用或取消，普通宠物悬停可删除</span>
               <HeroButton
                 className="rounded-full"
                 isDisabled={importing}
@@ -258,17 +262,23 @@ export default function PetsPage() {
                           <Check className="size-3" />
                         </span>
                       )}
-                      <span
-                        className="absolute top-1.5 right-1.5 rounded-full p-1 text-muted opacity-0 transition-opacity hover:text-danger group-hover:opacity-100"
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          void removePet(pet.slug)
-                        }}
-                        role="button"
-                        title="删除宠物"
-                      >
-                        <Trash2 className="size-3.5" />
-                      </span>
+                      {pet.builtin ? (
+                        <span className="absolute top-1.5 right-1.5 rounded-full bg-surface-tertiary px-1.5 py-0.5 text-[10px] text-muted">
+                          内置
+                        </span>
+                      ) : (
+                        <span
+                          className="absolute top-1.5 right-1.5 rounded-full p-1 text-muted opacity-0 transition-opacity hover:text-danger group-hover:opacity-100"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            void removePet(pet.slug)
+                          }}
+                          role="button"
+                          title="删除宠物"
+                        >
+                          <Trash2 className="size-3.5" />
+                        </span>
+                      )}
                     </button>
                   )
                 })}
