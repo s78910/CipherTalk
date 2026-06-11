@@ -11,7 +11,7 @@ import {
   MOMENT_TEXT_TYPE,
   type RandomMomentSnippet
 } from '../features/home/randomMoment'
-import './HomePage.scss'
+import './HomePage.css'
 
 function HomePage() {
   const { isDbConnected } = useAppStore()

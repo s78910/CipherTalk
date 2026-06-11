@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from '@heroui/react'
 import { Download, Image as ImageIcon, RefreshCw, Smile, Trash2 } from 'lucide-react'
-import './DataManagementPage.scss'
+import './DataManagementPage.css'
 
 type TabType = 'images' | 'emojis'
 

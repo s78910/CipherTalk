@@ -2,7 +2,7 @@ import { useRef, useState, useEffect } from 'react'
 import { useAppStore } from '../stores/appStore'
 import { useAuthStore } from '../stores/authStore'
 import { Lock, Fingerprint, AlertCircle, KeyRound, ChevronRight } from 'lucide-react'
-import './LockScreen.scss'
+import './LockScreen.css'
 
 export default function LockScreen() {
     const { userInfo } = useAppStore()

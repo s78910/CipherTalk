@@ -4,7 +4,7 @@ import { useSearchParams } from 'react-router-dom'
 import { ZoomIn, ZoomOut, RotateCw, RotateCcw, ChevronLeft, ChevronRight } from 'lucide-react'
 import { LivePhotoIcon } from '../components/LivePhotoIcon'
 import type { ImageListItem } from '../types/electron'
-import './ImageWindow.scss'
+import './ImageWindow.css'
 
 type ViewportMeta = {
     scale: number
