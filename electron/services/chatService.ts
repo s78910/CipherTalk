@@ -201,15 +201,43 @@ class ChatService extends EventEmitter {
     const safeOffset = Math.max(0, Math.floor(Number(offset) || 0))
     const safeLimit = Math.max(1, Math.min(1000, Math.floor(Number(limit) || 300)))
     const safeKeyword = String(keyword || '').trim().toLowerCase()
+    console.warn('[AgentMention][service] request', {
+      offset: safeOffset,
+      limit: safeLimit,
+      hasKeyword: !!safeKeyword,
+      keywordLength: safeKeyword.length,
+    })
+    const contactToSession = (contact: ContactInfo): ChatSession => ({
+      username: contact.username,
+      type: contact.type === 'group' ? 2 : 1,
+      unreadCount: 0,
+      summary: '',
+      sortTimestamp: contact.lastContactTime || 0,
+      lastTimestamp: contact.lastContactTime || 0,
+      lastMsgType: 0,
+      displayName: contact.displayName,
+      avatarUrl: contact.avatarUrl,
+      isWeCom: contact.isWeCom,
+      weComCorp: contact.weComCorp,
+    })
+    const filterMentionContact = (contact: ContactInfo): boolean => (
+      (contact.type === 'friend' || contact.type === 'group') && !isSystemContactUsername(contact.username)
+    )
 
     if (safeKeyword) {
       const contactsResult = await this.getContacts()
+      console.warn('[AgentMention][service] keyword contacts result', {
+        success: contactsResult.success,
+        contacts: Array.isArray(contactsResult.contacts) ? contactsResult.contacts.length : null,
+        error: contactsResult.error,
+      })
       if (!contactsResult.success || !Array.isArray(contactsResult.contacts)) {
         return { success: false, error: contactsResult.error || '获取通讯录失败' }
       }
 
+      const mentionContacts = contactsResult.contacts.filter(filterMentionContact)
       const matchedContacts = contactsResult.contacts
-        .filter((contact) => (contact.type === 'friend' || contact.type === 'group') && !isSystemContactUsername(contact.username))
+        .filter(filterMentionContact)
         .filter((contact) => [
           contact.displayName,
           contact.username,
@@ -219,26 +247,26 @@ class ChatService extends EventEmitter {
         ].some((value) => String(value || '').toLowerCase().includes(safeKeyword)))
 
       const page = matchedContacts.slice(safeOffset, safeOffset + safeLimit)
+      console.warn('[AgentMention][service] keyword page', {
+        mentionContacts: mentionContacts.length,
+        matchedContacts: matchedContacts.length,
+        page: page.length,
+        hasMore: matchedContacts.length > safeOffset + safeLimit,
+      })
       return {
         success: true,
-        sessions: page.map((contact) => ({
-          username: contact.username,
-          type: contact.type === 'group' ? 2 : 1,
-          unreadCount: 0,
-          summary: '',
-          sortTimestamp: contact.lastContactTime || 0,
-          lastTimestamp: contact.lastContactTime || 0,
-          lastMsgType: 0,
-          displayName: contact.displayName,
-          avatarUrl: contact.avatarUrl,
-          isWeCom: contact.isWeCom,
-          weComCorp: contact.weComCorp,
-        })),
+        sessions: page.map(contactToSession),
         hasMore: matchedContacts.length > safeOffset + safeLimit,
       }
     }
 
     const result = await this.getSessions(safeOffset, safeLimit)
+    console.warn('[AgentMention][service] sessions result', {
+      success: result.success,
+      rawSessions: Array.isArray(result.sessions) ? result.sessions.length : null,
+      hasMore: result.hasMore,
+      error: result.error,
+    })
 
     if (result.success && Array.isArray(result.sessions)) {
       const sessions = result.sessions.filter((session) => {
@@ -249,37 +277,48 @@ class ChatService extends EventEmitter {
         if (isSystemContactUsername(username)) return false
         return true
       })
+      console.warn('[AgentMention][service] sessions filtered', {
+        rawSessions: result.sessions.length,
+        filteredSessions: sessions.length,
+        hasMore: result.hasMore,
+      })
 
-      if (sessions.length > 0 || result.hasMore || safeOffset > 0) {
+      if (sessions.length > 0) {
         return { success: true, sessions, hasMore: !!result.hasMore }
+      }
+      if (result.hasMore) {
+        return { success: true, sessions: [], hasMore: true }
       }
     }
 
     if (safeOffset > 0) {
+      console.warn('[AgentMention][service] skip contacts fallback for paged request', {
+        offset: safeOffset,
+        sessionSuccess: result.success,
+        sessionError: result.error,
+      })
       return result.success ? { success: true, sessions: [], hasMore: false } : result
     }
 
     const contactsResult = await this.getContacts()
+    console.warn('[AgentMention][service] fallback contacts result', {
+      success: contactsResult.success,
+      contacts: Array.isArray(contactsResult.contacts) ? contactsResult.contacts.length : null,
+      error: contactsResult.error,
+    })
     if (!contactsResult.success || !Array.isArray(contactsResult.contacts)) {
       return result.success ? { success: true, sessions: [], hasMore: false } : result
     }
 
-    const contacts = contactsResult.contacts
-      .filter((contact) => (contact.type === 'friend' || contact.type === 'group') && !isSystemContactUsername(contact.username))
+    const mentionContacts = contactsResult.contacts.filter(filterMentionContact)
+    const contacts = mentionContacts
       .slice(safeOffset, safeOffset + safeLimit)
-      .map((contact) => ({
-        username: contact.username,
-        type: contact.type === 'group' ? 2 : 1,
-        unreadCount: 0,
-        summary: '',
-        sortTimestamp: contact.lastContactTime || 0,
-        lastTimestamp: contact.lastContactTime || 0,
-        lastMsgType: 0,
-        displayName: contact.displayName,
-        avatarUrl: contact.avatarUrl,
-        isWeCom: contact.isWeCom,
-        weComCorp: contact.weComCorp,
-      }))
+      .map(contactToSession)
+    console.warn('[AgentMention][service] fallback contacts page', {
+      mentionContacts: mentionContacts.length,
+      page: contacts.length,
+      hasMore: contacts.length === safeLimit && (contactsResult.contacts.length > safeOffset + safeLimit),
+    })
 
     return {
       success: true,

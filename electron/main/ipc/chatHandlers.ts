@@ -50,7 +50,23 @@ export function registerChatHandlers(ctx: MainProcessContext): void {
   })
 
   ipcMain.handle('chat:getMentionTargets', async (_, offset?: number, limit?: number, keyword?: string) => {
+    const startedAt = Date.now()
+    const logData = {
+      offset,
+      limit,
+      keywordLength: String(keyword || '').trim().length,
+      hasKeyword: !!String(keyword || '').trim(),
+    }
+    ctx.getLogService()?.warn('Chat', '[AgentMention] 获取 Agent @ 列表请求', logData)
     const result = await chatService.getMentionTargets(offset, limit, keyword)
+    ctx.getLogService()?.warn('Chat', '[AgentMention] 获取 Agent @ 列表返回', {
+      ...logData,
+      success: result.success,
+      sessions: Array.isArray(result.sessions) ? result.sessions.length : null,
+      hasMore: result.hasMore,
+      error: result.error,
+      elapsedMs: Date.now() - startedAt,
+    })
     if (!result.success) {
       ctx.getLogService()?.warn('Chat', '获取 Agent @ 列表失败', { error: result.error })
     }

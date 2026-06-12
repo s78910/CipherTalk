@@ -24,6 +24,7 @@ const DEFAULT_AGENT_SKILL_LIMIT = 3
 const DEFAULT_AGENT_SKILL_BUDGET = 9000
 const DEFAULT_AGENT_SKILL_CANDIDATES = 20
 const AGENT_PREP_RERANK_TIMEOUT_MS = 800
+const SKILL_DOCS_CACHE_TTL_MS = 5 * 60 * 1000
 
 function parseSkillFrontmatter(content: string): { name: string; version: string; description: string } {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/)
@@ -243,7 +244,7 @@ export class SkillManagerService {
     if (!dir) return { success: false, error: `User skill "${skillName}" not found. Only user-imported skills can be edited.` }
     try {
       writeFileSync(join(dir, 'SKILL.md'), content, 'utf8')
-      invalidateSkillSelectionCache()
+      this.invalidateSkillCaches()
       return { success: true }
     } catch (e) {
       return { success: false, error: String(e) }
@@ -305,7 +306,7 @@ export class SkillManagerService {
       }
 
       renameSync(extractedDir, destDir)
-      invalidateSkillSelectionCache()
+      this.invalidateSkillCaches()
       return { success: true, skillName }
     } catch (error) {
       return { success: false, error: String(error) }
@@ -326,7 +327,7 @@ export class SkillManagerService {
 
     try {
       rmSync(dir, { recursive: true, force: true })
-      invalidateSkillSelectionCache()
+      this.invalidateSkillCaches()
       return { success: true }
     } catch (e) {
       return { success: false, error: String(e) }
@@ -344,15 +345,26 @@ export class SkillManagerService {
     try {
       mkdirSync(destDir, { recursive: true })
       writeFileSync(join(destDir, 'SKILL.md'), content, 'utf8')
-      invalidateSkillSelectionCache()
+      this.invalidateSkillCaches()
       return { success: true }
     } catch (e) {
       return { success: false, error: String(e) }
     }
   }
 
+  // 全量技能文档缓存：每条 Agent 消息都要选技能，同步重读全部 SKILL.md（含逐根目录 existsSync 探测）
+  // 会堵事件循环几百毫秒。技能增删改时失效，TTL 兜底外部直接改文件的情况。
+  private resourceDocsCache: { value: SkillResourceDocument[]; at: number } | null = null
+
+  private invalidateSkillCaches(): void {
+    this.resourceDocsCache = null
+    invalidateSkillSelectionCache()
+  }
+
   getSkillResourceDocuments(): SkillResourceDocument[] {
-    return this.listSkills()
+    const cached = this.resourceDocsCache
+    if (cached && Date.now() - cached.at < SKILL_DOCS_CACHE_TTL_MS) return cached.value
+    const docs = this.listSkills()
       .map((skill) => {
         const loaded = this.readSkillContent(skill.name)
         if (!loaded.success || !loaded.content) return null
@@ -365,6 +377,8 @@ export class SkillManagerService {
         }
       })
       .filter((item): item is SkillResourceDocument => Boolean(item))
+    this.resourceDocsCache = { value: docs, at: Date.now() }
+    return docs
   }
 
   async selectSkillsForAgent(
@@ -384,7 +398,7 @@ export class SkillManagerService {
           documents,
           DEFAULT_AGENT_SKILL_CANDIDATES,
           undefined,
-          { requireCurrent: true },
+          { requireCurrent: true, queryTimeoutMs: AGENT_PREP_RERANK_TIMEOUT_MS, queryMaxRetries: 0 },
         )
       } catch (error) {
         console.warn('[skills] vector candidate selection failed, fallback to token scoring:', error)

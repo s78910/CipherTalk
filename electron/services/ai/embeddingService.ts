@@ -71,14 +71,25 @@ const QUERY_EMBED_CACHE_TTL_MS = 60 * 1000
 const QUERY_EMBED_CACHE_MAX = 20
 const queryEmbedCache = new Map<string, { at: number; promise: Promise<number[]> }>()
 
-/** 单条嵌入（查询用）。 */
-export function embedQuery(text: string, cfg?: EmbeddingConfig): Promise<number[]> {
+/** 单条嵌入（查询用）。查询是延迟敏感路径：默认 10s 兜底超时；Agent 准备阶段可传更短预算 + 关闭重试。 */
+export function embedQuery(
+  text: string,
+  cfg?: EmbeddingConfig,
+  opts?: { timeoutMs?: number; maxRetries?: number },
+): Promise<number[]> {
   const c = cfg || getEmbeddingConfig()
   const key = [c.protocol, c.baseURL, c.model, c.dimension || 0, text].join('\n')
   const cached = queryEmbedCache.get(key)
   if (cached && Date.now() - cached.at < QUERY_EMBED_CACHE_TTL_MS) return cached.promise
 
-  const promise = embed({ model: buildEmbeddingModel(c), value: text, providerOptions: embeddingProviderOptions(c) })
+  const timeoutMs = Math.max(200, Math.floor(opts?.timeoutMs ?? 10000))
+  const promise = embed({
+    model: buildEmbeddingModel(c),
+    value: text,
+    providerOptions: embeddingProviderOptions(c),
+    abortSignal: AbortSignal.timeout(timeoutMs),
+    ...(opts?.maxRetries !== undefined ? { maxRetries: opts.maxRetries } : {}),
+  })
     .then(({ embedding }) => embedding)
   queryEmbedCache.set(key, { at: Date.now(), promise })
   promise.catch(() => queryEmbedCache.delete(key)) // 失败不留缓存

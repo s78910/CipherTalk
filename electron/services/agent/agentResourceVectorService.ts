@@ -52,6 +52,13 @@ export interface SkillResourceDocument {
   content: string
 }
 
+/** queryTimeoutMs/queryMaxRetries：查询嵌入的延迟预算（Agent 准备阶段传短超时，避免拖慢首响应）。 */
+export interface SearchOptions {
+  requireCurrent?: boolean
+  queryTimeoutMs?: number
+  queryMaxRetries?: number
+}
+
 interface ResourceDocument<TPayload> {
   kind: AgentResourceKind
   id: string
@@ -469,7 +476,7 @@ export class AgentResourceVectorService {
     query: string,
     limit: number,
     parseFallback: TPayload,
-    opts: { requireCurrent?: boolean } = {},
+    opts: SearchOptions = {},
   ): Promise<TPayload[]> {
     if (!query.trim() || resources.length === 0 || limit <= 0) return []
     if (opts.requireCurrent) {
@@ -480,7 +487,10 @@ export class AgentResourceVectorService {
     }
     const db = this.getDb()
     const key = modelKey(cfg)
-    const queryVec = await embedQuery(query, cfg)
+    const queryVec = await embedQuery(query, cfg, {
+      ...(opts.queryTimeoutMs !== undefined ? { timeoutMs: opts.queryTimeoutMs } : {}),
+      ...(opts.queryMaxRetries !== undefined ? { maxRetries: opts.queryMaxRetries } : {}),
+    })
     const current = new Map(resources.map((resource) => [resource.id, resource]))
     const rows = db.prepare(
       `SELECT id, name, description, fingerprint, model_key, dim, embedding, payload_json
@@ -500,7 +510,7 @@ export class AgentResourceVectorService {
       .map(({ row }) => parsePayload<TPayload>(row.payload_json, parseFallback))
   }
 
-  async searchSkills(query: string, documents: SkillResourceDocument[], limit = 20, cfg = getEmbeddingConfig(), opts: { requireCurrent?: boolean } = {}): Promise<SkillResourceDocument[]> {
+  async searchSkills(query: string, documents: SkillResourceDocument[], limit = 20, cfg = getEmbeddingConfig(), opts: SearchOptions = {}): Promise<SkillResourceDocument[]> {
     return this.search('skill', documents.map(toSkillResource), cfg, query, limit, {
       name: '',
       version: '0.0.0',
@@ -509,7 +519,7 @@ export class AgentResourceVectorService {
     }, opts)
   }
 
-  async searchMcpTools(query: string, tools: AgentMcpToolDescriptor[], limit = 24, cfg = getEmbeddingConfig(), opts: { requireCurrent?: boolean } = {}): Promise<AgentMcpToolDescriptor[]> {
+  async searchMcpTools(query: string, tools: AgentMcpToolDescriptor[], limit = 24, cfg = getEmbeddingConfig(), opts: SearchOptions = {}): Promise<AgentMcpToolDescriptor[]> {
     return this.search('mcp_tool', tools.map(toMcpResource), cfg, query, limit, {
       name: '',
       serverName: '',

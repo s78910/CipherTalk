@@ -443,6 +443,7 @@ export const MessageBranchPage = ({
 
 export type MessageResponseProps = ComponentProps<typeof Streamdown> & {
   isStreaming?: boolean;
+  showStreamingIndicator?: boolean;
 };
 
 const DEFAULT_CODE_LANGUAGE: BundledLanguage = "md";
@@ -1164,7 +1165,7 @@ const STREAMING_TEXT_ANIMATION: AnimateOptions = {
 };
 
 export const MessageResponse = memo(
-  ({ className, components, isStreaming = false, children, ...props }: MessageResponseProps) => {
+  ({ className, components, isStreaming = false, showStreamingIndicator = true, children, ...props }: MessageResponseProps) => {
     const markdown = typeof children === "string" ? children : "";
     const activity = useMemo(() => analyzeMessageRenderActivity(markdown, isStreaming), [isStreaming, markdown]);
 
@@ -1190,11 +1191,13 @@ export const MessageResponse = memo(
           {children}
         </Streamdown>
         {activity.pendingTable && <StreamingTablePlaceholder />}
-        {isStreaming && <MessageStreamingIndicator />}
+        {isStreaming && showStreamingIndicator && <MessageStreamingIndicator />}
       </MessageRenderContext.Provider>
     );
   },
-  (prevProps, nextProps) => prevProps.children === nextProps.children && prevProps.isStreaming === nextProps.isStreaming
+  (prevProps, nextProps) => prevProps.children === nextProps.children
+    && prevProps.isStreaming === nextProps.isStreaming
+    && prevProps.showStreamingIndicator === nextProps.showStreamingIndicator
 );
 
 MessageResponse.displayName = "MessageResponse";

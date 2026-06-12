@@ -9,7 +9,7 @@ import type { PersonaNotes, PersonaProfile, PersonaStats } from '../../services/
 /** 进行中的 agent 运行：runId → AbortController，用于取消。 */
 const agentAborters = new Map<string, AbortController>()
 const AGENT_RUN_PROXY_CACHE_TTL_MS = 5 * 60 * 1000
-// 准备阶段重排超时：超时直接回退原排序（不影响正确性），别让慢服务拖住首包
+// 准备阶段网络调用（查询嵌入/重排）超时：超时直接走降级路径（不影响正确性），别让慢服务拖住首包
 const AGENT_PREP_RERANK_TIMEOUT_MS = 800
 
 let agentRunProxyRefreshedAt = 0
@@ -162,8 +162,30 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
     let lastActivityKind = 'start'
     let idleWarningCount = 0
     let watchdog: NodeJS.Timeout | null = null
+    // 发送后各阶段耗时打点：每步一行 [agent:perf] 打到控制台，完整时间线随完成日志落盘
+    let perfLastAt = startedAt
+    const perfTimeline: string[] = []
+    const markPerf = (label: string, detail?: string) => {
+      const now = Date.now()
+      const entry = `${label} +${now - perfLastAt}ms${detail ? `（${detail}）` : ''}`
+      perfTimeline.push(entry)
+      console.info(`[agent:perf] ${runId} ${entry}，累计 ${now - startedAt}ms`)
+      perfLastAt = now
+    }
+    // 并行任务用绝对耗时记录（互相重叠，增量没意义）
+    const timedTask = async <T,>(label: string, task: Promise<T>): Promise<T> => {
+      const t0 = Date.now()
+      try {
+        return await task
+      } finally {
+        const entry = `${label} 耗时 ${Date.now() - t0}ms`
+        perfTimeline.push(entry)
+        console.info(`[agent:perf] ${runId} ${entry}`)
+      }
+    }
     agentAborters.set(runId, aborter)
-    const sendPrepProgress = (title: string, detail?: string, visible = false) => {
+    // 准备阶段步骤默认可见：让用户看到发送后程序在干什么，而不是干等
+    const sendPrepProgress = (title: string, detail?: string, visible = true) => {
       lastActivityAt = Date.now()
       lastActivityKind = 'progress'
       idleWarningCount = 0
@@ -186,18 +208,22 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
       const { resolveProviderConfig } = await import('../../services/agent/resolveProviderConfig')
       const { refreshResolvedProxyUrl } = await import('../../services/ai/proxyFetch')
       const { convertToModelMessages } = await import('ai')
+      markPerf('加载主进程服务模块')
       stage = 'refresh_proxy'
       sendPrepProgress('正在检测代理')
       await refreshAgentRunProxyCached(refreshResolvedProxyUrl) // 主进程探测系统代理并持久化，供子进程 agent/嵌入读取
+      markPerf('系统代理探测')
       stage = 'resolve_provider'
       sendPrepProgress('正在准备模型配置')
       const providerConfig = resolveProviderConfig(payload.modelConfig)
+      markPerf('解析模型配置')
       stage = 'convert_messages'
       sendPrepProgress('正在整理消息')
       const uiMessages = shouldStripProviderMetadata(providerConfig)
         ? stripUiMessageProviderMetadata(payload.messages)
         : payload.messages
       const messages = await convertToModelMessages(uiMessages)
+      markPerf('整理消息', `${messages.length} 条`)
       const lastUserText = lastUserTextFromUiMessages(payload.messages)
       stage = 'load_context_services'
       sendPrepProgress('正在加载上下文服务')
@@ -224,6 +250,7 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
         setCachedMcpToolDescriptors(mcpToolVersion, readOnlyMcpTools)
       }
       const skillManifestVersion = fingerprintSkills(skillManagerService.listSkills())
+      markPerf('加载上下文服务模块', `只读 MCP 工具 ${readOnlyMcpTools.length} 个`)
       stage = 'select_tools_and_skills'
       sendPrepProgress('正在筛选工具与技能', `只读 MCP 工具 ${readOnlyMcpTools.length} 个`)
       // MCP 工具筛选+重排 与 技能选择 互相独立，并行执行；
@@ -260,7 +287,7 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
                 readOnlyMcpTools,
                 24,
                 undefined,
-                { requireCurrent: true },
+                { requireCurrent: true, queryTimeoutMs: AGENT_PREP_RERANK_TIMEOUT_MS, queryMaxRetries: 0 },
               )
               if (vectorMcpTools.length > 0) candidates = vectorMcpTools
             } else if (mcpVectorStatus.currentCount > 0) {
@@ -312,9 +339,10 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
         return { skills, skillCacheHit: false }
       }
       const [{ mcpTools, mcpRerankMeta, mcpCandidates, mcpCacheHit }, { skills, skillCacheHit }] = await Promise.all([
-        selectMcpToolsTask(),
-        selectSkillsTask(),
+        timedTask('MCP 工具筛选（嵌入+重排）', selectMcpToolsTask()),
+        timedTask('技能筛选（嵌入+重排）', selectSkillsTask()),
       ])
+      markPerf('工具与技能筛选', `MCP ${mcpTools.length} 个${mcpCacheHit ? '·缓存' : ''} / 技能 ${skills.length} 个${skillCacheHit ? '·缓存' : ''}`)
       sendPrepProgress('已选定工具与技能', `MCP 工具 ${mcpTools.length} 个 · 技能 ${skills.length} 个`)
       if (mcpTools.length > 0 || skills.length > 0) {
         console.info('[agent:run] injected context', {
@@ -355,10 +383,14 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
           lastActivityKind,
         })
       }, 15000)
+      markPerf('交给 Agent 子进程')
       logger?.warn('AIAgent', 'AI Agent 已交给 utility process 运行', {
         ...baseRunData,
         elapsedMs: Date.now() - startedAt,
+        prepTimeline: perfTimeline.slice(),
       })
+      let firstChunkSeen = false
+      let firstModelOutputSeen = false
       await agentProcessService.run(
         { messages, providerConfig, scope, mcpTools, skills, planMode: payload.planMode === true },
         (chunk) => {
@@ -366,6 +398,15 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
           lastActivityAt = Date.now()
           lastActivityKind = 'chunk'
           idleWarningCount = 0
+          const chunkType = (chunk as { type?: string })?.type || ''
+          if (!firstChunkSeen) {
+            firstChunkSeen = true
+            markPerf('子进程回传首个 chunk', chunkType)
+          }
+          if (!firstModelOutputSeen && (chunkType === 'text-delta' || chunkType === 'reasoning-delta' || chunkType === 'tool-input-start')) {
+            firstModelOutputSeen = true
+            markPerf('模型首个增量输出', chunkType)
+          }
           send(chunk)
         },
         (progress) => {
@@ -379,11 +420,13 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
       )
       stage = 'done'
       send('[DONE]')
+      markPerf('本次运行结束')
       logger?.warn('AIAgent', 'AI Agent 请求完成', {
         ...baseRunData,
         elapsedMs: Date.now() - startedAt,
         chunkCount,
         progressCount,
+        perfTimeline,
       })
       return { success: true }
     } catch (e) {
@@ -394,6 +437,7 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
         elapsedMs: Date.now() - startedAt,
         chunkCount,
         progressCount,
+        perfTimeline,
         ...errorToLogData(e),
       })
       sendProgress({ stage: 'error', title: 'AI 助手运行失败', detail: message, at: Date.now() })

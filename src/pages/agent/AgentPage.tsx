@@ -16,7 +16,7 @@ import {
   ConversationEmptyState,
   ConversationScrollButton,
 } from '@/components/ai-elements/conversation'
-import { analyzeMessageRenderActivity, Message, MessageAction, MessageActions, MessageAttachment, MessageAttachments, MessageContent, MessageResponse, type MessageRenderActivity } from '@/components/ai-elements/message'
+import { analyzeMessageRenderActivity, Message, MessageAction, MessageActions, MessageAttachment, MessageAttachments, MessageContent, MessageResponse, MessageStreamingIndicator, type MessageRenderActivity } from '@/components/ai-elements/message'
 import {
   PromptInput,
   PromptInputActionAddAttachments,
@@ -37,6 +37,7 @@ import {
   usePromptInputController,
 } from '@/components/ai-elements/prompt-input'
 import { Button } from '@/components/ui/button'
+import { ImagePreview, type ImagePreviewOriginRect } from '@/components/ImagePreview'
 import AIProviderLogo from '@/components/ai/AIProviderLogo'
 import { getAIProviders, type AIModelInfo, type AIProviderInfo } from '@/types/ai'
 import {
@@ -235,10 +236,15 @@ function PlanCard({ text, streaming }: { text: string; streaming: boolean }) {
   )
 }
 
-function MessageChainOfThought({ children }: { active: boolean; children: ReactNode }) {
-  const [open, setOpen] = useState(false)
+// 进行中默认展开（让用户看到 AI 正在干啥），结束后自动收起；用户手动点过则尊重用户的选择。
+function MessageChainOfThought({ active, children }: { active: boolean; children: ReactNode }) {
+  const [open, setOpen] = useState(active)
+  const userToggledRef = useRef(false)
+  useEffect(() => {
+    if (!userToggledRef.current) setOpen(active)
+  }, [active])
   return (
-    <ChainOfThought onOpenChange={setOpen} open={open}>
+    <ChainOfThought onOpenChange={(value) => { userToggledRef.current = true; setOpen(value) }} open={open}>
       <ChainOfThoughtHeader>执行过程</ChainOfThoughtHeader>
       <ChainOfThoughtContent>{children}</ChainOfThoughtContent>
     </ChainOfThought>
@@ -394,17 +400,43 @@ function getDelegateTasks(part: unknown): string[] {
 
 const SUB_AGENT_PROGRESS_LIMIT = 48
 const AGENT_PENDING_TITLE = '正在准备请求'
+// 准备阶段步骤现在默认展示（真实步骤快速闪过，缓解"发完没反应"的焦虑），只隐藏本地占位项
 const HIDDEN_PREP_PROGRESS_TITLES = new Set([
   AGENT_PENDING_TITLE,
-  '正在准备 Agent',
-  '正在筛选工具与技能',
-  '已选定工具与技能',
-  '正在加载长期记忆',
-  '正在召回相关记忆',
-  '正在准备工具',
-  '正在请求模型',
-  '正在交给 Agent 进程',
 ])
+
+type AgentMessagePart = UIMessage['parts'][number]
+type AgentChainPart = AgentMessagePart & {
+  input?: unknown
+  output?: unknown
+  state?: string
+  errorText?: string
+}
+
+function isAgentChainPart(part: AgentMessagePart): part is AgentChainPart {
+  return part.type === 'reasoning' || isToolUIPart(part)
+}
+
+// 参考 Claude 的消息展示：按 parts 原始顺序渲染，只把"连续"的思考/工具调用合并成一个执行过程块，
+// 思考与正文交错时保持时间顺序，而不是把所有思考都提到正文前面。
+type AgentRenderSegment =
+  | { kind: 'chain'; items: Array<{ part: AgentChainPart; index: number }> }
+  | { kind: 'part'; part: AgentMessagePart; index: number }
+
+function buildRenderSegments(parts: UIMessage['parts']): AgentRenderSegment[] {
+  const segments: AgentRenderSegment[] = []
+  parts.forEach((part, index) => {
+    if (part.type === 'step-start') return
+    if (isAgentChainPart(part)) {
+      const last = segments[segments.length - 1]
+      if (last?.kind === 'chain') last.items.push({ part, index })
+      else segments.push({ kind: 'chain', items: [{ part, index }] })
+    } else {
+      segments.push({ kind: 'part', part, index })
+    }
+  })
+  return segments
+}
 
 function shouldDisplayAgentProgress(progress: AgentProgressEvent) {
   if (progress.stage === 'error') return true
@@ -489,7 +521,35 @@ function agentProgressIcon(progress: AgentProgressEvent) {
   return Sparkles
 }
 
-function AgentProgressChain({ active, events }: { active: boolean; events: AgentProgressEvent[] }) {
+// 等待模型首个输出的空窗期（可能 2~12s）轮播的安抚文案：让"死等"看起来像"它在忙"
+const MODEL_WAITING_PHRASES = [
+  '大模型正在酝酿措辞…',
+  '正在翻箱倒柜整理思路…',
+  '灵感马上就位…',
+  '正在斟酌怎么回你…',
+  '大模型还在打草稿…',
+  '快了快了，正在组织语言…',
+]
+
+function WaitingPhraseStep() {
+  const [index, setIndex] = useState(() => Math.floor(Math.random() * MODEL_WAITING_PHRASES.length))
+  useEffect(() => {
+    const timer = window.setInterval(
+      () => setIndex((value) => (value + 1) % MODEL_WAITING_PHRASES.length),
+      3200,
+    )
+    return () => window.clearInterval(timer)
+  }, [])
+  return (
+    <ChainOfThoughtStep
+      icon={Sparkles}
+      label={renderChainLabel(MODEL_WAITING_PHRASES[index], true)}
+      status="active"
+    />
+  )
+}
+
+function AgentProgressChain({ active, waiting = false, events }: { active: boolean; waiting?: boolean; events: AgentProgressEvent[] }) {
   if (events.length === 0) return null
   const latestKey = subAgentProgressKey(events[events.length - 1])
 
@@ -498,6 +558,7 @@ function AgentProgressChain({ active, events }: { active: boolean; events: Agent
       {events.map((progress) => {
         const key = subAgentProgressKey(progress)
         const stepActive = active
+          && !waiting
           && key === latestKey
           && progress.stage !== 'run_finished'
           && progress.stage !== 'error'
@@ -511,6 +572,7 @@ function AgentProgressChain({ active, events }: { active: boolean; events: Agent
           />
         )
       })}
+      {waiting && <WaitingPhraseStep />}
     </MessageChainOfThought>
   )
 }
@@ -1042,17 +1104,15 @@ function MentionField({
             </>
           ) : (
             <div className="px-2 py-3 text-center text-muted-foreground text-xs">
-              {isLoading
-                ? '联系人加载中…'
-                : hasMore
-                  ? (
-                    <button className="rounded-(--agent-radius,12px) px-2 py-1 hover:bg-accent" onClick={onLoadMore} type="button">
-                      继续加载更多会话
-                    </button>
-                  )
-                  : sessions.length === 0
-                    ? '暂无可用私聊或群聊'
-                    : '未找到匹配的联系人'}
+                  {isLoading
+                    ? '联系人加载中…'
+                    : hasMore || sessions.length === 0
+                      ? (
+                        <button className="rounded-(--agent-radius,12px) px-2 py-1 hover:bg-accent" onClick={onLoadMore} type="button">
+                          {sessions.length === 0 ? '重新加载联系人' : '继续加载更多会话'}
+                        </button>
+                      )
+                      : '未找到匹配的联系人'}
             </div>
           )}
         </div>
@@ -1640,6 +1700,7 @@ export default function AgentPage() {
   const [providersInfo, setProvidersInfo] = useState<AIProviderInfo[]>([])
   const [selectedPresetId, setSelectedPresetId] = useState('current')
   const [reasoningEffort, setReasoningEffort] = useState<AgentReasoningEffort>('auto')
+  const [generatedImagePreview, setGeneratedImagePreview] = useState<{ src: string; originRect?: ImagePreviewOriginRect } | null>(null)
   // 计划模式：开启后本轮只出执行计划、不下结论，等用户点"开始执行"再跑（参考 ClaudeCode/Codex）
   const [planMode, setPlanMode] = useState(false)
   const planModeRef = useRef(planMode)
@@ -1779,7 +1840,9 @@ export default function AgentPage() {
 
   const handleAgentProgress = useCallback((progress: AgentProgressEvent) => {
     const displayProgress = shouldDisplayAgentProgress(progress)
-    if ((progress.depth ?? 0) === 0 && (displayProgress || progress.stage === 'run_finished' || progress.stage === 'error')) {
+    // 准备阶段的 run_started 步骤只进执行过程链，不推桌宠气泡（连发 8 条会刷屏）
+    const petWorthy = progress.stage !== 'run_started'
+    if ((progress.depth ?? 0) === 0 && petWorthy && (displayProgress || progress.stage === 'run_finished' || progress.stage === 'error')) {
       window.electronAPI.pet.sendAgentProgress({
         stage: progress.stage,
         title: progress.stage === 'run_finished' && !displayProgress ? 'AI 助手已完成' : progress.title,
@@ -1844,6 +1907,14 @@ export default function AgentPage() {
   const { messages, sendMessage, setMessages, status, stop } = useChat({ transport, experimental_throttle: 50 })
   const [modelOpen, setModelOpen] = useState(false)
   const busy = status === 'submitted' || status === 'streaming'
+  // 模型空窗期：流已建立（status=streaming）但助手消息还没有任何可见输出（最多只有 step-start），
+  // 即"模型首 token 还没到"——这段最长可达十几秒，用轮播文案兜住
+  const lastMessageForWait = messages[messages.length - 1]
+  const waitingFirstModelOutput = busy && (
+    !lastMessageForWait
+    || lastMessageForWait.role === 'user'
+    || (lastMessageForWait.role === 'assistant' && !lastMessageForWait.parts.some((part) => part.type !== 'step-start'))
+  )
   const latestUserMessageId = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i -= 1) {
       if (messages[i].role === 'user') return messages[i].id
@@ -1873,8 +1944,7 @@ export default function AgentPage() {
     return { input, output, total: input + output, hasAny }
   }, [messages])
   const showAgentProgressChain = agentProgress.length > 0
-    && status !== 'streaming'
-    && (status === 'submitted' || agentRunPending)
+    && ((status !== 'streaming' && (status === 'submitted' || agentRunPending)) || waitingFirstModelOutput)
   const [conversationTitle, setConversationTitle] = useState('新对话')
   const [titleLoading, setTitleLoading] = useState(false)
   const [titleEditing, setTitleEditing] = useState(false)
@@ -1923,19 +1993,46 @@ export default function AgentPage() {
   }, [])
 
   const loadMentionSessions = useCallback(async () => {
-    if (mentionLoadingRef.current || !mentionHasMoreRef.current) return
+    if (mentionLoadingRef.current) {
+      console.info('[AgentMention][renderer] load skipped: already loading')
+      return
+    }
     mentionLoadingRef.current = true
     setMentionLoading(true)
     const chat = (window as any)?.electronAPI?.chat
+    const offset = mentionOffsetRef.current
+
+    console.info('[AgentMention][renderer] load start', {
+      offset,
+      limit: MENTION_SESSION_PAGE_SIZE,
+      knownSessions: sessions.length,
+      hasMore: mentionHasMoreRef.current,
+      connected: mentionConnectedRef.current,
+      hasChatApi: !!chat,
+      hasGetMentionTargets: !!chat?.getMentionTargets,
+    })
 
     try {
       if (!mentionConnectedRef.current) {
-        try { await chat?.connect?.() } catch { /* 配置不全则后续为空 */ }
+        try {
+          const connectResult = await chat?.connect?.()
+          console.info('[AgentMention][renderer] chat connect result', {
+            success: connectResult?.success,
+            error: connectResult?.error,
+          })
+        } catch (error) {
+          console.warn('[AgentMention][renderer] chat connect threw', { error: String(error) })
+        }
         mentionConnectedRef.current = true
       }
 
-      const offset = mentionOffsetRef.current
       const res = await chat?.getMentionTargets?.(offset, MENTION_SESSION_PAGE_SIZE)
+      console.info('[AgentMention][renderer] load result', {
+        success: res?.success,
+        sessions: Array.isArray(res?.sessions) ? res.sessions.length : null,
+        hasMore: res?.hasMore,
+        error: res?.error,
+      })
       if (res?.success && Array.isArray(res.sessions)) {
         appendMentionTargets(
           res.sessions
@@ -1945,14 +2042,15 @@ export default function AgentPage() {
         updateMentionHasMore(!!res.hasMore)
         return
       }
-      updateMentionHasMore(false)
-    } catch {
-      updateMentionHasMore(false)
+      updateMentionHasMore(sessions.length === 0)
+    } catch (error) {
+      console.warn('[AgentMention][renderer] load threw', { error: String(error) })
+      updateMentionHasMore(sessions.length === 0)
     } finally {
       mentionLoadingRef.current = false
       setMentionLoading(false)
     }
-  }, [appendMentionTargets, updateMentionHasMore])
+  }, [appendMentionTargets, sessions.length, updateMentionHasMore])
 
   const searchMentionSessions = useCallback(async (query: string) => {
     const keyword = query.trim()
@@ -1960,19 +2058,46 @@ export default function AgentPage() {
     const seq = ++mentionSearchSeqRef.current
     const chat = (window as any)?.electronAPI?.chat
     setMentionLoading(true)
+    console.info('[AgentMention][renderer] search start', {
+      seq,
+      keywordLength: keyword.length,
+      limit: MENTION_SESSION_PAGE_SIZE,
+      connected: mentionConnectedRef.current,
+      hasChatApi: !!chat,
+      hasGetMentionTargets: !!chat?.getMentionTargets,
+    })
 
     try {
       if (!mentionConnectedRef.current) {
-        try { await chat?.connect?.() } catch { /* 配置不全则后续为空 */ }
+        try {
+          const connectResult = await chat?.connect?.()
+          console.info('[AgentMention][renderer] search connect result', {
+            seq,
+            success: connectResult?.success,
+            error: connectResult?.error,
+          })
+        } catch (error) {
+          console.warn('[AgentMention][renderer] search connect threw', { seq, error: String(error) })
+        }
         mentionConnectedRef.current = true
       }
 
       const res = await chat?.getMentionTargets?.(0, MENTION_SESSION_PAGE_SIZE, keyword)
+      console.info('[AgentMention][renderer] search result', {
+        seq,
+        latestSeq: mentionSearchSeqRef.current,
+        success: res?.success,
+        sessions: Array.isArray(res?.sessions) ? res.sessions.length : null,
+        hasMore: res?.hasMore,
+        error: res?.error,
+      })
       if (seq === mentionSearchSeqRef.current && res?.success && Array.isArray(res.sessions)) {
         appendMentionTargets(
           res.sessions.map((s: any) => toMentionTarget(s.username, s.displayName, s.avatarUrl))
         )
       }
+    } catch (error) {
+      console.warn('[AgentMention][renderer] search threw', { seq, error: String(error) })
     } finally {
       if (seq === mentionSearchSeqRef.current) setMentionLoading(false)
     }
@@ -2564,7 +2689,6 @@ export default function AgentPage() {
             />
           ) : (
             messages.map((message, messageIndex) => {
-              const chainParts = message.parts.filter((part) => part.type === 'reasoning' || isToolUIPart(part))
               const isLastMessage = messageIndex === messages.length - 1
               const lastPart = message.parts[message.parts.length - 1]
               const isReasoningStreaming = isLastMessage && status === 'streaming' && lastPart?.type === 'reasoning'
@@ -2588,64 +2712,137 @@ export default function AgentPage() {
               const subAgentEventsForMessage = message.role === 'assistant'
                 ? (isLastMessage && subAgentProgress.length > 0 ? subAgentProgress : persistedSubAgentEvents)
                 : []
+              const orderedSegments = buildRenderSegments(message.parts)
+              const renderGeneratedImageTool = (part: AgentMessagePart, index: number) => {
+                if (!isAgentChainPart(part)) return null
+                if (part.type !== 'tool-generate_image' || part.state !== 'output-available') return null
+                const filePath = String((part.output as { filePath?: unknown } | undefined)?.filePath || '')
+                if (!filePath) return null
+                const imageSrc = `local-image://${encodeURIComponent(filePath)}`
+                return (
+                  <button
+                    className="mt-1 block w-fit cursor-pointer border-0 bg-transparent p-0 text-left"
+                    key={`genimg-${index}`}
+                    onClick={(event) => {
+                      const rect = event.currentTarget.getBoundingClientRect()
+                      setGeneratedImagePreview({
+                        src: imageSrc,
+                        originRect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height }
+                      })
+                    }}
+                    title="点击预览"
+                    type="button"
+                  >
+                    <img
+                      alt="AI 生成的图片"
+                      className="max-h-90 max-w-full rounded-(--agent-radius,12px) border border-border/60 shadow-xs"
+                      src={imageSrc}
+                    />
+                  </button>
+                )
+              }
+              const renderChainSegment = (segment: Array<{ part: AgentChainPart; index: number }>, segmentActive: boolean) => (
+                <MessageChainOfThought active={segmentActive} key={`chain-${segment[0]?.index ?? 0}`}>
+                  {segment.map(({ part, index }) => {
+                    if (part.type === 'reasoning') {
+                      const reasoningActive = isReasoningStreaming && index === message.parts.length - 1
+                      return (
+                        <ChainOfThoughtStep
+                          icon={Brain}
+                          key={`chain-${index}`}
+                          label={renderChainLabel('Reasoning', reasoningActive)}
+                          status={reasoningActive ? 'active' : 'complete'}
+                        >
+                          <div className="whitespace-pre-wrap text-muted-foreground text-sm">
+                            {part.text}
+                          </div>
+                        </ChainOfThoughtStep>
+                      )
+                    }
+                    const toolName = part.type.replace(/^tool-/, '')
+                    const done = part.state === 'output-available' || part.state === 'output-error'
+                    const toolLabel = formatToolName(toolName)
+                    const elapsedMs = toolElapsedByKey[toolPartProgressKey(part, toolName)]
+                    const label = done && elapsedMs ? `${toolLabel} · ${formatElapsed(elapsedMs)}` : toolLabel
+                    const badges = collectToolBadges(part.input)
+                    const delegateTasks = toolName === 'delegate_analysis' ? getDelegateTasks(part) : undefined
+                    if (part.state === 'output-available') {
+                      for (const badge of collectRetrievalBadges(toolName, part.output)) pushBadge(badges, badge)
+                      collectToolBadges(part.output, badges)
+                    }
+                    return (
+                      <ChainOfThoughtStep
+                        icon={toolName.includes('search') ? Search : Wrench}
+                        key={`chain-${index}`}
+                        label={renderChainLabel(label, !done)}
+                        status={done ? 'complete' : 'active'}
+                      >
+                        {badges.length > 0 && (
+                          <ChainOfThoughtSearchResults>
+                            {badges.map((badge) => (
+                              <ChainOfThoughtSearchResult key={badge}>
+                                {badge}
+                              </ChainOfThoughtSearchResult>
+                            ))}
+                          </ChainOfThoughtSearchResults>
+                        )}
+                        {part.state === 'output-error' && part.errorText && (
+                          <p className="text-destructive text-xs">{part.errorText}</p>
+                        )}
+                        {toolName === 'delegate_analysis' && subAgentEventsForMessage.length > 0 && (
+                          <SubAgentProgressPanel events={subAgentEventsForMessage} tasks={delegateTasks} />
+                        )}
+                      </ChainOfThoughtStep>
+                    )
+                  })}
+                </MessageChainOfThought>
+              )
               return (
                 <Message from={message.role} key={message.id}>
                   {userDisplay && <UserMessageMentions mentions={userDisplay.mentions} />}
                   <MessageContent>
-                    {(chainParts.length > 0 || outputActivitySteps.length > 0) && (
+                    {isPlanMessage && assistantDisplayText && (
+                      <PlanCard streaming={assistantTextStreaming} text={assistantDisplayText} />
+                    )}
+                    {orderedSegments.map((segment, segmentIndex) => {
+                      const isLastSegment = segmentIndex === orderedSegments.length - 1
+                      if (segment.kind === 'chain') {
+                        // 只有位于消息末尾、还在运行中的执行过程块保持展开；后面已经出正文的块自动收起。
+                        const segmentActive = chainActive && isLastSegment
+                        return (
+                          <div className="space-y-2" key={`chain-${segment.items[0]?.index ?? 0}`}>
+                            {renderChainSegment(segment.items, segmentActive)}
+                            {segment.items.map(({ part, index }) => renderGeneratedImageTool(part, index))}
+                          </div>
+                        )
+                      }
+                      const { part, index } = segment
+                      if (part.type === 'text') {
+                        // 计划消息的正文已经在 PlanCard 里展示，这里不再重复渲染。
+                        if (isPlanMessage) return null
+                        const displayText = userDisplay?.textByPartIndex.get(index) ?? part.text
+                        if (!displayText) return null
+                        return (
+                          <MessageResponse
+                            isStreaming={assistantTextStreaming && isLastSegment}
+                            key={`text-${index}`}
+                            showStreamingIndicator={false}
+                          >
+                            {displayText}
+                          </MessageResponse>
+                        )
+                      }
+                      if (part.type === 'file') {
+                        return (
+                          <MessageAttachments key={`file-${index}`}>
+                            <MessageAttachment data={part} />
+                          </MessageAttachments>
+                        )
+                      }
+                      return null
+                    })}
+                    {outputActivitySteps.length > 0 && (
                       <MessageChainOfThought active={chainActive}>
-                        {chainParts.map((part, index) => {
-                          if (part.type === 'reasoning') {
-                            const reasoningActive = isReasoningStreaming && index === chainParts.length - 1
-                            return (
-                              <ChainOfThoughtStep
-                                icon={Brain}
-                                key={`chain-${index}`}
-                                label={renderChainLabel('Reasoning', reasoningActive)}
-                                status={reasoningActive ? 'active' : 'complete'}
-                              >
-                                <div className="whitespace-pre-wrap text-muted-foreground text-sm">
-                                  {part.text}
-                                </div>
-                              </ChainOfThoughtStep>
-                            )
-                          }
-                          const toolName = part.type.replace(/^tool-/, '')
-                          const done = part.state === 'output-available' || part.state === 'output-error'
-                          const toolLabel = formatToolName(toolName)
-                          const elapsedMs = toolElapsedByKey[toolPartProgressKey(part, toolName)]
-                          const label = done && elapsedMs ? `${toolLabel} · ${formatElapsed(elapsedMs)}` : toolLabel
-                          const badges = collectToolBadges(part.input)
-                          const delegateTasks = toolName === 'delegate_analysis' ? getDelegateTasks(part) : undefined
-                          if (part.state === 'output-available') {
-                            for (const badge of collectRetrievalBadges(toolName, part.output)) pushBadge(badges, badge)
-                            collectToolBadges(part.output, badges)
-                          }
-                          return (
-                            <ChainOfThoughtStep
-                              icon={toolName.includes('search') ? Search : Wrench}
-                              key={`chain-${index}`}
-                              label={renderChainLabel(label, !done)}
-                              status={done ? 'complete' : 'active'}
-                            >
-                              {badges.length > 0 && (
-                                <ChainOfThoughtSearchResults>
-                                  {badges.map((badge) => (
-                                    <ChainOfThoughtSearchResult key={badge}>
-                                      {badge}
-                                    </ChainOfThoughtSearchResult>
-                                  ))}
-                                </ChainOfThoughtSearchResults>
-                              )}
-                              {part.state === 'output-error' && part.errorText && (
-                                <p className="text-destructive text-xs">{part.errorText}</p>
-                              )}
-                              {toolName === 'delegate_analysis' && subAgentEventsForMessage.length > 0 && (
-                                <SubAgentProgressPanel events={subAgentEventsForMessage} tasks={delegateTasks} />
-                              )}
-                            </ChainOfThoughtStep>
-                          )
-                        })}
                         {outputActivitySteps.map((step) => {
                           const Icon = step.icon
                           return (
@@ -2659,50 +2856,7 @@ export default function AgentPage() {
                         })}
                       </MessageChainOfThought>
                     )}
-                    {isPlanMessage && assistantDisplayText && (
-                      <PlanCard streaming={assistantTextStreaming} text={assistantDisplayText} />
-                    )}
-                    {message.parts.map((part, index) => {
-                      if (part.type === 'text') {
-                        // 计划消息的正文已经在 PlanCard 里展示，这里不再重复渲染。
-                        if (isPlanMessage) return null
-                        const displayText = userDisplay?.textByPartIndex.get(index) ?? part.text
-                        if (!displayText && !assistantTextStreaming) return null
-                        return (
-                          <MessageResponse isStreaming={assistantTextStreaming} key={`text-${index}`}>
-                            {displayText}
-                          </MessageResponse>
-                        )
-                      }
-                      if (part.type === 'file') {
-                        return (
-                          <MessageAttachments key={`file-${index}`}>
-                            <MessageAttachment data={part} />
-                          </MessageAttachments>
-                        )
-                      }
-                      // generate_image 工具的产出图：直接展示在消息流里，点击打开灯箱预览
-                      if (part.type === 'tool-generate_image' && part.state === 'output-available') {
-                        const filePath = String((part.output as { filePath?: unknown } | undefined)?.filePath || '')
-                        if (!filePath) return null
-                        return (
-                          <button
-                            className="mt-1 block w-fit cursor-zoom-in border-0 bg-transparent p-0 text-left"
-                            key={`genimg-${index}`}
-                            onClick={() => { void window.electronAPI.window.openImageViewerWindow(filePath) }}
-                            title="点击预览"
-                            type="button"
-                          >
-                            <img
-                              alt="AI 生成的图片"
-                              className="max-h-90 max-w-full rounded-(--agent-radius,12px) border border-border/60 shadow-xs"
-                              src={`local-image://${encodeURIComponent(filePath)}`}
-                            />
-                          </button>
-                        )
-                      }
-                      return null
-                    })}
+                    {assistantTextStreaming && <MessageStreamingIndicator />}
                     {message.role === 'assistant' && (
                       <MessageSources items={extractSources(message.parts)} nameOf={sessionNameOf} />
                     )}
@@ -2748,7 +2902,11 @@ export default function AgentPage() {
           {showAgentProgressChain && (
             <Message from="assistant">
               <MessageContent>
-                <AgentProgressChain active={status === 'submitted' || agentRunPending} events={agentProgress} />
+                <AgentProgressChain
+                  active={status === 'submitted' || agentRunPending || waitingFirstModelOutput}
+                  events={agentProgress}
+                  waiting={waitingFirstModelOutput}
+                />
               </MessageContent>
             </Message>
           )}
@@ -2987,6 +3145,13 @@ export default function AgentPage() {
           </AlertDialog.Dialog>
         </AlertDialog.Container>
       </AlertDialog.Backdrop>
+      {generatedImagePreview && (
+        <ImagePreview
+          src={generatedImagePreview.src}
+          originRect={generatedImagePreview.originRect}
+          onClose={() => setGeneratedImagePreview(null)}
+        />
+      )}
     </Surface>
   )
 }

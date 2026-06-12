@@ -26,7 +26,7 @@ import {
   useOverlayState,
   type Key
 } from '@heroui/react'
-import { ArrowUpRight, Brain, Braces, Coins, Eye, EyeOff, FileText, Gauge, HelpCircle, Image as ImageIcon, Plus, RefreshCw, Settings2, Sparkles, Wrench } from 'lucide-react'
+import { ArrowUpRight, Brain, Braces, CheckCircle2, Coins, Eye, EyeOff, FileText, Gauge, HelpCircle, Image as ImageIcon, Pencil, Plus, RefreshCw, Settings2, Sparkles, Trash2, Wrench } from 'lucide-react'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { getAIProviders, type AIModelInfo, type AIProviderInfo } from '../../types/ai'
@@ -1052,27 +1052,43 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
                         {presets.map(preset => {
                           const presetProviderInfo = providers.find(item => item.id === normalizeProviderId(preset.provider))
                           return (
-                          <Card key={preset.id} variant="secondary" className="flex items-center justify-between gap-3 px-4 py-3">
-                            <div className="flex min-w-0 items-center gap-3">
-                              <AIProviderLogo
-                                providerId={preset.provider}
-                                logo={presetProviderInfo?.logo}
-                                alt={presetProviderInfo?.displayName || preset.provider}
-                                className="shrink-0"
-                                size={22}
-                              />
-                              <div className="min-w-0">
-                                <Typography.Paragraph size="sm" weight="medium" truncate>{preset.name}</Typography.Paragraph>
-                                <Typography.Paragraph size="xs" color="muted" truncate>{presetProviderInfo?.displayName || preset.provider} · {preset.model}</Typography.Paragraph>
+                          <Card key={preset.id} variant="secondary" className="flex flex-col items-stretch gap-3 px-4 py-3 text-left">
+                            <div className="flex min-w-0 items-start gap-3">
+                              <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md bg-surface">
+                                <AIProviderLogo
+                                  providerId={preset.provider}
+                                  logo={presetProviderInfo?.logo}
+                                  alt={presetProviderInfo?.displayName || preset.provider}
+                                  className="shrink-0"
+                                  size={22}
+                                />
+                              </div>
+                              <div className="min-w-0 flex-1 space-y-1">
+                                <Typography.Paragraph size="sm" weight="medium" className="truncate text-left">{preset.name}</Typography.Paragraph>
+                                <div className="grid gap-x-3 gap-y-1 text-left text-xs text-muted sm:grid-cols-[72px_minmax(0,1fr)]">
+                                  <span className="text-muted-foreground">服务商</span>
+                                  <span className="min-w-0 truncate text-foreground">{presetProviderInfo?.displayName || preset.provider}</span>
+                                  <span className="text-muted-foreground">模型</span>
+                                  <span className="min-w-0 truncate font-medium text-foreground">{preset.model || '未填写'}</span>
+                                  <span className="text-muted-foreground">协议</span>
+                                  <span className="min-w-0 truncate">{formatProtocolLabel(preset.protocol)}</span>
+                                  {preset.baseURL && (
+                                    <>
+                                      <span className="text-muted-foreground">地址</span>
+                                      <span className="min-w-0 truncate">{preset.baseURL}</span>
+                                    </>
+                                  )}
+                                </div>
                               </div>
                             </div>
-                            <div className="flex shrink-0 items-center gap-1.5">
+                            <div className="flex flex-wrap items-center justify-end gap-1.5 border-border/50 border-t pt-3">
                               <Button
                                 type="button"
                                 variant="primary"
                                 size="sm"
                                 onPress={() => { void handleLoadPreset(preset.id); setShowPresetDrawer(false) }}
                               >
+                                <CheckCircle2 size={15} />
                                 加载
                               </Button>
                               <Button
@@ -1081,6 +1097,7 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
                                 size="sm"
                                 onPress={() => handleEditPreset(preset)}
                               >
+                                <Pencil size={15} />
                                 编辑
                               </Button>
                               <Button
@@ -1089,6 +1106,7 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
                                 size="sm"
                                 onPress={() => void handleDeletePreset(preset.id)}
                               >
+                                <Trash2 size={15} />
                                 删除
                               </Button>
                             </div>

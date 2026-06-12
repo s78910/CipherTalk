@@ -1,7 +1,7 @@
 import { createHash } from 'crypto'
 import type { ProviderOptions, SystemModelMessage } from '@ai-sdk/provider-utils'
 import type { ToolSet } from 'ai'
-import type { AgentRunInput } from './types'
+import type { AgentReasoningEffort, AgentRunInput } from './types'
 
 export interface AgentPromptParts {
   cacheableSystem: string
@@ -71,28 +71,71 @@ export function buildPromptCacheKey(parts: AgentPromptParts, tools: ToolSet): st
   return `ciphertalk:agent:${shortHash(parts.cacheableSystem)}:${shortHash(stableToolSignature(tools))}`
 }
 
-export function buildProviderOptions(input: AgentRunInput, promptCacheKey: string): ProviderOptions | undefined {
-  const effort = input.providerConfig.reasoningEffort
-  const isOpenAIProtocol = input.providerConfig.providerKind === 'openai-responses' || input.providerConfig.providerKind === 'openai-compatible'
-  if (!isOpenAIProtocol) {
+function isReasoningEffortSet(effort?: AgentReasoningEffort): effort is Exclude<AgentReasoningEffort, 'auto'> {
+  return Boolean(effort && effort !== 'auto')
+}
+
+function toAnthropicEffort(effort: Exclude<AgentReasoningEffort, 'auto'>): 'low' | 'medium' | 'high' {
+  if (effort === 'minimal') return 'low'
+  return effort
+}
+
+function toGoogleThinkingConfig(
+  effort: Exclude<AgentReasoningEffort, 'auto'>,
+  model: string,
+): Record<string, unknown> | undefined {
+  const normalizedModel = model.toLowerCase()
+  if (normalizedModel.includes('gemini-3')) {
+    return { thinkingLevel: effort, includeThoughts: true }
+  }
+  if (!normalizedModel.includes('gemini-2.5')) {
     return undefined
   }
 
-  const option: Record<string, unknown> = {}
-  if (effort && effort !== 'auto') option.reasoningEffort = effort
-  if (input.providerConfig.providerKind === 'openai-responses') {
-    option.store = isOfficialOpenAIResponsesEndpoint(input)
-    if (option.store) option.promptCacheKey = promptCacheKey
+  const thinkingBudgetByEffort: Record<Exclude<AgentReasoningEffort, 'auto'>, number> = {
+    minimal: 1024,
+    low: 2048,
+    medium: 4096,
+    high: 8192,
   }
-  if (Object.keys(option).length === 0) return undefined
+  return { thinkingBudget: thinkingBudgetByEffort[effort], includeThoughts: true }
+}
 
-  const keys = new Set(['openai'])
-  if (input.providerConfig.providerKind === 'openai-compatible') {
-    keys.add(input.providerConfig.name)
-    keys.add(toCamelCase(input.providerConfig.name))
+export function buildProviderOptions(input: AgentRunInput, promptCacheKey: string): ProviderOptions | undefined {
+  const effort = input.providerConfig.reasoningEffort
+  const options: Record<string, Record<string, unknown>> = {}
+
+  if (input.providerConfig.providerKind === 'openai-responses' || input.providerConfig.providerKind === 'openai-compatible') {
+    const option: Record<string, unknown> = {}
+    if (isReasoningEffortSet(effort)) option.reasoningEffort = effort
+    if (input.providerConfig.providerKind === 'openai-responses') {
+      option.store = isOfficialOpenAIResponsesEndpoint(input)
+      if (option.store) option.promptCacheKey = promptCacheKey
+    }
+    if (Object.keys(option).length > 0) {
+      const keys = new Set(['openai'])
+      if (input.providerConfig.providerKind === 'openai-compatible') {
+        keys.add(input.providerConfig.name)
+        keys.add(toCamelCase(input.providerConfig.name))
+      }
+      for (const key of keys) options[key] = option
+    }
   }
 
-  return Object.fromEntries([...keys].map((key) => [key, option])) as ProviderOptions
+  if (input.providerConfig.providerKind === 'anthropic' && isReasoningEffortSet(effort)) {
+    options.anthropic = {
+      effort: toAnthropicEffort(effort),
+    }
+  }
+
+  if (input.providerConfig.providerKind === 'google' && isReasoningEffortSet(effort)) {
+    const thinkingConfig = toGoogleThinkingConfig(effort, input.providerConfig.model)
+    if (thinkingConfig) {
+      options.google = { thinkingConfig }
+    }
+  }
+
+  return Object.keys(options).length > 0 ? options as ProviderOptions : undefined
 }
 
 function withAnthropicCacheControl(providerOptions?: ProviderOptions): ProviderOptions {

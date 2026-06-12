@@ -189,19 +189,30 @@ export async function runAgent(
   onProgress?: AgentProgressReporter,
 ): Promise<void> {
   await withAgentProgress(onProgress, async () => {
+    // 子进程侧耗时打点：stdout 会被主进程转发到控制台，配合主进程 [agent:perf] 看完整时间线
+    const perfStart = Date.now()
+    let perfLast = perfStart
+    const perf = (label: string, detail?: string) => {
+      const now = Date.now()
+      console.info(`[agent:perf:child] ${label} +${now - perfLast}ms，累计 ${now - perfStart}ms${detail ? `（${detail}）` : ''}`)
+      perfLast = now
+    }
     const userText = lastUserText(input.messages)
     const cachedMemoryContext = getCachedStartupMemory(input.scope)
     const memoryContext = cachedMemoryContext ?? ''
     if (cachedMemoryContext === null) {
       warmStartupMemory(input.scope, () => buildMemoryContext(input.scope))
     }
+    perf('记忆上下文', cachedMemoryContext === null ? '未命中缓存，后台补建' : '缓存命中')
     const relevantMemoryContext = ''
     const webSearchOn = isWebSearchAvailable()
     const imageGenOn = isImageGenAvailable()
     const baseTools = withToolTimeouts(input.planMode
       ? buildPlanModeTools(input.scope)
       : buildTools(input.scope, input.providerConfig, input.mcpTools, webSearchOn, imageGenOn))
+    perf('构建工具集', `${Object.keys(baseTools).length} 个`)
     const prepared = buildAgentInstructions(input, memoryContext, relevantMemoryContext, baseTools, webSearchOn, imageGenOn)
+    perf('组装系统提示')
     const agent = new ToolLoopAgent({
       model: createLanguageModel(input.providerConfig),
       instructions: prepared.instructions,
@@ -227,8 +238,11 @@ export async function runAgent(
         chunking: new Intl.Segmenter('zh', { granularity: 'word' }),
       }),
     })
+    perf('发起模型流式请求')
     // 截留 message 的 finish，等 L1 自动记忆注入完再补发，让自动写入的工具 part 落在本条消息内
     let finishChunk: UIMessageChunk | undefined
+    let perfFirstEventSeen = false
+    let perfFirstOutputSeen = false
     const toolNames = new Map<string, string>()
     const toolSummaries: ToolOutputSummary[] = []
     for await (const chunk of result.toUIMessageStream({
@@ -244,12 +258,21 @@ export async function runAgent(
         }
       },
     })) {
+      if (!perfFirstEventSeen) {
+        perfFirstEventSeen = true
+        perf('模型流首个事件', chunk.type)
+      }
+      if (!perfFirstOutputSeen && (chunk.type === 'text-delta' || chunk.type === 'reasoning-delta' || chunk.type === 'tool-input-start')) {
+        perfFirstOutputSeen = true
+        perf('模型首个增量输出（真正开始回复）', chunk.type)
+      }
       if (chunk.type === 'finish') { finishChunk = chunk; continue }
       trackToolChunk(chunk, toolNames, toolSummaries)
       onChunk(chunk)
     }
     let assistantText = ''
     try { assistantText = await result.text } catch { /* abort/异常：跳过自动记忆 */ }
+    perf('主回答流结束')
     if (assistantText && !signal?.aborted && shouldRunFinalReview(userText, assistantText, toolSummaries)) {
       const review = await runFinalReview({
         providerConfig: input.providerConfig,
@@ -261,9 +284,11 @@ export async function runAgent(
       if (review.status === 'needs_correction') {
         assistantText += appendFinalReviewCorrection(review, onChunk)
       }
+      perf('最终审核（额外一次 LLM 调用）')
     }
     if (assistantText && !signal?.aborted) {
       await injectAutoMemories(assistantText, input, onChunk, signal)
+      perf('自动记忆抽取')
     }
     if (finishChunk) onChunk(finishChunk)
     reportAgentProgress({ stage: 'run_finished', title: '回答生成完成' })
