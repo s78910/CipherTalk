@@ -11,6 +11,7 @@ const agentAborters = new Map<string, AbortController>()
 const AGENT_RUN_PROXY_CACHE_TTL_MS = 5 * 60 * 1000
 // 准备阶段网络调用（查询嵌入/重排）超时：超时直接走降级路径（不影响正确性），别让慢服务拖住首包
 const AGENT_PREP_RERANK_TIMEOUT_MS = 800
+const AGENT_PREP_PROGRESS_TITLE = '大模型准备中'
 
 let agentRunProxyRefreshedAt = 0
 let agentRunProxyRefreshPromise: Promise<string | null> | null = null
@@ -184,17 +185,19 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
       }
     }
     agentAborters.set(runId, aborter)
-    // 准备阶段步骤默认可见：让用户看到发送后程序在干什么，而不是干等
-    const sendPrepProgress = (title: string, detail?: string, visible = true) => {
+    let prepProgressSent = false
+    // 准备阶段对用户合并成单一步骤；细分阶段只保留在 stage/perf 日志里。
+    const sendPrepProgress = (visible = true) => {
       lastActivityAt = Date.now()
       lastActivityKind = 'progress'
       idleWarningCount = 0
-      if (!visible) return
+      if (!visible || prepProgressSent) return
+      prepProgressSent = true
       progressCount += 1
       sendProgress({
         stage: 'run_started',
-        title,
-        detail,
+        title: AGENT_PREP_PROGRESS_TITLE,
+        category: 'prep',
         elapsedMs: Date.now() - startedAt,
         at: Date.now(),
       })
@@ -202,7 +205,7 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
     logger?.warn('AIAgent', 'AI Agent 请求开始', baseRunData)
     try {
       stage = 'import_services'
-      sendPrepProgress('正在准备 Agent')
+      sendPrepProgress()
       const { agentProcessService } = await import('../../services/agent/agentProcessService')
       agentProcessService.setLogger(logger)
       const { resolveProviderConfig } = await import('../../services/agent/resolveProviderConfig')
@@ -210,15 +213,15 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
       const { convertToModelMessages } = await import('ai')
       markPerf('加载主进程服务模块')
       stage = 'refresh_proxy'
-      sendPrepProgress('正在检测代理')
+      sendPrepProgress()
       await refreshAgentRunProxyCached(refreshResolvedProxyUrl) // 主进程探测系统代理并持久化，供子进程 agent/嵌入读取
       markPerf('系统代理探测')
       stage = 'resolve_provider'
-      sendPrepProgress('正在准备模型配置')
+      sendPrepProgress()
       const providerConfig = resolveProviderConfig(payload.modelConfig)
       markPerf('解析模型配置')
       stage = 'convert_messages'
-      sendPrepProgress('正在整理消息')
+      sendPrepProgress()
       const uiMessages = shouldStripProviderMetadata(providerConfig)
         ? stripUiMessageProviderMetadata(payload.messages)
         : payload.messages
@@ -226,7 +229,7 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
       markPerf('整理消息', `${messages.length} 条`)
       const lastUserText = lastUserTextFromUiMessages(payload.messages)
       stage = 'load_context_services'
-      sendPrepProgress('正在加载上下文服务')
+      sendPrepProgress()
       const { mcpClientService } = await import('../../services/mcpClientService')
       const { buildReadOnlyMcpToolDescriptors } = await import('../../services/agent/mcpToolPolicy')
       const { skillManagerService } = await import('../../services/skillManagerService')
@@ -252,7 +255,7 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
       const skillManifestVersion = fingerprintSkills(skillManagerService.listSkills())
       markPerf('加载上下文服务模块', `只读 MCP 工具 ${readOnlyMcpTools.length} 个`)
       stage = 'select_tools_and_skills'
-      sendPrepProgress('正在筛选工具与技能', `只读 MCP 工具 ${readOnlyMcpTools.length} 个`)
+      sendPrepProgress()
       // MCP 工具筛选+重排 与 技能选择 互相独立，并行执行；
       // 两路对同一问题的查询嵌入由 embedQuery 的在飞缓存合并成一次请求。
       const selectMcpToolsTask = async () => {
@@ -343,7 +346,7 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
         timedTask('技能筛选（嵌入+重排）', selectSkillsTask()),
       ])
       markPerf('工具与技能筛选', `MCP ${mcpTools.length} 个${mcpCacheHit ? '·缓存' : ''} / 技能 ${skills.length} 个${skillCacheHit ? '·缓存' : ''}`)
-      sendPrepProgress('已选定工具与技能', `MCP 工具 ${mcpTools.length} 个 · 技能 ${skills.length} 个`)
+      sendPrepProgress()
       if (mcpTools.length > 0 || skills.length > 0) {
         console.info('[agent:run] injected context', {
           mcpTools: mcpTools.map((tool) => `${tool.serverName}/${tool.toolName}`),
@@ -367,7 +370,7 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
         skillSelectionCacheHit: skillCacheHit,
       })
       stage = 'run_agent_process'
-      sendPrepProgress('正在交给 Agent 进程')
+      sendPrepProgress()
       watchdog = setInterval(() => {
         const idleMs = Date.now() - lastActivityAt
         if (idleMs < 10000) return

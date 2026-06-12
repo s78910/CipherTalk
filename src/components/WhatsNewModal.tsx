@@ -1,6 +1,5 @@
-import { ReactNode } from 'react'
-import { ArrowRight, Database, Heart, Quote, Scale, Send } from 'lucide-react'
-import './WhatsNewModal.scss'
+import { Button, Modal } from '@heroui/react'
+import { Quote, Send } from 'lucide-react'
 
 interface WhatsNewModalProps {
   onClose: () => void
@@ -9,137 +8,82 @@ interface WhatsNewModalProps {
 
 type VisionSection = {
   key: 'memory' | 'evidence' | 'ownership'
-  index: string
-  icon: ReactNode
-  kicker: string
-  title: string
-  paragraphs: string[]
-  quote?: string
-  quoteSource?: string
-  note?: string
+  text: string
 }
 
 const VISION_SECTIONS: VisionSection[] = [
   {
     key: 'memory',
-    index: '01',
-    icon: <Heart size={20} />,
-    kicker: '记忆与亲情',
-    title: '为思念留下可以触摸的温度',
-    paragraphs: [
-      '当亲人离世后，曾经的点点滴滴往往都留在逝者的手机里，手机也成了继续思念的唯一入口。我希望这款软件能把这些记录整理为真正属于家人的数字资产。',
-      '一段反复叮嘱的文字，一条“儿子（闺女），爸（妈）想你了，啥时候回家呀，回来给你做你爱吃的！”的语音，一次平凡却再也无法重来的问候。'
-    ],
-    quote: '死亡不是生命的终点，遗忘才是。',
-    quoteSource: '《寻梦环游记》',
-    note: '愿技术能替你留住一点声音、一点温度，也留住一点未曾说完的爱。'
+    text: '有人离开后，一句语音就是遗物；一段闲聊，可能是最后一次拥抱。CipherTalk 要把这些碎片从设备里救出来。'
   },
   {
     key: 'evidence',
-    index: '02',
-    icon: <Scale size={20} />,
-    kicker: '证据与事实',
-    title: '为不公保留足够有力的证据',
-    paragraphs: [
-      '当您遭遇不公、不平、不正，甚至被聊天中的恶意、羞辱、威胁反复消耗时，您不该只能忍受。我希望这款软件能帮您从海量记录中快速找出关键证据。',
-      '把零散对话整理成清晰、完整、可追溯的事实链，让每一句伤害都有据可查，让每一次压迫都有证可举。'
-    ],
-    note: '人可以善良，但不该没有反击的凭据。'
+    text: '被恶意、羞辱、威胁消耗时，聊天记录不该躺在黑盒里。它要能被快速找到、串起来、拿得出手。'
   },
   {
     key: 'ownership',
-    index: '03',
-    icon: <Database size={20} />,
-    kicker: '归档与掌控',
-    title: '让聊天记录真正回到用户手中',
-    paragraphs: [
-      '我也希望这款软件能帮助更多普通人重新掌握自己的数字人生。聊天记录不该只是被困在某台设备里的碎片，它也可以是记忆的档案、关系的注脚、成长的年轮。',
-      '无论是回望过去、整理生活、备份重要信息，还是在关键时刻还原事实、保护自己，这些数据都应该真正属于用户，而不是在设备更换、账号异常或时间流逝中悄然消失。'
-    ]
+    text: '更多时候，它只是把你的数字人生还给你。不是平台的，不是某台设备的，是你的。'
   }
 ]
 
-function WhatsNewModal({ onClose, version }: WhatsNewModalProps) {
+function WhatsNewModal({ onClose }: WhatsNewModalProps) {
   const handleTelegram = () => {
     window.electronAPI?.shell?.openExternal?.('https://t.me/+p7YzmRMBm-gzNzJl')
   }
 
   return (
-    <div className="whats-new-overlay">
-      <div className="whats-new-modal">
-        <div className="whats-new-header">
-          <span className="version-tag">开发者手记 · v{version}</span>
-          <h2>开发者愿景</h2>
-          <p className="vision-lead">这不是一个只会读取聊天记录的工具。</p>
-          <p className="vision-intro">
-            我希望它能替人留住爱，提取证据，也守住每个人自己的数字人生。
-          </p>
-        </div>
+    <Modal.Backdrop
+      className="bg-black/55 backdrop-blur-xl"
+      isOpen
+      onOpenChange={(open) => {
+        if (!open) onClose()
+      }}
+      variant="blur"
+    >
+      <Modal.Container className="px-5 py-0 sm:px-10" placement="center" scroll="inside" size="full">
+        <Modal.Dialog
+          aria-label="开发者手记"
+          className="mx-auto flex min-h-dvh w-full max-w-225 items-center overflow-hidden border-0! bg-transparent! p-0! text-white shadow-none!"
+        >
+          <Modal.CloseTrigger className="right-3 top-3 bg-white/10 text-white hover:bg-white/20" />
+          <Modal.Body className="flex max-h-dvh w-full items-center overflow-y-auto p-0">
+            <article className="mx-auto flex max-w-180 flex-col gap-5 text-[15px] leading-8 text-white/88 drop-shadow-[0_2px_12px_rgba(0,0,0,0.55)]">
+              <p className="m-0 text-xl font-semibold leading-9 text-white sm:text-2xl sm:leading-10">
+                它不是聊天记录读取器。
+                <span className="bg-gradient-to-r from-white via-cyan-100 to-fuchsia-200 bg-clip-text text-transparent">
+                  它更像一把开刃的钥匙
+                </span>
+                ，从旧手机里撬出体温、证据和人生主权。
+              </p>
 
-        <div className="whats-new-content">
-          <div className="vision-opening">
-            <div className="opening-mark" aria-hidden="true" />
-            <p>
-              聊天记录不只是数据，它也可能是想念、证据、关系与自我叙事。这个弹窗不再只是告诉你“更新了什么”，
-              也想顺手告诉你，这个项目究竟想把什么留下来。
-            </p>
-          </div>
+              <p className="m-0">
+                聊天记录不是冷数据。它可能是想念、证据、关系的暗线，也是一个人活过的痕迹。
+              </p>
 
-          <div className="vision-list">
-            {VISION_SECTIONS.map((section) => (
-              <article className={`vision-card ${section.key}`} key={section.key}>
-                <div className="vision-card-top">
-                  <span className="vision-index">{section.index}</span>
-                  <div className="vision-icon" aria-hidden="true">
-                    {section.icon}
-                  </div>
-                  <div className="vision-meta">
-                    <span className="vision-kicker">{section.kicker}</span>
-                    <h3>{section.title}</h3>
-                  </div>
+              {VISION_SECTIONS.map((section) => (
+                <p className="m-0" key={section.key}>{section.text}</p>
+              ))}
+
+              <blockquote className="m-0 flex gap-3 border-l border-white/35 py-1 pl-4 text-white">
+                <Quote className="mt-1 size-4 shrink-0 text-white/80" aria-hidden="true" />
+                <div>
+                  <p className="m-0 font-semibold">死亡不是生命的终点，遗忘才是。</p>
+                  <cite className="mt-1 block text-sm not-italic text-white/65">《寻梦环游记》</cite>
                 </div>
+              </blockquote>
 
-                <div className="vision-body">
-                  {section.paragraphs.map((paragraph) => (
-                    <p key={paragraph}>{paragraph}</p>
-                  ))}
-
-                  {section.quote && (
-                    <blockquote className="vision-quote">
-                      <div className="quote-icon" aria-hidden="true">
-                        <Quote size={18} />
-                      </div>
-                      <p>{section.quote}</p>
-                      {section.quoteSource && <cite>{section.quoteSource}</cite>}
-                    </blockquote>
-                  )}
-
-                  {section.note && <p className="vision-note">{section.note}</p>}
-                </div>
-              </article>
-            ))}
-          </div>
-        </div>
-
-        <div className="whats-new-footer">
-          <div className="footer-copy">
-            <span className="footer-label">CipherTalk</span>
-            <p>愿每一段被留住的记录，都能在需要的时候成为温度、力量与归属。</p>
-          </div>
-
-          <div className="footer-actions">
-            <button className="telegram-btn" onClick={handleTelegram}>
-              <Send size={16} />
-              加入 Telegram 频道
-            </button>
-            <button className="start-btn" onClick={onClose}>
-              开始使用
-              <ArrowRight size={16} />
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
+              <div className="flex flex-col gap-3 pt-1 sm:flex-row sm:items-center sm:justify-between">
+                <p className="m-0 text-sm leading-6 text-white/72">想看项目动向和后续骚操作，进频道。</p>
+                <Button className="shrink-0 justify-center border-white/28 bg-white/12 text-white hover:bg-white/20" onPress={handleTelegram} variant="outline">
+                  <Send className="size-4" />
+                  Telegram 频道
+                </Button>
+              </div>
+            </article>
+          </Modal.Body>
+        </Modal.Dialog>
+      </Modal.Container>
+    </Modal.Backdrop>
   )
 }
 

@@ -400,7 +400,8 @@ function getDelegateTasks(part: unknown): string[] {
 
 const SUB_AGENT_PROGRESS_LIMIT = 48
 const AGENT_PENDING_TITLE = '正在准备请求'
-// 准备阶段步骤现在默认展示（真实步骤快速闪过，缓解"发完没反应"的焦虑），只隐藏本地占位项
+const AGENT_PREP_PROGRESS_TITLE = '大模型准备中'
+// 准备阶段由主进程合并成单一可见步骤；这里只隐藏可能存在的本地占位项。
 const HIDDEN_PREP_PROGRESS_TITLES = new Set([
   AGENT_PENDING_TITLE,
 ])
@@ -441,6 +442,7 @@ function buildRenderSegments(parts: UIMessage['parts']): AgentRenderSegment[] {
 function shouldDisplayAgentProgress(progress: AgentProgressEvent) {
   if (progress.stage === 'error') return true
   if (progress.visible === false) return false
+  if ((progress.depth ?? 0) === 0 && progress.stage === 'run_started' && progress.title === AGENT_PREP_PROGRESS_TITLE) return true
   if ((progress.depth ?? 0) === 0 && progress.stage === 'run_started' && HIDDEN_PREP_PROGRESS_TITLES.has(progress.title)) return false
   if ((progress.depth ?? 0) === 0 && progress.stage === 'run_finished' && progress.title === '回答生成完成') return false
   return true
@@ -1840,7 +1842,7 @@ export default function AgentPage() {
 
   const handleAgentProgress = useCallback((progress: AgentProgressEvent) => {
     const displayProgress = shouldDisplayAgentProgress(progress)
-    // 准备阶段的 run_started 步骤只进执行过程链，不推桌宠气泡（连发 8 条会刷屏）
+    // 准备阶段的 run_started 步骤只进执行过程链，不推桌宠气泡。
     const petWorthy = progress.stage !== 'run_started'
     if ((progress.depth ?? 0) === 0 && petWorthy && (displayProgress || progress.stage === 'run_finished' || progress.stage === 'error')) {
       window.electronAPI.pet.sendAgentProgress({
