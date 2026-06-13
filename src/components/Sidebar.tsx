@@ -1,12 +1,13 @@
 import { useState, type ReactElement, type CSSProperties, type Key } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { Avatar, Button, ScrollShadow, Separator, Tabs, Tooltip } from '@heroui/react'
-import { Home, MessageSquare, Database, Settings, SquareChevronLeft, SquareChevronRight, Download, Aperture, Network, FileAudio, Bot, PawPrint, Smartphone } from 'lucide-react'
+import { Home, MessageSquare, Database, Settings, SquareChevronLeft, SquareChevronRight, Download, Aperture, Network, FileAudio, Bot, PawPrint } from 'lucide-react'
 import { MCP } from '@lobehub/icons'
 import packageJson from '../../package.json'
 import { useAppStore } from '../stores/appStore'
 import { useDeviceConnectStatus } from '../hooks/useDeviceConnectStatus'
 import { DeviceConnectStatusDot } from './DeviceConnectStatusDot'
+import DeviceConnectDialog from './DeviceConnectDialog'
 import { cn } from '../lib/utils'
 
 const EXPANDED_WIDTH = 220
@@ -14,6 +15,7 @@ const COLLAPSED_WIDTH = 88
 const NAV_ICON_SIZE = 23
 const SIDEBAR_ACTION_ICON_SIZE = 23
 const APP_DISPLAY_NAME = packageJson.build?.productName || packageJson.name
+const WECHAT_LOGO_SRC = './微信logo.png'
 
 type RouteItem = {
   key: string
@@ -39,6 +41,7 @@ function Sidebar() {
   const userInfo = useAppStore(state => state.userInfo)
   const deviceStatus = useDeviceConnectStatus()
   const [collapsed, setCollapsed] = useState(false)
+  const [deviceConnectOpen, setDeviceConnectOpen] = useState(false)
   const userDisplayName = userInfo?.nickName?.trim() || userInfo?.alias?.trim() || '未连接用户'
   const userInitial = userDisplayName.slice(0, 1).toUpperCase()
 
@@ -62,14 +65,8 @@ function Sidebar() {
 
   const navItems: NavItemConfig[] = [
     { key: 'home', label: '首页', icon: <Home size={NAV_ICON_SIZE} />, type: 'route', path: '/home' },
-    { key: 'agent', label: 'AI 助手', icon: <Bot size={NAV_ICON_SIZE} />, type: 'route', path: '/agent' },
+    { key: 'agent', label: 'CT-Agent', icon: <Bot size={NAV_ICON_SIZE} />, type: 'route', path: '/agent' },
     { key: 'pets', label: 'AI 宠物', icon: <PawPrint size={NAV_ICON_SIZE} />, type: 'route', path: '/pets' },
-    { key: 'device-connect', label: '设备连接', icon: (
-      <span className="relative inline-flex">
-        <Smartphone size={NAV_ICON_SIZE} />
-        <DeviceConnectStatusDot status={deviceStatus} className="absolute -right-0.5 -top-0.5 size-2.5 ring-2 ring-background" />
-      </span>
-    ), type: 'route', path: '/device-connect' },
     { key: 'chat', label: '聊天查看', icon: <MessageSquare size={NAV_ICON_SIZE} />, type: 'action', onClick: openChatWindow },
     { key: 'moments', label: '朋友圈', icon: <Aperture size={NAV_ICON_SIZE} />, type: 'action', onClick: openMomentsWindow },
     { key: 'transcription-assistant', label: '转文字助手', icon: <FileAudio size={NAV_ICON_SIZE} />, type: 'route', path: '/transcription-assistant' },
@@ -156,11 +153,24 @@ function Sidebar() {
     </div>
   )
 
+  const deviceConnectIcon = (
+    <span className="relative inline-flex">
+      <img
+        src={WECHAT_LOGO_SRC}
+        alt=""
+        className="shrink-0 object-contain"
+        style={{ width: SIDEBAR_ACTION_ICON_SIZE, height: SIDEBAR_ACTION_ICON_SIZE }}
+      />
+      <DeviceConnectStatusDot status={deviceStatus} className="absolute -right-0.5 -top-0.5 size-2.5 ring-2 ring-background" />
+    </span>
+  )
+
   return (
-    <aside
-      className="flex shrink-0 flex-col overflow-x-hidden bg-surface-secondary backdrop-blur-[18px] transition-[width] duration-200 ease-out"
-      style={{ width: collapsed ? COLLAPSED_WIDTH : EXPANDED_WIDTH }}
-    >
+    <>
+      <aside
+        className="flex shrink-0 flex-col overflow-x-hidden bg-surface-secondary backdrop-blur-[18px] transition-[width] duration-200 ease-out"
+        style={{ width: collapsed ? COLLAPSED_WIDTH : EXPANDED_WIDTH }}
+      >
       <div
         className="shrink-0"
         aria-hidden="true"
@@ -228,6 +238,11 @@ function Sidebar() {
 
         <div className={cn('flex flex-col gap-1', collapsed && 'items-center')}>
           {renderNavButton({
+            label: 'ClawLink',
+            icon: deviceConnectIcon,
+            onPress: () => setDeviceConnectOpen(true),
+          })}
+          {renderNavButton({
             label: '设置',
             icon: <Settings size={SIDEBAR_ACTION_ICON_SIZE} />,
             active: isActive('/settings'),
@@ -240,7 +255,9 @@ function Sidebar() {
           })}
         </div>
       </div>
-    </aside>
+      </aside>
+      <DeviceConnectDialog isOpen={deviceConnectOpen} onClose={() => setDeviceConnectOpen(false)} />
+    </>
   )
 }
 
