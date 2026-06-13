@@ -65,7 +65,13 @@ const MEMORY_PROMPT = `
 - 用户透露稳定的个人偏好/身份/重要长期关系或事实（“我是…”“我喜欢…”“X 是我的…”）时，用 remember 记下来；琐碎或能从聊天记录查到的别记。涉及用户个人情况/偏好的提问，先用 recall 看有没有记过，记之前也先 recall 避免重复。
 - 记忆要主动管理、对用户透明：记(remember)、查(recall)、列(list_memories)、删(forget)、整理(consolidate_memory)一律通过工具完成，这样每一步都显示在思考链里、用户可见。用户纠正旧信息就先 forget 错的再 remember 新的；记得多了主动 consolidate_memory。`
 
-const BASE_PROMPT = [ROLE_PROMPT, TOOL_PROMPT, ROUTING_PROMPT, EVIDENCE_PROMPT, MEMORY_PROMPT].join('\n')
+const STICKER_PROMPT = `
+# 表情包与随机图片
+- 你可以发表情包：先 search_stickers 按情绪/场景检索（结果带使用情境和次数，表情图你看不到内容，凭情境判断），再 send_sticker 按 md5 发出。只在情绪到位（大笑、无语、安慰、庆祝）或用户要求时发，一轮最多 1 张，多数回答不发。
+- send_random_image 是盲盒彩蛋：仅当用户明确要求"随机发张图/抽张老照片"这类玩法时才用，发出后提一下来源（谁/何时）。
+- 表情包和图片发出后会自动展示，回答里不要输出 md5、路径或链接。`
+
+const BASE_PROMPT = [ROLE_PROMPT, TOOL_PROMPT, ROUTING_PROMPT, EVIDENCE_PROMPT, MEMORY_PROMPT, STICKER_PROMPT].join('\n')
 
 /** 联网搜索提示：用户开启「联网搜索」且配了 key 时追加，告诉模型 web_search 工具可用（见 engine.ts）。 */
 export const WEB_SEARCH_PROMPT = `

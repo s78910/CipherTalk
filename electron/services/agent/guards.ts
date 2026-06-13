@@ -20,6 +20,8 @@ const TOOL_TIMEOUT_OVERRIDES: Record<string, number> = {
   semantic_search: 240_000,
   search_messages: 240_000,
   delegate_analysis: 600_000, // 子 Agent 批量整轮（最多 4 个并发子任务 + 可能触发首次重建），给更长上限
+  search_stickers: 240_000, // 首次构建表情包词典可能触发最近会话补建索引
+  send_random_image: 240_000, // 同上 + 图片解密
 }
 
 function stepFingerprint(step: StepResult<ToolSet>): string | null {

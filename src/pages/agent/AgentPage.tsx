@@ -54,10 +54,54 @@ import { IpcChatTransport, type AgentModelConfig, type AgentProgressEvent, type 
 import * as configService from '@/services/config'
 import { useTtsSpeaker } from '@/lib/ttsPlayer'
 
-const PROMPT_PRESETS = [
-  { label: '最近聊了什么', text: '最近一周我和大家主要聊了什么？按主题总结，并列出关键时间。', icon: Clock3 },
-  { label: '找相关记录', text: '帮我找一下最近聊到“”的聊天记录，按相关度排序。', icon: Search },
-  { label: '统计高频联系人', text: '统计最近一个月互动最多的联系人，并说明互动高峰时间。', icon: BarChart3 },
+// 斜杠预设：按 AI 助手的工具能力分组，“”留空让用户填关键词/人名/日期
+const PROMPT_PRESET_GROUPS = [
+  {
+    group: '回顾总结',
+    presets: [
+      { label: '最近聊了什么', text: '最近一周我和大家主要聊了什么？按主题总结，并列出关键时间。', icon: Clock3 },
+      { label: '总结和某人的聊天', text: '总结最近一个月我和“”的聊天：主要话题、关系氛围、还有什么没办完的事。', icon: Users },
+      { label: '回顾某天的聊天', text: '帮我回顾“”那天的聊天：我都和谁聊了什么，按时间梳理。', icon: History },
+    ],
+  },
+  {
+    group: '查找核对',
+    presets: [
+      { label: '找相关记录', text: '帮我找一下最近聊到“”的聊天记录，按相关度排序。', icon: Search },
+      { label: '查证某件事', text: '帮我查一下“”这件事是谁、什么时候说的，给出原话和上下文。', icon: Quote },
+      { label: '找某个主题', text: '帮我找所有和“”相关的聊天内容（不一定包含这个词），按时间归纳。', icon: Link2 },
+    ],
+  },
+  {
+    group: '统计图表',
+    presets: [
+      { label: '统计高频联系人', text: '统计最近一个月互动最多的联系人，并说明互动高峰时间。', icon: BarChart3 },
+      { label: '群活跃排行', text: '统计“”这个群最近一个月的发言排行（前 10 名），用图表展示。', icon: Table2 },
+      { label: '聊天量趋势', text: '统计最近三个月我每周的消息收发量，用折线图展示并分析趋势。', icon: RefreshCcw },
+    ],
+  },
+  {
+    group: '朋友圈',
+    presets: [
+      { label: '翻某人朋友圈', text: '看看“”最近半年发了哪些朋友圈，挑有意思的讲讲。', icon: SquarePen },
+      { label: '朋友圈之最', text: '统计最近半年谁发朋友圈最多、谁获赞最多，用图表展示。', icon: ListChecks },
+    ],
+  },
+  {
+    group: '记忆',
+    presets: [
+      { label: '你记住了什么', text: '列出你记住的关于我的长期记忆，有过时或记错的帮我指出来。', icon: Brain },
+    ],
+  },
+  {
+    group: '彩蛋玩法',
+    presets: [
+      { label: '发个表情包', text: '挑一张我常用的表情包发出来，再说说我一般什么时候用它。', icon: Sparkles },
+      { label: '随机抽一张图', text: '从聊天记录里随机抽一张图片，告诉我它的来历。', icon: ImageIcon },
+      { label: 'AI 作图', text: '帮我画一张图：“”。', icon: PenLine },
+      { label: '联网查一下', text: '联网帮我查一下“”，附上来源链接。', icon: Globe },
+    ],
+  },
 ]
 
 const REASONING_EFFORT_OPTIONS: Array<{ value: AgentReasoningEffort; label: string }> = [
@@ -84,8 +128,13 @@ function SlashPresetButton({ showGroupSeparator = false }: { showGroupSeparator?
   const value = textInput.value
   const slashMatch = value.match(/(?:^|\s)\/([^\s/]{0,20})$/)
   const query = slashMatch ? slashMatch[1].toLowerCase() : null
-  const presets = useMemo(
-    () => PROMPT_PRESETS.filter((preset) => !query || preset.label.toLowerCase().includes(query) || preset.text.toLowerCase().includes(query)),
+  const presetGroups = useMemo(
+    () => PROMPT_PRESET_GROUPS
+      .map(({ group, presets }) => ({
+        group,
+        presets: presets.filter((preset) => !query || preset.label.toLowerCase().includes(query) || preset.text.toLowerCase().includes(query)),
+      }))
+      .filter(({ presets }) => presets.length > 0),
     [query]
   )
   const [manualOpen, setManualOpen] = useState(false)
@@ -137,17 +186,22 @@ function SlashPresetButton({ showGroupSeparator = false }: { showGroupSeparator?
         {showGroupSeparator && <ButtonGroup.Separator />}
         <Slash className="size-3.5" />
       </HeroButton>
-      <Dropdown.Popover className="min-w-56" placement="top start">
+      <Dropdown.Popover className="max-h-96 min-w-56 overflow-y-auto" placement="top start">
         <Dropdown.Menu>
-          {presets.map((preset) => {
-            const Icon = preset.icon
-            return (
-              <Dropdown.Item id={`preset-${preset.label}`} key={preset.label} textValue={preset.label} onAction={() => applyPreset(preset.text)}>
-                <Icon className="size-4 shrink-0 text-muted" />
-                <Label>{preset.label}</Label>
-              </Dropdown.Item>
-            )
-          })}
+          {presetGroups.map(({ group, presets }) => (
+            <Dropdown.Section key={group}>
+              <Header>{group}</Header>
+              {presets.map((preset) => {
+                const Icon = preset.icon
+                return (
+                  <Dropdown.Item id={`preset-${preset.label}`} key={preset.label} textValue={preset.label} onAction={() => applyPreset(preset.text)}>
+                    <Icon className="size-4 shrink-0 text-muted" />
+                    <Label>{preset.label}</Label>
+                  </Dropdown.Item>
+                )
+              })}
+            </Dropdown.Section>
+          ))}
         </Dropdown.Menu>
       </Dropdown.Popover>
     </Dropdown>
@@ -262,6 +316,9 @@ const TOOL_LABELS: Record<string, string> = {
   moments_stats: '朋友圈统计',
   web_search: '联网搜索',
   generate_image: '生成图片',
+  search_stickers: '翻表情包',
+  send_sticker: '发表情包',
+  send_random_image: '抽一张图片',
   auto_memory: '自动记忆',
   final_review: '最终审核',
 }
@@ -2715,32 +2772,46 @@ export default function AgentPage() {
                 ? (isLastMessage && subAgentProgress.length > 0 ? subAgentProgress : persistedSubAgentEvents)
                 : []
               const orderedSegments = buildRenderSegments(message.parts)
+              // generate_image / send_sticker / send_random_image 的产出图：正文区直接展示
               const renderGeneratedImageTool = (part: AgentMessagePart, index: number) => {
                 if (!isAgentChainPart(part)) return null
-                if (part.type !== 'tool-generate_image' || part.state !== 'output-available') return null
-                const filePath = String((part.output as { filePath?: unknown } | undefined)?.filePath || '')
+                const isSticker = part.type === 'tool-send_sticker'
+                const isRandomImage = part.type === 'tool-send_random_image'
+                const isGenerated = part.type === 'tool-generate_image'
+                if ((!isSticker && !isRandomImage && !isGenerated) || part.state !== 'output-available') return null
+                const output = part.output as { filePath?: unknown; from?: unknown; sender?: unknown; time?: unknown } | undefined
+                const filePath = String(output?.filePath || '')
                 if (!filePath) return null
                 const imageSrc = `local-image://${encodeURIComponent(filePath)}`
+                const caption = isRandomImage
+                  ? [output?.sender, output?.from, output?.time].map((v) => String(v || '')).filter(Boolean).join(' · ')
+                  : ''
                 return (
-                  <button
-                    className="mt-1 block w-fit cursor-pointer border-0 bg-transparent p-0 text-left"
-                    key={`genimg-${index}`}
-                    onClick={(event) => {
-                      const rect = event.currentTarget.getBoundingClientRect()
-                      setGeneratedImagePreview({
-                        src: imageSrc,
-                        originRect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height }
-                      })
-                    }}
-                    title="点击预览"
-                    type="button"
-                  >
-                    <img
-                      alt="AI 生成的图片"
-                      className="max-h-90 max-w-full rounded-(--agent-radius,12px) border border-border/60 shadow-xs"
-                      src={imageSrc}
-                    />
-                  </button>
+                  <div className="mt-1 w-fit" key={`genimg-${index}`}>
+                    <button
+                      className="block w-fit cursor-pointer border-0 bg-transparent p-0 text-left"
+                      onClick={(event) => {
+                        const rect = event.currentTarget.getBoundingClientRect()
+                        setGeneratedImagePreview({
+                          src: imageSrc,
+                          originRect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height }
+                        })
+                      }}
+                      title="点击预览"
+                      type="button"
+                    >
+                      <img
+                        alt={isSticker ? '表情包' : isRandomImage ? '聊天记录里的图片' : 'AI 生成的图片'}
+                        className={isSticker
+                          ? 'max-h-40 max-w-40 rounded-(--agent-radius,12px)'
+                          : 'max-h-90 max-w-full rounded-(--agent-radius,12px) border border-border/60 shadow-xs'}
+                        src={imageSrc}
+                      />
+                    </button>
+                    {caption && (
+                      <div className="mt-1 text-muted-foreground text-xs">{caption}</div>
+                    )}
+                  </div>
                 )
               }
               const renderChainSegment = (segment: Array<{ part: AgentChainPart; index: number }>, segmentActive: boolean) => (

@@ -337,7 +337,9 @@ export default function PetWindow() {
     const off = window.electronAPI.pet.onAgentProgress((p) => {
       window.clearTimeout(progressTimerRef.current)
       setProgress({ title: p.title, detail: p.detail })
-      const hideDelay = p.stage === 'run_finished' || p.stage === 'error' ? 1500 : 8000
+      // 运行结束/出错短暂停留后隐藏；运行中常显（思考/长工具/流式生成期间没有新事件，
+      // 不能按几秒收掉），只留长看门狗兜底——结束事件丢失时不至于永久挂着。
+      const hideDelay = p.stage === 'run_finished' || p.stage === 'error' ? 1500 : 120_000
       progressTimerRef.current = window.setTimeout(() => setProgress(null), hideDelay)
     })
     return off

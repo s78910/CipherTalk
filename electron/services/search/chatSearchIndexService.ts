@@ -1081,6 +1081,95 @@ export class ChatSearchIndexService {
     }
   }
 
+  /**
+   * 列出已索引的表情包消息行（localType=47，按时间倒序），供 AI 助手表情包词典聚合。
+   * 只读已建索引的会话，不触发建索引；为空时由调用方决定是否先索引最近会话。
+   */
+  listStickerMessageRows(limit: number): Array<{
+    sessionId: string
+    localId: number
+    sortSeq: number
+    createTime: number
+    isSend: number | null
+    rawContent: string
+  }> {
+    try {
+      const rows = this.getDb().prepare(`
+        SELECT session_id, local_id, sort_seq, create_time, is_send, raw_content
+        FROM message_index
+        WHERE local_type = 47
+        ORDER BY create_time DESC
+        LIMIT ?
+      `).all(Math.max(1, Math.floor(limit))) as Array<{
+        session_id: string
+        local_id: number
+        sort_seq: number
+        create_time: number
+        is_send: number | null
+        raw_content: string
+      }>
+      return rows.map((row) => ({
+        sessionId: row.session_id,
+        localId: Number(row.local_id || 0),
+        sortSeq: Number(row.sort_seq || 0),
+        createTime: Number(row.create_time || 0),
+        isSend: row.is_send ?? null,
+        rawContent: String(row.raw_content || '')
+      }))
+    } catch (e) {
+      console.error('[ChatSearchIndex] listStickerMessageRows 失败:', e)
+      return []
+    }
+  }
+
+  /** 取某条消息之前最近的一条文本消息内容（表情包"使用情境"）。 */
+  getPrecedingText(sessionId: string, sortSeq: number): string {
+    try {
+      const row = this.getDb().prepare(`
+        SELECT parsed_content
+        FROM message_index
+        WHERE session_id = ? AND sort_seq < ? AND local_type = 1 AND trim(parsed_content) != ''
+        ORDER BY sort_seq DESC
+        LIMIT 1
+      `).get(sessionId, sortSeq) as { parsed_content?: string } | undefined
+      return String(row?.parsed_content || '')
+    } catch {
+      return ''
+    }
+  }
+
+  /** 在已索引行里随机抽一条图片消息（localType=3），可限定会话。 */
+  pickRandomImageMessage(sessionId?: string): { sessionId: string; localId: number; createTime: number; isSend: number | null; senderUsername: string | null } | null {
+    try {
+      const db = this.getDb()
+      const where = sessionId ? 'local_type = 3 AND session_id = ?' : 'local_type = 3'
+      const row = db.prepare(`
+        SELECT session_id, local_id, create_time, is_send, sender_username
+        FROM message_index
+        WHERE ${where}
+        ORDER BY RANDOM()
+        LIMIT 1
+      `).get(...(sessionId ? [sessionId] : [])) as {
+        session_id?: string
+        local_id?: number
+        create_time?: number
+        is_send?: number | null
+        sender_username?: string | null
+      } | undefined
+      if (!row?.session_id || row.local_id == null) return null
+      return {
+        sessionId: row.session_id,
+        localId: Number(row.local_id),
+        createTime: Number(row.create_time || 0),
+        isSend: row.is_send ?? null,
+        senderUsername: row.sender_username ?? null
+      }
+    } catch (e) {
+      console.error('[ChatSearchIndex] pickRandomImageMessage 失败:', e)
+      return null
+    }
+  }
+
   async listSessionMemoryMessages(
     sessionId: string,
     onProgress?: ChatSearchSessionOptions['onProgress'],
