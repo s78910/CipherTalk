@@ -77,6 +77,7 @@ type WechatBotReply = {
   text: string
   textBubbles?: string[]
   media: WechatBotMedia[]
+  personaActions: WechatPersonaAction[]
 }
 
 type WechatConversationMode = {
@@ -89,6 +90,12 @@ type WechatContactCandidate = {
   username: string
   displayName: string
   kind: 'person' | 'group' | 'official'
+}
+
+type WechatPersonaAction = {
+  action: 'open_persona_chat' | 'build_persona' | 'build_session_vectors' | 'ask_persona_build'
+  sessionId: string
+  displayName: string
 }
 
 type PendingPersonaSelection = {
@@ -191,11 +198,55 @@ function extractMediaFromToolChunk(chunk: UIMessageChunk, toolNames: Map<string,
   }
 }
 
+function extractPersonaActionFromToolChunk(chunk: UIMessageChunk, toolNames: Map<string, string>): WechatPersonaAction | null {
+  const c = chunk as {
+    type?: string
+    toolCallId?: string
+    toolName?: string
+    output?: {
+      success?: unknown
+      action?: unknown
+      sessionId?: unknown
+      displayName?: unknown
+    }
+  }
+  if (c.type !== 'tool-output-available' || c.output?.success !== true) return null
+  const toolName = c.toolName || (c.toolCallId ? toolNames.get(c.toolCallId) : undefined)
+  if (toolName !== 'persona_control') return null
+  const action = c.output.action
+  if (
+    action !== 'open_persona_chat' &&
+    action !== 'build_persona' &&
+    action !== 'build_session_vectors' &&
+    action !== 'ask_persona_build'
+  ) {
+    return null
+  }
+  const sessionId = typeof c.output.sessionId === 'string' ? c.output.sessionId.trim() : ''
+  if (!sessionId) return null
+  const displayName = typeof c.output.displayName === 'string' && c.output.displayName.trim()
+    ? c.output.displayName.trim()
+    : sessionId
+  return { action, sessionId, displayName }
+}
+
 function dedupeMedia(media: WechatBotMedia[]): WechatBotMedia[] {
   const seen = new Set<string>()
   const result: WechatBotMedia[] = []
   for (const item of media) {
     const key = `${item.kind}:${item.filePath || item.text || ''}:${item.caption || ''}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    result.push(item)
+  }
+  return result
+}
+
+function dedupePersonaActions(actions: WechatPersonaAction[]): WechatPersonaAction[] {
+  const seen = new Set<string>()
+  const result: WechatPersonaAction[] = []
+  for (const item of actions) {
+    const key = `${item.action}:${item.sessionId}`
     if (seen.has(key)) continue
     seen.add(key)
     result.push(item)
@@ -231,10 +282,10 @@ function splitVoiceMarkedReply(reply: WechatBotReply, forceVoice: boolean): Wech
 
   if (!hasVoiceMarker && forceVoice) {
     media.push({ kind: 'voice', text })
-    return { text: '', textBubbles: [], media: dedupeMedia(media) }
+    return { text: '', textBubbles: [], media: dedupeMedia(media), personaActions: reply.personaActions }
   }
 
-  return { text: textBubbles.join('\n'), textBubbles, media: dedupeMedia(media) }
+  return { text: textBubbles.join('\n'), textBubbles, media: dedupeMedia(media), personaActions: reply.personaActions }
 }
 
 function normalizeWechatTextBubbles(bubbles: string[]): string[] {
@@ -604,7 +655,7 @@ class WeixinBotService {
       const reply = splitVoiceMarkedReply(rawReply, forceVoice)
       console.log(`[WechatBot] Agent 回复长度=${reply.text.length} 媒体=${reply.media.length} voiceMedia=${reply.media.filter((item) => item.kind === 'voice').length} 内容="${reply.text.slice(0, 120)}"`)
 
-      if (reply.text || reply.media.length > 0) {
+      if (reply.text || reply.media.length > 0 || reply.personaActions.length > 0) {
         await typing?.stop()
         typing = null
         const session = this.session
@@ -612,13 +663,14 @@ class WeixinBotService {
         const assistantMsg: UIMessage = {
           id: `wx-a-${Date.now()}`,
           role: 'assistant',
-          parts: [{ type: 'text', text: reply.text || `[已发送 ${reply.media.length} 个媒体文件]` }]
+          parts: [{ type: 'text', text: reply.text || `[已触发 ${reply.personaActions.length} 个数字分身动作]` }]
         }
         agentConversationStore.append(conv.id, [assistantMsg])
         if (reply.text) {
           await this.sendTextBubbles(from, getReplyTextBubbles(reply), contextToken)
         }
         await this.sendReplyMedia(from, reply.media, contextToken)
+        await this.executePersonaActions(from, reply.personaActions, contextToken)
         this.logger?.warn('WechatBot', '已回复微信消息', { from, replyLength: reply.text.length, mediaCount: reply.media.length })
         console.log('[WechatBot] 已调用 sendmessage 发送回复')
       } else {
@@ -786,6 +838,108 @@ class WeixinBotService {
     if (activeSession) {
       await sendText(activeSession, from, `已开启「${persona.displayName || candidate.displayName}」的数字分身。发送「退出数字分身」可回到普通 AI 助手。`, contextToken)
     }
+  }
+
+  private async executePersonaActions(from: string, actions: WechatPersonaAction[], contextToken?: string): Promise<void> {
+    if (actions.length === 0) return
+    for (const action of actions) {
+      try {
+        if (action.action === 'ask_persona_build') continue
+
+        if (action.action === 'open_persona_chat') {
+          await this.activatePersonaMode(from, {
+            username: action.sessionId,
+            displayName: action.displayName,
+            kind: 'person',
+          }, contextToken)
+          continue
+        }
+
+        if (action.action === 'build_persona') {
+          await this.buildPersonaForWechat(from, action.sessionId, action.displayName, contextToken)
+          continue
+        }
+
+        if (action.action === 'build_session_vectors') {
+          await this.buildSessionVectorsForWechat(from, action.sessionId, action.displayName, contextToken)
+        }
+      } catch (e) {
+        this.logger?.error('WechatBot', '执行数字分身动作失败', {
+          from,
+          action,
+          ...errorToLogData(e),
+        })
+        const session = this.session
+        if (session) {
+          await sendText(session, from, `执行「${action.displayName}」的数字分身操作失败：${e instanceof Error ? e.message : String(e)}`, contextToken)
+        }
+      }
+    }
+  }
+
+  private async buildPersonaForWechat(from: string, sessionId: string, displayName: string, contextToken?: string): Promise<void> {
+    const { buildPersonaFromSession } = await import('../agent/persona/personaBuildService')
+    let lastProgressAt = 0
+    let lastStage = ''
+    const result = await buildPersonaFromSession({
+      sessionId,
+      displayName,
+      logger: this.logger,
+      onProgress: (progress) => {
+        const progressSession = this.session
+        if (!progressSession) return
+        const now = Date.now()
+        if (progress.stage === 'done' || progress.stage === 'error' || progress.stage !== lastStage || now - lastProgressAt > 20_000) {
+          lastStage = progress.stage
+          lastProgressAt = now
+          const detail = progress.detail ? `：${progress.detail}` : ''
+          void sendText(progressSession, from, `${progress.title}${detail}`, contextToken).catch((e) => {
+            this.logger?.warn('WechatBot', '发送克隆进度失败', { from, error: String(e) })
+          })
+        }
+      },
+    })
+    const session = this.session
+    if (!session) return
+    if (!result.success) {
+      await sendText(session, from, `克隆「${displayName}」失败：${result.error}`, contextToken)
+      return
+    }
+    await sendText(session, from, `「${result.persona.displayName || displayName}」的数字分身已创建成功。发送「打开${result.persona.displayName || displayName}的数字分身」进入对话。`, contextToken)
+  }
+
+  private async buildSessionVectorsForWechat(from: string, sessionId: string, displayName: string, contextToken?: string): Promise<void> {
+    const { getEmbeddingConfig } = await import('../ai/embeddingService')
+    const { messageVectorService } = await import('../search/messageVectorService')
+    const { refreshResolvedProxyUrl } = await import('../ai/proxyFetch')
+    const cfg = getEmbeddingConfig()
+    const session = this.session
+    if (!session) return
+    if (!messageVectorService.isReady(cfg)) {
+      await sendText(session, from, '未启用或未配置嵌入模型，请先在设置里的嵌入页配置并启用。', contextToken)
+      return
+    }
+    await sendText(session, from, `开始为「${displayName}」建立语义索引。`, contextToken)
+    await refreshResolvedProxyUrl()
+    let lastProgressAt = 0
+    const indexed = await messageVectorService.ensureSessionVectors(sessionId, cfg, undefined, (progress: unknown) => {
+      const progressSession = this.session
+      if (!progressSession) return
+      const now = Date.now()
+      if (now - lastProgressAt < 20_000) return
+      lastProgressAt = now
+      const data = progress as { message?: unknown; current?: unknown; total?: unknown }
+      const message = typeof data.message === 'string'
+        ? data.message
+        : Number.isFinite(Number(data.current)) && Number.isFinite(Number(data.total))
+          ? `已处理 ${Number(data.current)}/${Number(data.total)}`
+          : '正在建立语义索引'
+      void sendText(progressSession, from, message, contextToken).catch((e) => {
+        this.logger?.warn('WechatBot', '发送向量化进度失败', { from, error: String(e) })
+      })
+    })
+    const doneSession = this.session
+    if (doneSession) await sendText(doneSession, from, `「${displayName}」的语义索引已建立，新增 ${indexed} 条。`, contextToken)
   }
 
   private async handlePersonaModeMessage(from: string, text: string, mode: WechatConversationMode, contextToken?: string): Promise<void> {
@@ -1114,6 +1268,7 @@ class WeixinBotService {
     const textBlocks: string[] = []
     const textBlockIndexes = new Map<string, number>()
     const media: WechatBotMedia[] = []
+    const personaActions: WechatPersonaAction[] = []
     const toolNames = new Map<string, string>()
     await agentProcessService.run(
       { messages, providerConfig, scope: { kind: 'global' }, mcpTools: [], skills: [], toolMode: 'default', outputMode: 'wechat', planMode: false },
@@ -1143,6 +1298,11 @@ class WeixinBotService {
           media.push(item)
           this.logger?.warn('WechatBot', '已收集 Agent 媒体输出', { kind: item.kind, filePath: item.filePath })
         }
+        const personaAction = extractPersonaActionFromToolChunk(chunk, toolNames)
+        if (personaAction) {
+          personaActions.push(personaAction)
+          this.logger?.warn('WechatBot', '已收集 Agent 数字分身动作', personaAction)
+        }
       },
     )
     const rawReplyBubbles = textBlocks.length > 0
@@ -1154,6 +1314,7 @@ class WeixinBotService {
       text: directiveReply.text,
       textBubbles: directiveReply.textBubbles,
       media: dedupeMedia([...media, ...directiveReply.media]),
+      personaActions: dedupePersonaActions(personaActions),
     }
   }
 
@@ -1161,7 +1322,7 @@ class WeixinBotService {
     const { personaStore } = await import('../agent/persona/personaStore')
     const persona = personaStore.get(mode.sessionId)
     if (!persona) {
-      return { text: `「${mode.displayName}」的数字分身不存在，请重新发送「打开${mode.displayName}的数字分身」。`, media: [] }
+      return { text: `「${mode.displayName}」的数字分身不存在，请重新发送「打开${mode.displayName}的数字分身」。`, media: [], personaActions: [] }
     }
     const { resolveProviderConfig } = await import('../agent/resolveProviderConfig')
     const { refreshResolvedProxyUrl } = await import('../ai/proxyFetch')
@@ -1203,7 +1364,7 @@ class WeixinBotService {
         if (bubble) textBubbles.push(bubble)
       }
     })
-    return { text: reply.trim(), textBubbles: normalizeWechatTextBubbles(textBubbles), media: [] }
+    return { text: reply.trim(), textBubbles: normalizeWechatTextBubbles(textBubbles), media: [], personaActions: [] }
   }
 
   // ── token 持久化（userData 下独立 JSON，不混入共享 config） ──

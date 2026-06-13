@@ -138,6 +138,10 @@ function SplashPage() {
   return (
     <div className="splash-page" ref={rootRef}>
       <div className="crt-card">
+        <div className="siri-aurora siri-aurora-a" aria-hidden="true" />
+        <div className="siri-aurora siri-aurora-b" aria-hidden="true" />
+        <div className="siri-aurora siri-aurora-c" aria-hidden="true" />
+        <div className="siri-vapor" aria-hidden="true" />
         <div className="crt-scanlines" aria-hidden="true" />
         <div className="crt-scanband" aria-hidden="true" />
         <div className="crt-content">
