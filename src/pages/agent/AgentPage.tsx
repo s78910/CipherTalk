@@ -1512,7 +1512,9 @@ function getMentionQueryAtCursor(value: string): MentionQueryState | null {
   if (!match) return null
   const query = match[1] || ''
   const start = cursor - query.length - 1
-  if (start > 0 && isAsciiWordChar(value[start - 1] || '')) return null
+  const beforeTrigger = value[start - 1] || ''
+  if (start > 0 && query.length > 0 && !/\s/.test(beforeTrigger)) return null
+  if (start > 0 && query.length === 0 && isAsciiWordChar(beforeTrigger)) return null
   return {
     end: cursor,
     query,
@@ -1889,7 +1891,7 @@ function MentionField({
           <div
             className="absolute bottom-full left-3 z-50 mb-2 w-80 max-w-[calc(100%-1.5rem)] overflow-hidden rounded-(--agent-radius,12px) border border-border bg-popover p-1 shadow-lg"
           >
-            <div className="max-h-80 overflow-y-auto pr-1 [scrollbar-gutter:stable]" onScroll={handleResultsScroll}>
+          <div className="max-h-80 overflow-y-auto pr-1 scrollbar-gutter-stable" onScroll={handleResultsScroll}>
               {results.length > 0 ? (
                 <>
                   {results.map((s) => (
@@ -4079,16 +4081,16 @@ export default function AgentPage() {
               size="md"
               variant={workspaceSidebarOpen ? 'secondary' : 'tertiary'}
             >
-              <PanelLeft className="size-[18px]" />
+              <PanelLeft className="size-4.5" />
             </HeroButton>
             <Tooltip.Content placement="bottom">{workspaceSidebarOpen ? '隐藏工作区文件树' : '显示工作区文件树'}</Tooltip.Content>
           </Tooltip>
         </div>
-        <div className="absolute left-1/2 top-1/2 min-w-0 max-w-[min(36rem,calc(100%_-_14rem))] -translate-x-1/2 -translate-y-1/2">
+        <div className="absolute left-1/2 top-1/2 min-w-0 max-w-[min(36rem,calc(100%-14rem))] -translate-x-1/2 -translate-y-1/2">
           {titleEditing ? (
             <input
               aria-label="编辑对话名称"
-              className="h-9 w-90 max-w-[calc(100vw_-_14rem)] rounded-(--agent-radius,12px) border border-border bg-background px-3 text-center font-medium text-foreground text-sm outline-none focus:border-ring focus:ring-[3px] focus:ring-ring/30"
+              className="h-9 w-90 max-w-[calc(100vw-14rem)] rounded-(--agent-radius,12px) border border-border bg-background px-3 text-center font-medium text-foreground text-sm outline-none focus:border-ring focus:ring-[3px] focus:ring-ring/30"
               disabled={titleSaving}
               onBlur={() => {
                 if (titleIgnoreBlurRef.current) {
@@ -4143,13 +4145,19 @@ export default function AgentPage() {
               <Dropdown isOpen={recordsOpen} onOpenChange={setRecordsOpen}>
                 <HeroButton
                   aria-label="对话记录"
-                  className="size-9 p-0"
+                  className="group relative size-9 overflow-visible p-0"
                   isIconOnly
                   render={(buttonProps) => <button {...buttonProps} title="对话记录" />}
                   size="md"
                   variant="tertiary"
                 >
-                  <History className="size-[18px]" />
+                  <History className="size-4.5" />
+                  <span
+                    aria-hidden
+                    className="pointer-events-none absolute top-[calc(100%+0.375rem)] right-0 z-50 whitespace-nowrap rounded-(--agent-radius,12px) border border-border bg-popover px-2 py-1 text-popover-foreground text-xs opacity-0 shadow-lg transition-opacity group-focus-within:opacity-100 group-hover:opacity-100"
+                  >
+                    对话记录
+                  </span>
                 </HeroButton>
                 <Dropdown.Popover className="w-[min(28rem,calc(100vw-2rem))]" placement="bottom end">
                   <Dropdown.Menu
@@ -4222,7 +4230,7 @@ export default function AgentPage() {
                   size="md"
                   variant="tertiary"
                 >
-                  <SquarePen className="size-[18px]" />
+                  <SquarePen className="size-4.5" />
                 </HeroButton>
                 <Tooltip.Content placement="bottom">新建对话</Tooltip.Content>
               </Tooltip>

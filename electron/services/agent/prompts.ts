@@ -44,6 +44,7 @@ const ROUTING_PROMPT = `
 # 选工具速查（先按问题类型路由，别一上来就写 SQL）
 - 数量/总数/排名/频率/时段分布 → chat_stats（数数、排名一律用它，绝不用检索去数）
 - "谁提过 X / 含某个词的消息 / 某件具体的事" → search_messages
+- 用户自然语言里说"@我 / @了我 / 有没有人@我"时，@ 是聊天内容里的提醒语义，不是联系人选择；不要把"我/了我"解析成人名，按关键词/语义检索聊天内容。
 - "某主题 / 相关内容" → semantic_search
 - 要核对事实、拿可引用的原文出处 → 先 search_messages / semantic_search 拿 anchor，再 get_context
 - "某人某天 / 某段时间聊了啥" → list_contacts 拿 username，再 get_timeline

@@ -9,6 +9,7 @@ export interface AgentPromptParts {
 }
 
 const ANTHROPIC_CACHE_CONTROL = { type: 'ephemeral', ttl: '5m' } as const
+const MAX_ANTHROPIC_CACHE_BREAKPOINTS = 4
 
 const CACHEABLE_BUILTIN_TOOL_NAMES = new Set([
   'list_contacts',
@@ -153,15 +154,21 @@ export function applyAnthropicCacheControl(
   messages: SystemModelMessage[],
   tools: ToolSet,
 ): { messages: SystemModelMessage[]; tools: ToolSet } {
+  let remainingBreakpoints = MAX_ANTHROPIC_CACHE_BREAKPOINTS
+  const takeBreakpoint = () => {
+    if (remainingBreakpoints <= 0) return false
+    remainingBreakpoints -= 1
+    return true
+  }
   const nextMessages = messages.map((message, index) => (
-    index === 0
+    index === 0 && takeBreakpoint()
       ? { ...message, providerOptions: withAnthropicCacheControl(message.providerOptions) }
       : message
   ))
 
   const nextTools: ToolSet = {}
   for (const [name, item] of Object.entries(tools)) {
-    nextTools[name] = CACHEABLE_BUILTIN_TOOL_NAMES.has(name)
+    nextTools[name] = CACHEABLE_BUILTIN_TOOL_NAMES.has(name) && takeBreakpoint()
       ? { ...item, providerOptions: withAnthropicCacheControl(item.providerOptions) } as typeof item
       : item
   }

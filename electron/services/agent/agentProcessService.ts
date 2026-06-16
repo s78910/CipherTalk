@@ -42,6 +42,21 @@ function truncateLogText(text: string, maxLength = 2000): string {
   return text.length > maxLength ? `${text.slice(0, maxLength)}...<truncated>` : text
 }
 
+function shouldSuppressUtilityStderrLine(line: string): boolean {
+  return /\bAI SDK Warning\b/.test(line) && (
+    line.includes('cacheControl breakpoint limit') ||
+    /Maximum\s+\d+\s+cache breakpoints exceeded/i.test(line)
+  )
+}
+
+function filterUtilityStderr(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .filter((line) => !shouldSuppressUtilityStderrLine(line))
+    .join('\n')
+    .trim()
+}
+
 export class AgentProcessService {
   private worker: UtilityProcess | null = null
   private pending = new Map<number, Pending>()
@@ -216,7 +231,7 @@ export class AgentProcessService {
         }
       })
       worker.stderr?.on('data', (chunk: Buffer) => {
-        const text = chunk.toString().trim()
+        const text = filterUtilityStderr(chunk.toString().trim())
         if (text) {
           console.error(`[aiAgentUtility:${worker.pid ?? 'unknown'}] ${text}`)
           this.logger?.warn('AIAgentProcess', 'AI Agent utility stderr', {

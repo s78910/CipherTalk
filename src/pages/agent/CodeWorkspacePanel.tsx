@@ -400,7 +400,7 @@ export function CodeWorkspacePanelPopover(props: CodeWorkspacePanelPopoverProps)
     <Popover isOpen={props.isOpen} onOpenChange={props.onOpenChange}>
       <HeroButton
         aria-label="代码工作区面板"
-        className="relative size-9 p-0"
+        className="group relative size-9 overflow-visible p-0"
         isIconOnly
         render={(buttonProps) => (
           <button
@@ -411,10 +411,16 @@ export function CodeWorkspacePanelPopover(props: CodeWorkspacePanelPopoverProps)
         size="md"
         variant={devServerRunning ? 'secondary' : 'tertiary'}
       >
-        <Monitor className="size-[18px]" />
+        <Monitor className="size-4.5" />
         {devServerRunning && (
           <span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-emerald-500" />
         )}
+        <span
+          aria-hidden
+          className="pointer-events-none absolute top-[calc(100%+0.375rem)] right-0 z-50 whitespace-nowrap rounded-(--agent-radius,12px) border border-border bg-popover px-2 py-1 text-popover-foreground text-xs opacity-0 shadow-lg transition-opacity group-focus-within:opacity-100 group-hover:opacity-100"
+        >
+          {devServerRunning ? '代码工作区面板 · 预览运行中' : '代码工作区面板'}
+        </span>
       </HeroButton>
       <Popover.Content
         className="overflow-hidden p-0"
