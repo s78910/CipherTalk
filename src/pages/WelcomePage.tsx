@@ -74,7 +74,6 @@ function WelcomePage({ standalone = false }: WelcomePageProps) {
   const [isClosing, setIsClosing] = useState(false)
   const [showWechatPathPrompt, setShowWechatPathPrompt] = useState(false)
   const [customWechatPath, setCustomWechatPath] = useState('')
-  const [showHookSuccessToast, setShowHookSuccessToast] = useState(false)
   const [isDecrypting, setIsDecrypting] = useState(false)
   const [decryptStatus, setDecryptStatus] = useState('')
   const [countdown, setCountdown] = useState(0)
@@ -92,14 +91,6 @@ function WelcomePage({ standalone = false }: WelcomePageProps) {
   useEffect(() => {
     const removeStatus = window.electronAPI.wxKey?.onStatus?.((payload) => {
       setDbKeyStatus(payload.status)
-      // 检测到 Hook 安装成功的消息
-      if (payload.status.includes('hook安装成功') || payload.status.includes('Hook安装成功')) {
-        setShowHookSuccessToast(true)
-        // 3秒后自动隐藏
-        setTimeout(() => {
-          setShowHookSuccessToast(false)
-        }, 3000)
-      }
     })
     const removeImageProgress = window.electronAPI.imageKey?.onProgress?.((msg) => {
       setImageKeyStatus(msg)
@@ -989,7 +980,7 @@ function WelcomePage({ standalone = false }: WelcomePageProps) {
       {renderStatusAlert(
         isMac
           ? '获取密钥会调用 mac helper，并尝试识别候选账号目录。macOS 可能需要管理员授权。'
-          : '点击自动获取后等待 hook 安装成功提示，然后登录微信即可。',
+          : '点击自动获取后，程序会自动重启微信并扫描内存获取密钥，请耐心等待；如弹出微信登录请完成登录。',
         'default'
       )}
     </div>
@@ -1163,14 +1154,6 @@ function WelcomePage({ standalone = false }: WelcomePageProps) {
 
   return (
     <div className={rootClassName}>
-      {/* Hook 安装成功气泡提示 */}
-      {showHookSuccessToast && (
-        <div className="hook-success-toast">
-          <CheckCircle2 size={18} />
-          <span>Hook 安装成功，现在登录微信</span>
-        </div>
-      )}
-
       {/* 全屏倒计时覆盖层 */}
       {countdown > 0 && (
         <div className="countdown-overlay">

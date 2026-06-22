@@ -227,7 +227,7 @@ function DatabaseTab({ showMessage }: DatabaseTabProps) {
         setKeyStatus(status)
       })
 
-      setKeyStatus('Hook 已安装，请登录微信...')
+      setKeyStatus('正在启动微信并扫描内存获取密钥...')
       const result = await window.electronAPI.wxKey.startGetKey(undefined, dbPath || undefined)
       removeListener()
 
