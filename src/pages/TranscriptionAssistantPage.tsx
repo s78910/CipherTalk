@@ -1,5 +1,6 @@
-import { useMemo, useState, type DragEvent } from 'react'
+import { useMemo, useState, type DragEvent, type KeyboardEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { Alert, Button, Card, Chip, ScrollShadow, Spinner, TextArea, Typography } from '@heroui/react'
 import {
   AlertCircle,
   CheckCircle2,
@@ -12,7 +13,6 @@ import {
   UploadCloud
 } from 'lucide-react'
 import * as configService from '../services/config'
-import './TranscriptionAssistantPage.scss'
 
 type SttMode = 'cpu' | 'gpu' | 'online'
 type TaskStatus = 'processing' | 'success' | 'failed'
@@ -69,6 +69,12 @@ function getStatusLabel(status: TaskStatus): string {
   if (status === 'processing') return '处理中'
   if (status === 'success') return '成功'
   return '失败'
+}
+
+function getStatusColor(status: TaskStatus): 'accent' | 'success' | 'danger' {
+  if (status === 'processing') return 'accent'
+  if (status === 'success') return 'success'
+  return 'danger'
 }
 
 function TranscriptionAssistantPage() {
@@ -175,7 +181,7 @@ function TranscriptionAssistantPage() {
     await transcribeFile(result.filePaths[0])
   }
 
-  const handleDrop = async (event: DragEvent<HTMLButtonElement>) => {
+  const handleDrop = async (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault()
     setIsDragging(false)
     if (isProcessing) return
@@ -187,6 +193,12 @@ function TranscriptionAssistantPage() {
       return
     }
     await transcribeFile(filePath)
+  }
+
+  const handleDropzoneKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    event.preventDefault()
+    void openFileDialog()
   }
 
   const copyTranscript = async (task: TranscriptionTask) => {
@@ -205,23 +217,32 @@ function TranscriptionAssistantPage() {
   }
 
   return (
-    <div className="transcription-assistant-page">
-      <header className="transcription-assistant-header">
-        <div>
-          <h1>转文字助手</h1>
-          <p>选择本地音频文件，按当前语音转文字配置生成文本。</p>
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-5 pb-8 text-foreground">
+      <header className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+        <div className="min-w-0 space-y-2">
+          <Typography.Heading level={1} className="text-2xl font-bold md:text-3xl">
+            转文字助手
+          </Typography.Heading>
+          <Typography.Paragraph size="sm" color="muted">
+            选择本地音频文件，按当前语音转文字配置生成文本。
+          </Typography.Paragraph>
         </div>
-        <button type="button" className="secondary-action" onClick={openSttSettings}>
+        <Button type="button" variant="secondary" onPress={openSttSettings}>
           <Settings size={18} />
-          <span>语音设置</span>
-        </button>
+          语音设置
+        </Button>
       </header>
 
-      <button
-        type="button"
-        className={`audio-dropzone ${isDragging ? 'dragging' : ''}`}
-        disabled={isProcessing}
-        onClick={() => void openFileDialog()}
+      <Card
+        role="button"
+        tabIndex={isProcessing ? -1 : 0}
+        variant="default"
+        aria-disabled={isProcessing}
+        className={`min-h-48 cursor-pointer items-center justify-center gap-3 border border-dashed px-6 py-8 text-center transition-colors ${isDragging ? 'border-accent bg-accent/10' : ''} ${isProcessing ? 'cursor-not-allowed opacity-70' : ''}`}
+        onClick={() => {
+          if (!isProcessing) void openFileDialog()
+        }}
+        onKeyDown={handleDropzoneKeyDown}
         onDragEnter={(event) => {
           event.preventDefault()
           if (!isProcessing) setIsDragging(true)
@@ -230,126 +251,158 @@ function TranscriptionAssistantPage() {
         onDragLeave={() => setIsDragging(false)}
         onDrop={(event) => void handleDrop(event)}
       >
-        <span className="dropzone-icon">
-          <UploadCloud size={30} />
+        <span className="flex size-14 items-center justify-center rounded-full bg-accent text-accent-foreground">
+          <UploadCloud size={30} aria-hidden />
         </span>
-        <span className="dropzone-title">选择或拖入音频文件</span>
-        <span className="dropzone-meta">mp3 / wav / m4a / aac / flac / ogg / opus / amr</span>
-        <span className="dropzone-action">
-          <FileAudio size={18} />
-          <span>{isProcessing ? '转写中' : '选择音频'}</span>
-        </span>
-      </button>
+        <span className="text-lg font-semibold">选择或拖入音频文件</span>
+        <span className="text-sm font-normal text-muted-foreground">mp3 / wav / m4a / aac / flac / ogg / opus / amr</span>
+        <Chip variant="soft" color={isProcessing ? 'accent' : 'default'}>
+          <FileAudio size={16} />
+          <Chip.Label>{isProcessing ? '转写中' : '选择音频'}</Chip.Label>
+        </Chip>
+      </Card>
 
-      <section className="task-panel">
-        <div className="panel-heading">
-          <h2>当前任务</h2>
+      <Card>
+        <Card.Header className="flex-row items-center justify-between gap-3">
+          <Card.Title>当前任务</Card.Title>
           {activeTask && (
-            <span className={`status-pill ${activeTask.status}`}>
-              {activeTask.status === 'processing' && <Loader2 size={14} className="spin" />}
+            <Chip size="sm" variant="soft" color={getStatusColor(activeTask.status)}>
+              {activeTask.status === 'processing' && <Loader2 size={14} className="animate-spin" />}
               {activeTask.status === 'success' && <CheckCircle2 size={14} />}
               {activeTask.status === 'failed' && <AlertCircle size={14} />}
-              {getStatusLabel(activeTask.status)}
-            </span>
+              <Chip.Label>{getStatusLabel(activeTask.status)}</Chip.Label>
+            </Chip>
           )}
-        </div>
+        </Card.Header>
 
-        {activeTask ? (
-          <div className="current-task">
-            <div className="current-task-main">
-              <FileAudio size={22} />
-              <div>
-                <strong>{activeTask.fileName}</strong>
-                <span>{activeTask.filePath}</span>
+        <Card.Content>
+          {activeTask ? (
+            <div className="flex min-w-0 flex-col gap-4 md:flex-row md:items-center md:justify-between">
+              <div className="flex min-w-0 items-center gap-3">
+                <FileAudio size={22} className="shrink-0 text-accent" />
+                <div className="min-w-0">
+                  <Typography.Paragraph size="sm" weight="semibold" truncate>
+                    {activeTask.fileName}
+                  </Typography.Paragraph>
+                  <Typography.Paragraph size="xs" color="muted" truncate>
+                    {activeTask.filePath}
+                  </Typography.Paragraph>
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center justify-between gap-3 text-sm text-muted-foreground md:justify-start">
+                <span>模式：{getModeLabel(activeTask.sttMode)}</span>
+                <span>{formatTaskTime(activeTask.createdAt)}</span>
               </div>
             </div>
-            <div className="current-task-meta">
-              <span>模式：{getModeLabel(activeTask.sttMode)}</span>
-              <span>{formatTaskTime(activeTask.createdAt)}</span>
+          ) : (
+            <div className="flex min-h-24 items-center justify-center rounded-lg bg-default text-sm text-muted-foreground">
+              暂无任务
             </div>
-          </div>
-        ) : (
-          <div className="empty-state">暂无任务</div>
-        )}
-      </section>
+          )}
+        </Card.Content>
+      </Card>
 
-      <section className="result-panel">
-        <div className="panel-heading">
-          <h2>转写结果</h2>
-        </div>
+      <Card>
+        <Card.Header>
+          <Card.Title>转写结果</Card.Title>
+        </Card.Header>
 
-        {activeTask?.status === 'success' ? (
-          <>
-            <textarea className="transcript-output" readOnly value={activeTask.transcript || ''} />
-            <div className="result-actions">
-              <button type="button" className="primary-action" onClick={() => void copyTranscript(activeTask)}>
-                <ClipboardCopy size={17} />
-                <span>{copiedTaskId === activeTask.id ? '已复制' : '复制文本'}</span>
-              </button>
-              <button type="button" className="secondary-action" onClick={clearActiveTask}>
-                <Trash2 size={17} />
-                <span>清空结果</span>
-              </button>
-              <button type="button" className="secondary-action" onClick={() => void openFileDialog()} disabled={isProcessing}>
-                <RotateCcw size={17} />
-                <span>重新选择</span>
-              </button>
+        <Card.Content>
+          {activeTask?.status === 'success' ? (
+            <div className="space-y-3">
+              <TextArea
+                aria-label="转写结果"
+                className="min-h-56"
+                fullWidth
+                readOnly
+                rows={10}
+                value={activeTask.transcript || ''}
+                variant="secondary"
+                style={{ resize: 'vertical' }}
+              />
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" variant="primary" onPress={() => void copyTranscript(activeTask)}>
+                  <ClipboardCopy size={17} />
+                  {copiedTaskId === activeTask.id ? '已复制' : '复制文本'}
+                </Button>
+                <Button type="button" variant="secondary" onPress={clearActiveTask}>
+                  <Trash2 size={17} />
+                  清空结果
+                </Button>
+                <Button type="button" variant="secondary" onPress={() => void openFileDialog()} isDisabled={isProcessing}>
+                  <RotateCcw size={17} />
+                  重新选择
+                </Button>
+              </div>
             </div>
-          </>
-        ) : activeTask?.status === 'failed' ? (
-          <div className="error-state">
-            <AlertCircle size={22} />
-            <div>
-              <strong>{activeTask.errorCode || '转写失败'}</strong>
-              <p>{activeTask.error || '请稍后重试'}</p>
-              {activeTask.errorCode === 'STT_NOT_READY' && (
-                <button type="button" className="primary-action compact" onClick={openSttSettings}>
-                  <Settings size={16} />
-                  <span>去语音转文字设置</span>
-                </button>
-              )}
+          ) : activeTask?.status === 'failed' ? (
+            <Alert status="danger">
+              <Alert.Indicator>
+                <AlertCircle size={20} />
+              </Alert.Indicator>
+              <Alert.Content>
+                <Alert.Title>{activeTask.errorCode || '转写失败'}</Alert.Title>
+                <Alert.Description>{activeTask.error || '请稍后重试'}</Alert.Description>
+                {activeTask.errorCode === 'STT_NOT_READY' && (
+                  <Button type="button" className="mt-3" size="sm" variant="primary" onPress={openSttSettings}>
+                    <Settings size={16} />
+                    去语音转文字设置
+                  </Button>
+                )}
+              </Alert.Content>
+            </Alert>
+          ) : activeTask?.status === 'processing' ? (
+            <div className="flex min-h-24 items-center justify-center gap-2 rounded-lg bg-default text-sm font-semibold text-accent">
+              <Spinner size="sm" />
+              <span>正在转写音频</span>
             </div>
-          </div>
-        ) : activeTask?.status === 'processing' ? (
-          <div className="processing-state">
-            <Loader2 size={24} className="spin" />
-            <span>正在转写音频</span>
-          </div>
-        ) : (
-          <div className="empty-state">选择音频后显示转写文本</div>
-        )}
-      </section>
+          ) : (
+            <div className="flex min-h-24 items-center justify-center rounded-lg bg-default text-sm text-muted-foreground">
+              选择音频后显示转写文本
+            </div>
+          )}
+        </Card.Content>
+      </Card>
 
-      <section className="history-panel">
-        <div className="panel-heading">
-          <h2>最近任务</h2>
-          <span>{history.length}/{HISTORY_LIMIT}</span>
-        </div>
+      <Card>
+        <Card.Header className="flex-row items-center justify-between gap-3">
+          <Card.Title>最近任务</Card.Title>
+          <Typography.Paragraph size="xs" color="muted">
+            {history.length}/{HISTORY_LIMIT}
+          </Typography.Paragraph>
+        </Card.Header>
 
-        {history.length > 0 ? (
-          <div className="history-list">
-            {history.map(task => (
-              <button
-                type="button"
-                key={task.id}
-                className={`history-row ${activeTask?.id === task.id ? 'active' : ''}`}
-                onClick={() => setActiveTaskId(task.id)}
-              >
-                <span className={`history-status ${task.status}`}>
-                  {task.status === 'processing' ? <Loader2 size={14} className="spin" /> : null}
-                  {task.status === 'success' ? <CheckCircle2 size={14} /> : null}
-                  {task.status === 'failed' ? <AlertCircle size={14} /> : null}
-                </span>
-                <span className="history-title">{task.fileName}</span>
-                <span className="history-mode">{getModeLabel(task.sttMode)}</span>
-                <span className="history-time">{formatTaskTime(task.createdAt)}</span>
-              </button>
-            ))}
-          </div>
-        ) : (
-          <div className="empty-state">暂无最近任务</div>
-        )}
-      </section>
+        <Card.Content>
+          {history.length > 0 ? (
+            <ScrollShadow className="max-h-80" size={28}>
+              <div className="flex flex-col gap-2">
+                {history.map(task => (
+                  <Button
+                    type="button"
+                    key={task.id}
+                    className="grid h-auto min-h-12 w-full grid-cols-[1.75rem_minmax(0,1fr)_auto_auto] items-center gap-3 px-3 text-left max-sm:grid-cols-[1.75rem_minmax(0,1fr)_auto]"
+                    variant={activeTask?.id === task.id ? 'secondary' : 'ghost'}
+                    onPress={() => setActiveTaskId(task.id)}
+                  >
+                    <Chip size="sm" variant="soft" color={getStatusColor(task.status)} className="size-7 justify-center p-0">
+                      {task.status === 'processing' ? <Loader2 size={14} className="animate-spin" /> : null}
+                      {task.status === 'success' ? <CheckCircle2 size={14} /> : null}
+                      {task.status === 'failed' ? <AlertCircle size={14} /> : null}
+                    </Chip>
+                    <span className="min-w-0 truncate text-sm font-semibold">{task.fileName}</span>
+                    <span className="text-xs text-muted-foreground max-sm:hidden">{getModeLabel(task.sttMode)}</span>
+                    <span className="text-xs text-muted-foreground">{formatTaskTime(task.createdAt)}</span>
+                  </Button>
+                ))}
+              </div>
+            </ScrollShadow>
+          ) : (
+            <div className="flex min-h-24 items-center justify-center rounded-lg bg-default text-sm text-muted-foreground">
+              暂无最近任务
+            </div>
+          )}
+        </Card.Content>
+      </Card>
     </div>
   )
 }

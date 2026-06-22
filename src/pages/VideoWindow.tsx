@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Play, Pause, PlayCircle, Volume2, VolumeX, RotateCcw } from 'lucide-react'
-import './VideoWindow.scss'
+import './VideoWindow.css'
 
 export default function VideoWindow() {
     const [searchParams] = useSearchParams()
