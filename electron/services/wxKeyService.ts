@@ -300,6 +300,37 @@ export class WxKeyService {
   }
 
   /**
+   * 内存扫描图片 AES 密钥（Ed25519 鉴权）。传入模板密文(16B)，
+   * 返回 32 字符密钥串（调用方取前 16 字符作 AES-128 密钥），失败返回 null。
+   */
+  scanImageAesKey(ciphertext: Buffer): string | null {
+    if (!ciphertext || ciphertext.length < 16) return null
+    if (!this.initScanLib()) return null
+    try {
+      const koffi = require('koffi')
+      const wktChallenge = this.scanLib.func('int wkt_challenge(uint8_t*, size_t)')
+      const wktScanImg = this.scanLib.func('void* wkt_scan_image_key_auth(uint8_t*, size_t, uint8_t*, size_t)')
+      const wktFree = this.scanLib.func('void wkt_free(void*)')
+
+      const nonce = Buffer.alloc(32)
+      if (wktChallenge(nonce, 32) !== 32) return null
+
+      const sig = crypto.sign(null, nonce, this.getScanPrivateKey())
+      const ptr = wktScanImg(sig, sig.length, ciphertext, ciphertext.length)
+      if (!ptr) return null
+
+      const key = koffi.decode(ptr, 'char', -1)
+      wktFree(ptr)
+
+      const trimmed = String(key || '').replace(/\0/g, '').trim()
+      return trimmed.length >= 16 ? trimmed : null
+    } catch (e) {
+      console.error('内存扫描图片密钥失败:', e)
+      return null
+    }
+  }
+
+  /**
    * 释放资源（数据库密钥已改为内存扫描，不再有 Hook 需要卸载）
    */
   dispose(): void {

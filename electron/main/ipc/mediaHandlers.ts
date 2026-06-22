@@ -506,11 +506,32 @@ export function registerMediaHandlers(ctx: MainProcessContext): void {
     }
 
     try {
-      // ========== 方案一：DLL 本地扫描（优先） ==========
+      // ========== 方案一（主）：Rust DLL 内存扫描（XOR 本地文件 + AES 内存），需微信运行 ==========
+      const wechatPid = wxKeyService.getWeChatPid()
+      if (wechatPid) {
+        event.sender.send('imageKey:progress', '正在内存扫描获取图片密钥...')
+        const memResult = await imageKeyService.getImageKeys(
+          resolvedUserDir,
+          wechatPid,
+          (msg) => event.sender.send('imageKey:progress', msg)
+        )
+        if (memResult.success) {
+          ctx.getLogService()?.info('ImageKey', '图片密钥获取成功（Rust 内存扫描）', {
+            xorKey: memResult.xorKey,
+            aesKey: memResult.aesKey
+          })
+          return memResult
+        }
+        ctx.getLogService()?.warn('ImageKey', 'Rust 内存扫描失败，回退本地缓存扫描', { error: memResult.error })
+      } else {
+        ctx.getLogService()?.info('ImageKey', '未检测到微信进程，跳过内存扫描，尝试本地缓存扫描')
+      }
+
+      // ========== 方案二（兜底）：旧 wx_key.dll 本地缓存扫描（无需微信运行；后续随 wx_key.dll 一并退役） ==========
       const dllResult = await (async () => {
         const initSuccess = await wxKeyService.initialize()
         if (!initSuccess) {
-          ctx.getLogService()?.warn('ImageKey', 'DLL 初始化失败，将尝试内存扫描兜底')
+          ctx.getLogService()?.warn('ImageKey', 'DLL 初始化失败')
           return null
         }
 
@@ -578,33 +599,10 @@ export function registerMediaHandlers(ctx: MainProcessContext): void {
 
       if (dllResult) return dllResult
 
-      // ========== 方案二：内存扫描兜底 ==========
-      ctx.getLogService()?.info('ImageKey', '切换到内存扫描兜底方案', { userDir })
-      event.sender.send('imageKey:progress', 'DLL 方式失败，正在尝试内存扫描方式...')
-
-      const wechatPid = wxKeyService.getWeChatPid()
-      if (!wechatPid) {
-        return { success: false, error: '获取图片密钥失败：DLL 扫描失败且未检测到微信进程（内存扫描需要微信正在运行）' }
+      return {
+        success: false,
+        error: '获取图片密钥失败：内存扫描与本地缓存扫描均未命中。请确保微信已登录并查看过图片后重试。'
       }
-
-      ctx.getLogService()?.info('ImageKey', '检测到微信进程，开始内存扫描', { pid: wechatPid })
-
-      const memResult = await imageKeyService.getImageKeys(
-        resolvedUserDir,
-        wechatPid,
-        (msg) => event.sender.send('imageKey:progress', msg)
-      )
-
-      if (memResult.success) {
-        ctx.getLogService()?.info('ImageKey', '图片密钥获取成功（内存扫描兜底）', {
-          xorKey: memResult.xorKey,
-          aesKey: memResult.aesKey
-        })
-      } else {
-        ctx.getLogService()?.error('ImageKey', '内存扫描兜底也失败', { error: memResult.error })
-      }
-
-      return memResult
     } catch (e) {
       ctx.getLogService()?.error('ImageKey', '图片密钥获取异常', { error: String(e) })
       return { success: false, error: String(e) }

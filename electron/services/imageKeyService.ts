@@ -1,6 +1,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import * as crypto from 'crypto'
+import { wxKeyService } from './wxKeyService'
 
 // Windows-only module: Mac 使用 wxKeyServiceMac.ts 的 Mach API 替代
 const IS_WIN = process.platform === 'win32'
@@ -278,6 +279,18 @@ class ImageKeyService {
    * 从进程内存获取 AES 密钥
    */
   private async getAesKeyFromMemory(pid: number, ciphertext: Buffer, onProgress?: (msg: string) => void): Promise<string | null> {
+    // 优先走 Rust DLL 内存扫描（更快、与数据库密钥同一套 Ed25519 鉴权）
+    try {
+      const rustKey = wxKeyService.scanImageAesKey(ciphertext)
+      if (rustKey) {
+        onProgress?.('Rust 内存扫描命中 AES 密钥')
+        return rustKey
+      }
+    } catch (e) {
+      console.error('Rust 图片密钥扫描异常，回退本地扫描:', e)
+    }
+    onProgress?.('Rust 扫描未命中，回退本地内存扫描...')
+
     if (!ensureKernel32()) return null
 
     const hProcess = OpenProcess(PROCESS_ALL_ACCESS, false, pid)
