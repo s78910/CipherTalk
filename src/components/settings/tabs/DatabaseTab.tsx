@@ -44,8 +44,12 @@ function DatabaseTab({ showMessage }: DatabaseTabProps) {
   const cachePath = useSettingsStore(s => s.config.cachePath)
   const imageXorKey = useSettingsStore(s => s.config.imageXorKey)
   const imageAesKey = useSettingsStore(s => s.config.imageAesKey)
+  const displayName = useSettingsStore(s => s.config.displayName)
+  const wechatNumber = useSettingsStore(s => s.config.wechatNumber)
+  const phone = useSettingsStore(s => s.config.phone)
   const hasUnsavedChanges = useSettingsStore(s => s.hasUnsavedChanges)
   const setField = useSettingsStore(s => s.setField)
+  const setFields = useSettingsStore(s => s.setFields)
   const setDecryptKey = (value: string) => setField('decryptKey', value)
   const setDbPath = (value: string) => setField('dbPath', value)
   const setWxid = (value: string) => setField('wxid', value)
@@ -97,13 +101,18 @@ function DatabaseTab({ showMessage }: DatabaseTabProps) {
   }
 
   const applyAccountToForm = (account: AccountProfile | null) => {
-    setEditingAccountId(account?.id || '')
-    setDecryptKey(account?.decryptKey || '')
-    setDbPath(account?.dbPath || '')
-    setWxid(account?.wxid || '')
-    setCachePath(account?.cachePath || '')
-    setImageXorKey(account?.imageXorKey || '')
-    setImageAesKey(account?.imageAesKey || '')
+    setFields({
+      editingAccountId: account?.id || '',
+      decryptKey: account?.decryptKey || '',
+      dbPath: account?.dbPath || '',
+      wxid: account?.wxid || '',
+      cachePath: account?.cachePath || '',
+      imageXorKey: account?.imageXorKey || '',
+      imageAesKey: account?.imageAesKey || '',
+      displayName: account?.displayName || '',
+      wechatNumber: account?.wechatNumber || '',
+      phone: account?.phone || '',
+    })
     setIsAccountVerified(Boolean(account?.decryptKey && account?.dbPath && account?.wxid))
   }
 
@@ -192,66 +201,63 @@ function DatabaseTab({ showMessage }: DatabaseTabProps) {
         return
       }
 
-      const isRunning = await window.electronAPI.wxKey.isWeChatRunning()
-      if (isRunning) {
-        const shouldKill = window.confirm('检测到微信正在运行，需要重启微信才能获取密钥。\n是否关闭当前微信？')
-        if (!shouldKill) {
-          setKeyStatus('已取消')
-          setIsGettingKey(false)
-          return
-        }
-        setKeyStatus('正在关闭微信...')
-        await window.electronAPI.wxKey.killWeChat()
-        await new Promise(resolve => setTimeout(resolve, 2000))
-      }
-
-      setKeyStatus('正在启动微信...')
-      const launched = await window.electronAPI.wxKey.launchWeChat()
-      if (!launched) {
-        showMessage('微信启动失败，请检查安装路径', false)
-        setKeyStatus('')
-        setIsGettingKey(false)
-        return
-      }
-
-      setKeyStatus('等待微信窗口加载...')
-      const windowReady = await window.electronAPI.wxKey.waitForWindow(15)
-      if (!windowReady) {
-        showMessage('等待微信窗口超时', false)
-        setKeyStatus('')
-        setIsGettingKey(false)
-        return
-      }
-
+      // 由主进程统一编排：优先对正在运行的微信直接读取账号信息（无需退出重登）；
+      // 仅当直接读取失败时，才自动回退到重启微信抓取密钥的流程。
       const removeListener = window.electronAPI.wxKey.onStatus(({ status }) => {
         setKeyStatus(status)
       })
 
-      setKeyStatus('正在启动微信并扫描内存获取密钥...')
+      setKeyStatus('正在读取微信账号信息...')
       const result = await window.electronAPI.wxKey.startGetKey(undefined, dbPath || undefined)
       removeListener()
 
       if (result.success && result.key) {
         setDecryptKey(result.key)
 
-        // 自动检测当前登录的微信账号
-        setKeyStatus('正在检测当前登录账号...')
-
-        // 先尝试较短的时间范围（刚登录的情况）
-        let accountInfo = await window.electronAPI.wxKey.detectCurrentAccount(dbPath, 10) // 10分钟
-
-        // 如果没找到，尝试更长的时间范围
-        if (!accountInfo) {
-          accountInfo = await window.electronAPI.wxKey.detectCurrentAccount(dbPath, 60) // 1小时
+        // 直接用 DLL 返回的 wxid 定位账号目录（目录名即 wxid），不再让用户从扫描结果中选择。
+        const acc = result.account
+        // 持久化内存提取到的账号字段：昵称→displayName，微信号/手机号入对应字段。
+        if (acc) {
+          if (acc.name) setField('displayName', acc.name)
+          if (acc.number) setField('wechatNumber', acc.number)
+          if (acc.phone) setField('phone', acc.phone)
         }
+        const authoritativeWxid = result.validatedWxid || acc?.wxid || ''
+        if (authoritativeWxid) {
+          setWxid(authoritativeWxid)
+          setIsAccountVerified(!!result.validatedWxid)
 
-        if (accountInfo) {
-          setWxid(accountInfo.wxid)
-          showMessage(`密钥获取成功！已自动绑定账号: ${accountInfo.wxid}`, true)
+          const parts = acc
+            ? [
+                acc.name && `昵称: ${acc.name}`,
+                acc.number && `微信号: ${acc.number}`,
+                acc.phone && `手机号: ${acc.phone}`,
+              ].filter(Boolean)
+            : []
+          const detail = parts.length ? `（${parts.join('，')}）` : ''
+          const tip = result.validatedWxid ? '已验证账号目录' : '已自动绑定账号目录'
+          showMessage(`密钥获取成功！${tip}: ${authoritativeWxid}${detail}`, true)
+          setKeyStatus('')
         } else {
-          showMessage('密钥获取成功，已自动保存！（未能自动检测账号，请手动输入 wxid）', true)
+          // 兜底：DLL 未返回 wxid 时，才退回到按修改时间推断当前登录账号目录
+          setKeyStatus('正在检测当前登录账号...')
+
+          // 先尝试较短的时间范围（刚登录的情况）
+          let accountInfo = await window.electronAPI.wxKey.detectCurrentAccount(dbPath, 10) // 10分钟
+
+          // 如果没找到，尝试更长的时间范围
+          if (!accountInfo) {
+            accountInfo = await window.electronAPI.wxKey.detectCurrentAccount(dbPath, 60) // 1小时
+          }
+
+          if (accountInfo) {
+            setWxid(accountInfo.wxid)
+            showMessage(`密钥获取成功！已自动绑定账号: ${accountInfo.wxid}`, true)
+          } else {
+            showMessage('密钥获取成功，已自动保存！（未能自动检测账号，请手动输入 wxid）', true)
+          }
+          setKeyStatus('')
         }
-        setKeyStatus('')
       } else {
         showMessage(result.error || '获取密钥失败', false)
         setKeyStatus('')
@@ -620,6 +626,14 @@ function DatabaseTab({ showMessage }: DatabaseTabProps) {
                         )}
                       </div>
                       <Card.Description className="truncate">微信 ID：{account.wxid || '未设置'}</Card.Description>
+                      {(account.wechatNumber || account.phone) && (
+                        <Card.Description className="truncate">
+                          {[
+                            account.wechatNumber && `微信号：${account.wechatNumber}`,
+                            account.phone && `手机号：${account.phone}`,
+                          ].filter(Boolean).join('　')}
+                        </Card.Description>
+                      )}
                     </Card.Header>
 
                     <Card.Footer className="mt-auto flex w-full flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">

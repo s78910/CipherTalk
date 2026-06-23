@@ -16,6 +16,20 @@ export interface WxScanDiag {
   candidates: number
 }
 
+/** 一次性从内存提取的完整账号信息（含 db_key 与明文字段） */
+export interface WxAccountInfo {
+  /** 64 位十六进制数据库密钥，未取到为 null */
+  dbKey: string | null
+  wxid: string
+  /** 昵称 */
+  name: string
+  /** 微信号 */
+  number: string
+  /** 绑定手机号 */
+  phone: string
+  seed: number
+}
+
 export class WxKeyService {
   /**
    * 检查微信进程是否运行 (仅微信4.x Weixin.exe)
@@ -258,6 +272,46 @@ export class WxKeyService {
   /** 仅取密钥（诊断版的薄封装）。 */
   scanDbKey(contactDbPath: string): string | null {
     return this.scanDbKeyDiag(contactDbPath)?.key ?? null
+  }
+
+  /**
+   * 一次性提取完整账号信息（Ed25519 鉴权）。
+   * 走 weixin.dll keystream 推导 + global_config 结构游走，直接读出
+   * db_key 与 wxid / name(昵称) / number(微信号) / phone(手机号)。
+   * 该路径不依赖 contact.db，命中即返回；失败/未授权返回 null。
+   */
+  scanAccount(): WxAccountInfo | null {
+    if (!this.initScanLib()) return null
+    try {
+      const koffi = require('koffi')
+      const wktChallenge = this.scanLib.func('int wkt_challenge(uint8_t*, size_t)')
+      const wktScanAccount = this.scanLib.func('void* wkt_scan_account_auth(uint8_t*, size_t)')
+      const wktFree = this.scanLib.func('void wkt_free(void*)')
+
+      const nonce = Buffer.alloc(32)
+      if (wktChallenge(nonce, 32) !== 32) return null
+
+      const sig = crypto.sign(null, nonce, this.getScanPrivateKey()) // Ed25519，64 字节
+      const ptr = wktScanAccount(sig, sig.length)
+      if (!ptr) return null
+
+      const jsonStr = koffi.decode(ptr, 'char', -1)
+      wktFree(ptr)
+
+      const d = JSON.parse(String(jsonStr || '{}').replace(/\0/g, ''))
+      const dbKey = typeof d.db_key === 'string' ? d.db_key.trim() : ''
+      return {
+        dbKey: dbKey.length === 64 ? dbKey : null,
+        wxid: String(d.wxid || '').trim(),
+        name: String(d.name || '').trim(),
+        number: String(d.number || '').trim(),
+        phone: String(d.phone || '').trim(),
+        seed: Number(d.seed) || 0,
+      }
+    } catch (e) {
+      console.error('账号信息扫描失败:', e)
+      return null
+    }
   }
 
   /**

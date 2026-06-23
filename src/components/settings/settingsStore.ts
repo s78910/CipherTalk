@@ -12,6 +12,9 @@ export interface SettingsConfig {
   cachePath: string
   imageXorKey: string
   imageAesKey: string
+  displayName: string
+  wechatNumber: string
+  phone: string
   editingAccountId: string
   skipIntegrityCheck: boolean
   autoUpdateDatabase: boolean
@@ -51,6 +54,9 @@ export const DEFAULT_SETTINGS_CONFIG: SettingsConfig = {
   cachePath: '',
   imageXorKey: '',
   imageAesKey: '',
+  displayName: '',
+  wechatNumber: '',
+  phone: '',
   editingAccountId: '',
   skipIntegrityCheck: false,
   autoUpdateDatabase: true,

@@ -29,6 +29,9 @@ export function useSettingsConfig() {
         cachePath: activeAccount?.cachePath || await configService.getCachePath() || '',
         imageXorKey: activeAccount?.imageXorKey || await configService.getImageXorKey() || '',
         imageAesKey: activeAccount?.imageAesKey || await configService.getImageAesKey() || '',
+        displayName: activeAccount?.displayName || '',
+        wechatNumber: activeAccount?.wechatNumber || '',
+        phone: activeAccount?.phone || '',
         editingAccountId: activeAccount?.id || '',
         skipIntegrityCheck: await configService.getSkipIntegrityCheck(),
         autoUpdateDatabase: await configService.getAutoUpdateDatabase(),
@@ -80,7 +83,10 @@ export function useSettingsConfig() {
         cachePath: config.cachePath.trim(),
         imageXorKey: config.imageXorKey.trim(),
         imageAesKey: config.imageAesKey.trim(),
-        displayName: config.wxid.trim() || '未命名账号'
+        wechatNumber: config.wechatNumber.trim(),
+        phone: config.phone.trim(),
+        // 优先用内存提取到的真实昵称作为展示名，否则回退到 wxid
+        displayName: config.displayName.trim() || config.wxid.trim() || '未命名账号'
       }
 
       if (config.editingAccountId) {

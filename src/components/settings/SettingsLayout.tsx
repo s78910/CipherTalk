@@ -438,6 +438,7 @@ function SettingsLayout() {
       setCloseToTray(savedCloseToTray)
 
       // 保存初始配置用于比较
+      const sourceAccount = editingAccount || activeAccount
       const loadedConfig = {
         decryptKey: savedKey || '',
         dbPath: savedPath || '',
@@ -445,6 +446,9 @@ function SettingsLayout() {
         cachePath: savedCachePath || '',
         imageXorKey: savedXorKey || '',
         imageAesKey: savedAesKey || '',
+        displayName: sourceAccount?.displayName || '',
+        wechatNumber: sourceAccount?.wechatNumber || '',
+        phone: sourceAccount?.phone || '',
         exportPath: savedExportPath || '',
         sttLanguages: savedSttLanguages && savedSttLanguages.length > 0 ? savedSttLanguages : ['zh'],
         sttModelType: savedSttModelType,
@@ -1252,7 +1256,9 @@ function SettingsLayout() {
         cachePath: storeConfig.cachePath.trim(),
         imageXorKey: storeConfig.imageXorKey.trim(),
         imageAesKey: storeConfig.imageAesKey.trim(),
-        displayName: storeConfig.wxid.trim() || '未命名账号'
+        wechatNumber: storeConfig.wechatNumber.trim(),
+        phone: storeConfig.phone.trim(),
+        displayName: storeConfig.displayName.trim() || storeConfig.wxid.trim() || '未命名账号'
       }
 
       if (storeConfig.editingAccountId) {

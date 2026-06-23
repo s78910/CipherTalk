@@ -1,5 +1,5 @@
 import type { ChatSession, Message, Contact, ContactInfo } from './models'
-import type { AccountProfile } from './account'
+import type { AccountProfile, AccountProfileInput, AccountProfilePatch } from './account'
 import type { AIModelInfo, AIProviderInfo } from './ai'
 
 export interface EmbeddingConfig {
@@ -478,8 +478,8 @@ export interface ElectronAPI {
     list: () => Promise<AccountProfile[]>
     getActive: () => Promise<AccountProfile | null>
     setActive: (accountId: string) => Promise<AccountProfile | null>
-    save: (profile: Omit<AccountProfile, 'id' | 'createdAt' | 'updatedAt' | 'lastUsedAt'>) => Promise<AccountProfile | null>
-    update: (accountId: string, patch: Partial<Omit<AccountProfile, 'id' | 'createdAt' | 'updatedAt' | 'lastUsedAt'>>) => Promise<AccountProfile | null>
+    save: (profile: AccountProfileInput) => Promise<AccountProfile | null>
+    update: (accountId: string, patch: AccountProfilePatch) => Promise<AccountProfile | null>
     delete: (accountId: string, deleteLocalData?: boolean) => Promise<{ success: boolean; error?: string; deleted?: AccountProfile | null; nextActiveAccountId?: string }>
   }
   skillManager: {
@@ -693,7 +693,7 @@ export interface ElectronAPI {
     killWeChat: () => Promise<boolean>
     launchWeChat: () => Promise<boolean>
     waitForWindow: (maxWaitSeconds?: number) => Promise<boolean>
-    startGetKey: (customWechatPath?: string, dbPath?: string) => Promise<{ success: boolean; key?: string; error?: string; needManualPath?: boolean; validatedWxid?: string }>
+    startGetKey: (customWechatPath?: string, dbPath?: string) => Promise<{ success: boolean; key?: string; error?: string; needManualPath?: boolean; needAdmin?: boolean; validatedWxid?: string; account?: { dbKey: string | null; wxid: string; name: string; number: string; phone: string; seed: number } | null }>
     cancel: () => Promise<boolean>
     detectCurrentAccount: (dbPath?: string, maxTimeDiffMinutes?: number) => Promise<{ wxid: string; dbPath: string } | null>
     onStatus: (callback: (data: { status: string; level: number }) => void) => () => void

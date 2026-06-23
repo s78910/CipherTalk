@@ -576,6 +576,9 @@ export class ConfigService {
     const cachePath = String(profile.cachePath ?? fallback?.cachePath ?? '').trim()
     const imageXorKey = String(profile.imageXorKey ?? fallback?.imageXorKey ?? '').trim()
     const imageAesKey = String(profile.imageAesKey ?? fallback?.imageAesKey ?? '').trim()
+    // 旧账号 blob 无此字段时默认空串（即迁移）。
+    const wechatNumber = String(profile.wechatNumber ?? fallback?.wechatNumber ?? '').trim()
+    const phone = String(profile.phone ?? fallback?.phone ?? '').trim()
     const rawDisplayName = profile.displayName ?? fallback?.displayName ?? wxid ?? ''
     const displayName = String(rawDisplayName).trim() || wxid || '未命名账号'
 
@@ -586,6 +589,8 @@ export class ConfigService {
       cachePath,
       imageXorKey,
       imageAesKey,
+      wechatNumber,
+      phone,
       displayName
     }
   }

@@ -161,7 +161,63 @@ export function registerWxKeyHandlers(ctx: MainProcessContext): void {
     }
 
     try {
-      // Windows 内存扫描方案：重启微信，在其启动加载密钥的瞬间扫描 crypt_key 邻域。
+      const safeScanWxids = (root: string): string[] => {
+        try {
+          return dbPathService.scanWxids(root)
+        } catch {
+          return []
+        }
+      }
+
+      // DLL 返回的是“干净 wxid”（wxid_7r9dov5f7mse12），而真实账号目录名带后缀
+      // （wxid_7r9dov5f7mse12_bf70）。全 app 的 wxid 字段约定为目录名，故按前缀解析出真实目录。
+      const resolveAccountDir = (root: string, cleanWxid: string): string => {
+        if (!cleanWxid) return ''
+        const dirs = safeScanWxids(root)
+        return (
+          dirs.find(d => d === cleanWxid) ||
+          dirs.find(d => d.startsWith(cleanWxid + '_')) ||
+          dirs.find(d => d.startsWith(cleanWxid)) ||
+          ''
+        )
+      }
+
+      // 首选方案：对已登录、正在运行的微信直接扫内存（global_config 结构游走），
+      // 一次性提取 db_key + 账号字段（wxid/昵称/微信号/手机号），无需退出重登。
+      if (wxKeyService.isWeChatRunning()) {
+        event.sender.send('wxkey:status', { status: '检测到微信正在运行，正在直接读取账号信息...', level: 1 })
+        const account = wxKeyService.scanAccount()
+        if (account?.dbKey) {
+          // 把干净 wxid 解析成真实目录名，作为 app 内统一使用的 wxid（路径都按它拼）。
+          const resolvedDir = dbPath ? resolveAccountDir(dbPath, account.wxid) : ''
+          const bindWxid = resolvedDir || account.wxid
+          const outAccount = { ...account, wxid: bindWxid }
+          // 有数据库目录时做一次目录验证；拿到 dbKey 本身已通过 UUIDv4 自校验，
+          // 即使无目录/未通过验证也直接返回密钥与账号信息。
+          if (dbPath) {
+            const accWxids = bindWxid
+              ? [bindWxid, ...safeScanWxids(dbPath).filter(w => w !== bindWxid)]
+              : safeScanWxids(dbPath)
+            for (const wxid of accWxids) {
+              event.sender.send('wxkey:status', { status: `已读取账号信息，正在验证: ${account.name || wxid}`, level: 1 })
+              const testResult = await wcdbService.testConnection(dbPath, account.dbKey, wxid)
+              if (testResult.success) {
+                ctx.getLogService()?.info('WxKey', '直接读取账号信息成功（无需重启微信）', {
+                  wxid, hasName: !!account.name, hasNumber: !!account.number, hasPhone: !!account.phone
+                })
+                return { success: true, key: account.dbKey, validatedWxid: wxid, account: { ...account, wxid } }
+              }
+            }
+          }
+          // 未做/未通过目录验证：不回填 validatedWxid（前端据此标记为“未验证”），
+          // 但仍带回解析后的目录名供前端自动绑定目录。
+          ctx.getLogService()?.info('WxKey', '直接读取到账号信息（未通过目录验证），返回密钥与账号', { bindWxid })
+          return { success: true, key: account.dbKey, account: outAccount }
+        }
+        ctx.getLogService()?.info('WxKey', '直接读取未命中，回退到重启微信抓取流程')
+      }
+
+      // 回退方案：重启微信，在其启动加载密钥的瞬间扫描 crypt_key 邻域。
       // 关闭已运行的微信，确保走一次完整的密钥加载。
       if (wxKeyService.isWeChatRunning()) {
         ctx.getLogService()?.info('WxKey', '检测到微信正在运行，准备关闭')
@@ -236,6 +292,31 @@ export function registerWxKeyHandlers(ctx: MainProcessContext): void {
       }
       while (Date.now() < deadline) {
         rounds++
+        // 快速路径：一次性从 global_config 结构提取 db_key + 账号字段（wxid/昵称/微信号/手机号），
+        // 不依赖 contact.db。命中后把干净 wxid 前缀匹配成真实目录名，再优先做数据库验证。
+        const account = wxKeyService.scanAccount()
+        if (account?.dbKey) {
+          sawBytes = true
+          const bindWxid =
+            wxids.find(w => w === account.wxid) ||
+            wxids.find(w => w.startsWith(account.wxid + '_')) ||
+            wxids.find(w => w.startsWith(account.wxid)) ||
+            account.wxid
+          const accWxids = bindWxid
+            ? [bindWxid, ...wxids.filter(w => w !== bindWxid)]
+            : wxids
+          for (const wxid of accWxids) {
+            event.sender.send('wxkey:status', { status: `已提取账号信息，正在验证: ${account.name || wxid}`, level: 1 })
+            const testResult = await wcdbService.testConnection(dbPath, account.dbKey, wxid)
+            if (testResult.success) {
+              ctx.getLogService()?.info('WxKey', '账号信息提取成功', {
+                wxid, hasName: !!account.name, hasNumber: !!account.number, hasPhone: !!account.phone
+              })
+              return { success: true, key: account.dbKey, validatedWxid: wxid, account: { ...account, wxid } }
+            }
+            lastError = testResult.error || ''
+          }
+        }
         for (const wxid of wxids) {
           const contactDb = contactDbFor(wxid)
           if (!contactDb) continue
@@ -247,7 +328,7 @@ export function registerWxKeyHandlers(ctx: MainProcessContext): void {
             const testResult = await wcdbService.testConnection(dbPath, diag.key, wxid)
             if (testResult.success) {
               ctx.getLogService()?.info('WxKey', '内存扫描密钥获取成功', { wxid, keyLength: diag.key.length })
-              return { success: true, key: diag.key, validatedWxid: wxid }
+              return { success: true, key: diag.key, validatedWxid: wxid, account: account ?? null }
             }
             lastError = testResult.error || ''
           }
