@@ -146,6 +146,8 @@ class ExportService {
   private contactColumnsCache: { hasBigHeadUrl: boolean; hasSmallHeadUrl: boolean; selectCols: string[] } | null = null
   private contactDbAvailable: boolean = false
   private headImageDbAvailable: boolean = false
+  // username -> 联系人信息缓存，避免导出时逐条消息重复查 contact/head_image 库
+  private contactInfoCache: Map<string, { displayName: string; avatarUrl?: string }> = new Map()
 
   constructor() {
     this.configService = new ConfigService()
@@ -192,6 +194,7 @@ class ExportService {
 
       this.contactDbAvailable = !!findDbByName('contact.db')
       this.headImageDbAvailable = !!findDbByName('head_image.db')
+      this.contactInfoCache.clear()
 
       return { success: true }
     } catch (e) {
@@ -204,6 +207,7 @@ class ExportService {
     this.contactColumnsCache = null
     this.contactDbAvailable = false
     this.headImageDbAvailable = false
+    this.contactInfoCache.clear()
   }
 
   private findMessageDbs(): string[] {
@@ -260,7 +264,14 @@ class ExportService {
    * 获取联系人信息
    */
   private async getContactInfo(username: string): Promise<{ displayName: string; avatarUrl?: string }> {
-    if (!this.contactDbAvailable) return { displayName: username }
+    const cached = this.contactInfoCache.get(username)
+    if (cached) return cached
+
+    if (!this.contactDbAvailable) {
+      const fallback = { displayName: username }
+      this.contactInfoCache.set(username, fallback)
+      return fallback
+    }
 
     try {
       if (!this.contactColumnsCache) {
@@ -298,10 +309,14 @@ class ExportService {
           avatarUrl = await this.getAvatarFromHeadImageDb(username)
         }
 
-        return { displayName, avatarUrl }
+        const result = { displayName, avatarUrl }
+        this.contactInfoCache.set(username, result)
+        return result
       }
     } catch { }
-    return { displayName: username }
+    const fallback = { displayName: username }
+    this.contactInfoCache.set(username, fallback)
+    return fallback
   }
 
   /**
@@ -779,16 +794,18 @@ class ExportService {
 
           let sql: string
           if (hasName2Id) {
-            sql = `SELECT m.*, n.user_name AS sender_username
+            sql = `SELECT m.*, n.user_name AS sender_username, m.rowid AS __rid
                    FROM ${tableName} m
-                   LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid
-                   ORDER BY m.create_time ASC`
+                   LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid`
           } else {
-            sql = `SELECT * FROM ${tableName} ORDER BY create_time ASC`
+            sql = `SELECT m.*, m.rowid AS __rid FROM ${tableName} m`
           }
 
-          const rows = await dbAdapter.all<any>('message', dbPath, sql)
-
+          // 流式分批读取（keyset 分页）：按 rowid 游标推进，每批 2000 行；避免一次性吞整表 OOM，也避免 OFFSET 深翻页的 O(n²)
+          let __lastRid = -1
+          while (true) {
+          const rows = await dbAdapter.all<any>('message', dbPath, `${sql} WHERE m.rowid > ${__lastRid} ORDER BY m.rowid ASC LIMIT 2000`)
+          if (rows.length === 0) break
           for (const row of rows) {
             const createTime = row.create_time || 0
 
@@ -893,6 +910,10 @@ class ExportService {
               memberSet.set(actualSender, { ...existing, groupNickname })
             }
           }
+          __lastRid = rows[rows.length - 1].__rid
+          if (rows.length < 2000) break
+          await new Promise(resolve => setImmediate(resolve))
+          }
         } catch (e) {
           console.error('导出消息失败:', e)
         }
@@ -912,7 +933,9 @@ class ExportService {
       // 构建 ChatLab 格式消息
       const chatLabMessages: ChatLabMessage[] = []
 
+      let __msgTick = 0
       for (const msg of allMessages) {
+        if ((++__msgTick & 0xff) === 0) await new Promise(resolve => setImmediate(resolve))
         const memberInfo = memberSet.get(msg.senderUsername) || { platformId: msg.senderUsername, accountName: msg.senderUsername }
         let parsedContent = this.parseMessageContent(msg.content, msg.localType, sessionId, msg.createTime, options.mediaPathMap, msg.localId, options.voicePathMap)
 
@@ -1536,16 +1559,18 @@ class ExportService {
 
           let sql: string
           if (hasName2Id) {
-            sql = `SELECT m.*, n.user_name AS sender_username
+            sql = `SELECT m.*, n.user_name AS sender_username, m.rowid AS __rid
                    FROM ${tableName} m
-                   LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid
-                   ORDER BY m.create_time ASC`
+                   LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid`
           } else {
-            sql = `SELECT * FROM ${tableName} ORDER BY create_time ASC`
+            sql = `SELECT m.*, m.rowid AS __rid FROM ${tableName} m`
           }
 
-          const rows = await dbAdapter.all<any>('message', dbPath, sql)
-
+          // 流式分批读取（keyset 分页）：按 rowid 游标推进，每批 2000 行；避免一次性吞整表 OOM，也避免 OFFSET 深翻页的 O(n²)
+          let __lastRid = -1
+          while (true) {
+          const rows = await dbAdapter.all<any>('message', dbPath, `${sql} WHERE m.rowid > ${__lastRid} ORDER BY m.rowid ASC LIMIT 2000`)
+          if (rows.length === 0) break
           for (const row of rows) {
             const createTime = row.create_time || 0
 
@@ -1638,6 +1663,10 @@ class ExportService {
               lastMessageTime = createTime
             }
           }
+          __lastRid = rows[rows.length - 1].__rid
+          if (rows.length < 2000) break
+          await new Promise(resolve => setImmediate(resolve))
+          }
         } catch (e) {
           console.error('导出消息失败:', e)
         }
@@ -1655,7 +1684,9 @@ class ExportService {
       })
 
       // 转账消息：追加 "谁转账给谁" 信息
+      let __msgTick = 0
       for (const msg of allMessages) {
+        if ((++__msgTick & 0xff) === 0) await new Promise(resolve => setImmediate(resolve))
         if (msg.content && msg.content.startsWith('[转账]') && msg.rawContent) {
           const transferDesc = await this.resolveTransferDesc(
             msg.rawContent,
@@ -1752,16 +1783,18 @@ class ExportService {
 
           let sql: string
           if (hasName2Id) {
-            sql = `SELECT m.*, n.user_name AS sender_username
+            sql = `SELECT m.*, n.user_name AS sender_username, m.rowid AS __rid
                    FROM ${tableName} m
-                   LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid
-                   ORDER BY m.create_time ASC`
+                   LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid`
           } else {
-            sql = `SELECT * FROM ${tableName} ORDER BY create_time ASC`
+            sql = `SELECT m.*, m.rowid AS __rid FROM ${tableName} m`
           }
 
-          const rows = await dbAdapter.all<any>('message', dbPath, sql)
-
+          // 流式分批读取（keyset 分页）：按 rowid 游标推进，每批 2000 行；避免一次性吞整表 OOM，也避免 OFFSET 深翻页的 O(n²)
+          let __lastRid = -1
+          while (true) {
+          const rows = await dbAdapter.all<any>('message', dbPath, `${sql} WHERE m.rowid > ${__lastRid} ORDER BY m.rowid ASC LIMIT 2000`)
+          if (rows.length === 0) break
           for (const row of rows) {
             const createTime = row.create_time || 0
 
@@ -1819,6 +1852,10 @@ class ExportService {
               chatRecordList
             })
           }
+          __lastRid = rows[rows.length - 1].__rid
+          if (rows.length < 2000) break
+          await new Promise(resolve => setImmediate(resolve))
+          }
         } catch (e) {
           console.error(`读取消息表 ${tableName} 失败:`, e)
         }
@@ -1835,6 +1872,7 @@ class ExportService {
       const excelData: any[] = []
 
       for (let index = 0; index < allMessages.length; index++) {
+        if ((index & 0xff) === 0) await new Promise(resolve => setImmediate(resolve))
         const msg = allMessages[index]
         const msgType = this.getMessageTypeName(msg.type, msg.content)
         const time = new Date(msg.createTime * 1000)
@@ -1992,16 +2030,18 @@ class ExportService {
 
           let sql: string
           if (hasName2Id) {
-            sql = `SELECT m.*, n.user_name AS sender_username
+            sql = `SELECT m.*, n.user_name AS sender_username, m.rowid AS __rid
                    FROM ${tableName} m
-                   LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid
-                   ORDER BY m.create_time ASC`
+                   LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid`
           } else {
-            sql = `SELECT * FROM ${tableName} ORDER BY create_time ASC`
+            sql = `SELECT m.*, m.rowid AS __rid FROM ${tableName} m`
           }
 
-          const rows = await dbAdapter.all<any>('message', dbPath, sql)
-
+          // 流式分批读取（keyset 分页）：按 rowid 游标推进，每批 2000 行；避免一次性吞整表 OOM，也避免 OFFSET 深翻页的 O(n²)
+          let __lastRid = -1
+          while (true) {
+          const rows = await dbAdapter.all<any>('message', dbPath, `${sql} WHERE m.rowid > ${__lastRid} ORDER BY m.rowid ASC LIMIT 2000`)
+          if (rows.length === 0) break
           for (const row of rows) {
             const createTime = row.create_time || 0
 
@@ -2104,6 +2144,10 @@ class ExportService {
                 }
               }
             }
+          }
+          __lastRid = rows[rows.length - 1].__rid
+          if (rows.length < 2000) break
+          await new Promise(resolve => setImmediate(resolve))
           }
         } catch (e) {
           console.error(`读取消息表 ${tableName} 失败:`, e)
@@ -2228,16 +2272,18 @@ class ExportService {
 
           let sql: string
           if (hasName2Id) {
-            sql = `SELECT m.*, n.user_name AS sender_username
+            sql = `SELECT m.*, n.user_name AS sender_username, m.rowid AS __rid
                    FROM ${tableName} m
-                   LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid
-                   ORDER BY m.create_time ASC`
+                   LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid`
           } else {
-            sql = `SELECT * FROM ${tableName} ORDER BY create_time ASC`
+            sql = `SELECT m.*, m.rowid AS __rid FROM ${tableName} m`
           }
 
-          const rows = await dbAdapter.all<any>('message', dbPath, sql)
-
+          // 流式分批读取（keyset 分页）：按 rowid 游标推进，每批 2000 行；避免一次性吞整表 OOM，也避免 OFFSET 深翻页的 O(n²)
+          let __lastRid = -1
+          while (true) {
+          const rows = await dbAdapter.all<any>('message', dbPath, `${sql} WHERE m.rowid > ${__lastRid} ORDER BY m.rowid ASC LIMIT 2000`)
+          if (rows.length === 0) break
           for (const row of rows) {
             const createTime = row.create_time || 0
 
@@ -2307,6 +2353,10 @@ class ExportService {
             if (lastMessageTime === null || createTime > lastMessageTime) {
               lastMessageTime = createTime
             }
+          }
+          __lastRid = rows[rows.length - 1].__rid
+          if (rows.length < 2000) break
+          await new Promise(resolve => setImmediate(resolve))
           }
         } catch (e) {
           console.error('导出消息失败:', e)
@@ -2403,6 +2453,7 @@ class ExportService {
         const BATCH_SIZE = 500
 
         for (let i = 0; i < allMessages.length; i += BATCH_SIZE) {
+          await new Promise(resolve => setImmediate(resolve))
           const batch = allMessages.slice(i, i + BATCH_SIZE)
           const valueRows = batch.map(msg => {
             const vals = [
@@ -2867,7 +2918,6 @@ class ExportService {
     let imageCount = 0
     let videoCount = 0
     let emojiCount = 0
-    let emojiTotal = 0
     let emojiProcessed = 0
 
     // 是否需要处理图片/视频/表情
@@ -2875,28 +2925,28 @@ class ExportService {
 
     // 图片/视频/表情循环（语音在后面独立处理）
     if (needMedia) {
-      // 读取全部消息行（不在 SQL 里按 local_type 过滤，避免列名/类型差异导致漏查）
-      const allRows: any[] = []
+      if (options.exportEmojis) onDetail?.(`正在导出表情包...`)
+      // 流式分批读取媒体消息行：每批 2000 行、批内 MEDIA_CONCURRENCY 路并发，
+      // 处理完即释放，避免一次性吞整表导致 OOM。图片/视频/表情解密下载都是 I/O 密集，并发收益最大。
+      const MEDIA_CONCURRENCY = 6
       for (const { tableName, dbPath } of dbTablePairs) {
-        try {
-          const rows = await dbAdapter.all<any>(
-            'message',
-            dbPath,
-            `SELECT * FROM ${tableName} ORDER BY create_time ASC`
-          )
-          allRows.push(...rows)
-        } catch (e) {
-          console.error(`[Export] 读取媒体消息失败:`, e)
-        }
-      }
-
-      // 预先统计表情总数
-      if (options.exportEmojis) {
-        emojiTotal = allRows.filter(r => this.resolveMessageLocalType(r, 1) === 47).length
-        if (emojiTotal > 0) onDetail?.(`正在导出表情包 (共 ${emojiTotal} 个)...`)
-      }
-
-      for (const row of allRows) {
+        let __mediaLastRid = -1
+        while (true) {
+          let pageRows: any[] = []
+          try {
+            pageRows = await dbAdapter.all<any>(
+              'message',
+              dbPath,
+              `SELECT *, rowid AS __rid FROM ${tableName} WHERE rowid > ${__mediaLastRid} ORDER BY rowid ASC LIMIT 2000`
+            )
+          } catch (e) {
+            console.error(`[Export] 读取媒体消息失败:`, e)
+            break
+          }
+          if (pageRows.length === 0) break
+          for (let __mediaStart = 0; __mediaStart < pageRows.length; __mediaStart += MEDIA_CONCURRENCY) {
+            const __mediaSlice = pageRows.slice(__mediaStart, __mediaStart + MEDIA_CONCURRENCY)
+            await Promise.all(__mediaSlice.map((row: any) => (async () => {
         try {
           {
             const createTime = row.create_time || 0
@@ -2904,7 +2954,7 @@ class ExportService {
             // 时间范围过滤
             if (options.dateRange) {
               if (createTime < options.dateRange.start || createTime > options.dateRange.end) {
-                continue
+                return
               }
             }
 
@@ -2987,7 +3037,7 @@ class ExportService {
             // 导出表情包
             if (options.exportEmojis && localType === 47) {
               emojiProcessed++
-              onDetail?.(`表情导出: ${emojiProcessed}/${emojiTotal}`)
+              onDetail?.(`表情导出: ${emojiProcessed}`)
               try {
                 // 从 XML 提取 cdnUrl 和 md5
                 const cdnUrlMatch = /cdnurl\s*=\s*['"]([^'"]+)['"]/i.exec(content)
@@ -3046,6 +3096,12 @@ class ExportService {
         } catch (e) {
           // 跳过单行消息的错误
         }
+            })()))
+            await new Promise(resolve => setImmediate(resolve))
+          }
+          __mediaLastRid = pageRows[pageRows.length - 1].__rid
+          if (pageRows.length < 2000) break
+        }
       }
     } // 结束 needMedia
 
@@ -3073,7 +3129,9 @@ class ExportService {
             dbPath,
             `SELECT * FROM ${tableName} ORDER BY create_time ASC`
           )
+          let __rowTick = 0
           for (const row of rows) {
+            if ((++__rowTick & 0xff) === 0) await new Promise(resolve => setImmediate(resolve))
             if (this.resolveMessageLocalType(row, 1) !== 34) continue
             const createTime = row.create_time || 0
             if (!createTime) continue
