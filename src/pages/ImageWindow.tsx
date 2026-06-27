@@ -1,6 +1,7 @@
 
 import { useState, useEffect, useRef, useCallback, useLayoutEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
+import { Tooltip } from '@heroui/react'
 import { ZoomIn, ZoomOut, RotateCw, RotateCcw, ChevronLeft, ChevronRight } from 'lucide-react'
 import { LivePhotoIcon } from '../components/LivePhotoIcon'
 import type { ImageListItem } from '../types/electron'
@@ -230,7 +231,7 @@ export default function ImageWindow() {
         // 多图模式下不调整窗口大小，避免切换时窗口跳动
         if (imageList.length <= 1) {
             const desiredWidth = naturalWidth
-            const desiredHeight = naturalHeight + 40
+            const desiredHeight = naturalHeight
             // @ts-ignore
             window.electronAPI?.window?.resizeContent?.(desiredWidth, desiredHeight)
         }
@@ -450,28 +451,64 @@ export default function ImageWindow() {
     return (
         <div className="image-window-container">
             <div className="title-bar">
-                <div className="window-drag-area"></div>
-                <div className="title-bar-controls">
+                <div className="window-drag-area" aria-hidden="true"></div>
+            </div>
+
+            <div className="bottom-toolbar-shell">
+                <div className="bottom-toolbar">
                     {hasLiveVideo && (
                         <>
-                            <button
-                                onClick={handlePlayLiveVideo}
-                                data-tooltip={isPlayingLive ? "正在播放" : "播放 Live Photo (空格)"}
-                                className={`live-play-btn ${isPlayingLive ? 'active' : ''}`}
-                                disabled={isPlayingLive}
-                            >
-                                <LivePhotoIcon size={18} />
-                                <span>LIVE</span>
-                            </button>
+                            <Tooltip delay={0} closeDelay={60}>
+                                <Tooltip.Trigger>
+                                    <button
+                                        onClick={handlePlayLiveVideo}
+                                        aria-label={isPlayingLive ? '正在播放' : '播放 Live Photo'}
+                                        className={`live-play-btn ${isPlayingLive ? 'active' : ''}`}
+                                        disabled={isPlayingLive}
+                                    >
+                                        <LivePhotoIcon size={18} />
+                                        <span>LIVE</span>
+                                    </button>
+                                </Tooltip.Trigger>
+                                <Tooltip.Content placement="top">{isPlayingLive ? '正在播放' : '播放 Live Photo（空格）'}</Tooltip.Content>
+                            </Tooltip>
                             <div className="divider"></div>
                         </>
                     )}
-                    <button onClick={handleZoomOut} title="缩小 (-)"><ZoomOut size={16} /></button>
+                    <Tooltip delay={0} closeDelay={60}>
+                        <Tooltip.Trigger>
+                            <button onClick={handleZoomOut} aria-label="缩小">
+                                <ZoomOut size={16} />
+                            </button>
+                        </Tooltip.Trigger>
+                        <Tooltip.Content placement="top">缩小（-）</Tooltip.Content>
+                    </Tooltip>
                     <span className="scale-text">{Math.round(displayScale * 100)}%</span>
-                    <button onClick={handleZoomIn} title="放大 (+)"><ZoomIn size={16} /></button>
+                    <Tooltip delay={0} closeDelay={60}>
+                        <Tooltip.Trigger>
+                            <button onClick={handleZoomIn} aria-label="放大">
+                                <ZoomIn size={16} />
+                            </button>
+                        </Tooltip.Trigger>
+                        <Tooltip.Content placement="top">放大（+）</Tooltip.Content>
+                    </Tooltip>
                     <div className="divider"></div>
-                    <button onClick={handleRotateCcw} title="逆时针旋转"><RotateCcw size={16} /></button>
-                    <button onClick={handleRotate} title="顺时针旋转 (R)"><RotateCw size={16} /></button>
+                    <Tooltip delay={0} closeDelay={60}>
+                        <Tooltip.Trigger>
+                            <button onClick={handleRotateCcw} aria-label="逆时针旋转">
+                                <RotateCcw size={16} />
+                            </button>
+                        </Tooltip.Trigger>
+                        <Tooltip.Content placement="top">逆时针旋转</Tooltip.Content>
+                    </Tooltip>
+                    <Tooltip delay={0} closeDelay={60}>
+                        <Tooltip.Trigger>
+                            <button onClick={handleRotate} aria-label="顺时针旋转">
+                                <RotateCw size={16} />
+                            </button>
+                        </Tooltip.Trigger>
+                        <Tooltip.Content placement="top">顺时针旋转（R）</Tooltip.Content>
+                    </Tooltip>
                     {imageList.length > 1 && (
                         <>
                             <div className="divider"></div>

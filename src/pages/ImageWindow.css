@@ -2,41 +2,72 @@
     width: 100vw;
     height: 100vh;
     background-color: var(--bg-primary);
-    display: flex;
-    flex-direction: column;
+    position: relative;
+    display: block;
     overflow: hidden;
     user-select: none;
     /* -webkit-app-region: drag; Removed global drag to prevent unwanted resize/drag behaviors */
 }
 
 .image-window-container .title-bar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
     height: var(--window-chrome-height);
-    min-height: var(--window-chrome-height);
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    background: var(--bg-secondary);
-    border-bottom: 1px solid var(--border-color);
-    padding-left: var(--window-controls-left-safe);
-    padding-right: var(--window-controls-right-safe);
+    background: transparent;
+    border: 0;
     -webkit-app-region: drag;
     z-index: 500;
-    position: relative;
 }
 
 .image-window-container .title-bar .window-drag-area {
-    flex: 1;
+    width: 100%;
     height: 100%;
 }
 
-.image-window-container .title-bar .title-bar-controls {
+.image-window-container .bottom-toolbar-shell {
+    position: absolute;
+    right: 0;
+    bottom: 18px;
+    left: 0;
+    z-index: 600;
     display: flex;
-    align-items: center;
-    gap: var(--window-toolbar-gap);
+    justify-content: center;
+    padding: 0 18px;
+    pointer-events: none;
     -webkit-app-region: no-drag;
 }
 
-.image-window-container .title-bar .title-bar-controls button {
+.image-window-container .bottom-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--window-toolbar-gap);
+    max-width: calc(100vw - 36px);
+    min-height: 42px;
+    padding: 7px 10px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--bg-secondary) 68%, transparent);
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.24);
+    backdrop-filter: blur(18px) saturate(1.12);
+    -webkit-backdrop-filter: blur(18px) saturate(1.12);
+    opacity: 0.82;
+    transform: translateY(4px);
+    transition: opacity 0.18s ease, transform 0.18s ease, background 0.18s ease;
+    pointer-events: auto;
+    -webkit-app-region: no-drag;
+}
+
+.image-window-container .bottom-toolbar:hover,
+.image-window-container .bottom-toolbar:focus-within {
+    opacity: 1;
+    transform: translateY(0);
+    background: color-mix(in srgb, var(--bg-secondary) 78%, transparent);
+}
+
+.image-window-container .bottom-toolbar button {
     background: transparent;
     border: none;
     color: var(--text-secondary);
@@ -50,12 +81,12 @@
     transition: all 0.2s;
 }
 
-.image-window-container .title-bar .title-bar-controls button:hover {
+.image-window-container .bottom-toolbar button:hover {
     background: var(--bg-tertiary);
     color: var(--text-primary);
 }
 
-.image-window-container .title-bar .title-bar-controls button.live-play-btn {
+.image-window-container .bottom-toolbar button.live-play-btn {
     position: relative;
     background: rgba(255, 255, 255, 0.22);
     backdrop-filter: blur(8px);
@@ -71,60 +102,30 @@
     box-shadow: 0 4px 10px rgba(0, 0, 0, 0.12);
 }
 
-.image-window-container .title-bar .title-bar-controls button.live-play-btn::before {
-    content: attr(data-tooltip);
-    position: absolute;
-    left: 50%;
-    transform: translateX(-50%);
-    top: 100%;
-    margin-top: 8px;
-    background: rgba(20, 20, 20, 0.9);
-    backdrop-filter: blur(12px);
-    padding: 6px 12px;
-    border-radius: 8px;
-    font-size: 12px;
-    color: white !important;
-    white-space: nowrap;
-    font-weight: normal;
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-    opacity: 0;
-    visibility: hidden;
-    pointer-events: none;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-    z-index: 1000;
-}
-
-.image-window-container .title-bar .title-bar-controls button.live-play-btn:hover {
+.image-window-container .bottom-toolbar button.live-play-btn:hover {
     background: rgba(255, 255, 255, 0.3);
     border-color: rgba(255, 255, 255, 0.28);
     box-shadow: 0 6px 14px rgba(0, 0, 0, 0.16);
     transform: translateY(1px);
 }
 
-.image-window-container .title-bar .title-bar-controls button.live-play-btn:hover::before {
-    opacity: 1;
-    visibility: visible;
-    transform: translateX(-50%) translateY(4px);
-}
-
-.image-window-container .title-bar .title-bar-controls button.live-play-btn.active {
+.image-window-container .bottom-toolbar button.live-play-btn.active {
     background: rgba(var(--primary-rgb, 139, 115, 85), 0.18);
     border-color: rgba(var(--primary-rgb, 139, 115, 85), 0.28);
     color: var(--primary) !important;
     box-shadow: 0 4px 12px rgba(var(--primary-rgb, 139, 115, 85), 0.18);
 }
 
-.image-window-container .title-bar .title-bar-controls button.live-play-btn:disabled {
+.image-window-container .bottom-toolbar button.live-play-btn:disabled {
     opacity: 1;
     cursor: default;
 }
 
-.image-window-container .title-bar .title-bar-controls button.live-play-btn span {
+.image-window-container .bottom-toolbar button.live-play-btn span {
     letter-spacing: 0.5px;
 }
 
-.image-window-container .title-bar .title-bar-controls .scale-text {
+.image-window-container .bottom-toolbar .scale-text {
     min-width: 50px;
     text-align: center;
     color: var(--text-secondary);
@@ -132,14 +133,14 @@
     font-variant-numeric: tabular-nums;
 }
 
-.image-window-container .title-bar .title-bar-controls .divider {
+.image-window-container .bottom-toolbar .divider {
     width: 1px;
     height: 14px;
     background: var(--border-color);
     margin: 0 4px;
 }
 
-.image-window-container .title-bar .title-bar-controls .image-counter {
+.image-window-container .bottom-toolbar .image-counter {
     font-size: 12px;
     color: var(--text-secondary);
     font-variant-numeric: tabular-nums;
@@ -149,12 +150,13 @@
 }
 
 .image-window-container .image-viewport {
-    flex: 1;
+    position: absolute;
+    inset: 0;
+    z-index: 1;
     display: flex;
     align-items: center;
     justify-content: center;
     overflow: hidden;
-    position: relative;
     -webkit-app-region: no-drag;
 }
 
