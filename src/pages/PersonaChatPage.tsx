@@ -4,11 +4,11 @@
  * 等待回复时头部只显示「对方正在输入…」，不暴露内部检索过程。
  * 历史挂 agent 会话存储（scope kind='persona'），打开恢复、每轮保存。
  */
-import { AlertCircle, Bot, CheckCircle, Loader2, MessageSquareX, Mic2, RefreshCw, Trash2 } from 'lucide-react'
+import { AlertCircle, Bot, CheckCircle, Loader2, MessageSquareX, Mic2, PencilLine, RefreshCw, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useChat } from '@ai-sdk/react'
-import { AlertDialog, Button, ProgressBar, Label, Skeleton, Tooltip } from '@heroui/react'
+import { AlertDialog, Button, ProgressBar, Label, Modal, Skeleton, Tooltip } from '@heroui/react'
 import type { FileUIPart, UIMessage } from 'ai'
 import type { CSSProperties } from 'react'
 import {
@@ -39,6 +39,82 @@ type PersonaChatPageProps = {
   sessionId?: string
   embedded?: boolean
   onPersonaChanged?: () => void
+}
+
+type SpeakingStyleDraft = {
+  tone: string
+  personalityTraits: string
+  catchphrases: string
+  punctuationStyle: string
+  addressing: string
+  topics: string
+  ttsInstructions: string
+}
+
+const EMPTY_SPEAKING_STYLE_DRAFT: SpeakingStyleDraft = {
+  tone: '',
+  personalityTraits: '',
+  catchphrases: '',
+  punctuationStyle: '',
+  addressing: '',
+  topics: '',
+  ttsInstructions: '',
+}
+
+function listToDraft(items: string[] | undefined): string {
+  return (items || []).join('\n')
+}
+
+function draftToList(value: string): string[] {
+  return value
+    .split(/[\n,，、]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+function SpeakingStyleField({
+  label,
+  description,
+  value,
+  placeholder,
+  minRows = 3,
+  onChange,
+}: {
+  label: string
+  description: string
+  value: string
+  placeholder?: string
+  minRows?: number
+  onChange: (value: string) => void
+}) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  const resize = useCallback(() => {
+    const textarea = textareaRef.current
+    if (!textarea) return
+    textarea.style.height = 'auto'
+    textarea.style.height = `${textarea.scrollHeight}px`
+  }, [])
+
+  useEffect(() => {
+    resize()
+  }, [resize, value])
+
+  return (
+    <label className="block">
+      <span className="block text-sm font-medium text-foreground">{label}</span>
+      <span className="mt-1 block text-xs text-muted">{description}</span>
+      <textarea
+        ref={textareaRef}
+        className="mt-2 block w-full resize-none overflow-hidden rounded-lg border border-border bg-surface px-3 py-2.5 text-sm leading-6 text-foreground outline-none transition-colors placeholder:text-muted focus:border-accent focus:ring-2 focus:ring-accent/20"
+        placeholder={placeholder}
+        rows={minRows}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        onInput={resize}
+      />
+    </label>
+  )
 }
 
 function messageTextParts(message: UIMessage): string[] {
@@ -294,6 +370,10 @@ export default function PersonaChatPage({ sessionId: sessionIdProp, embedded = f
   const [clearingConversations, setClearingConversations] = useState(false)
   const [voiceCloning, setVoiceCloning] = useState(false)
   const [voiceCloneStatus, setVoiceCloneStatus] = useState<{ ok: boolean; text: string } | null>(null)
+  const [speakingStyleOpen, setSpeakingStyleOpen] = useState(false)
+  const [speakingStyleSaving, setSpeakingStyleSaving] = useState(false)
+  const [speakingStyleDraft, setSpeakingStyleDraft] = useState<SpeakingStyleDraft>(EMPTY_SPEAKING_STYLE_DRAFT)
+  const [speakingStyleError, setSpeakingStyleError] = useState('')
   /** 删除确认弹窗：删除分身画像 / 删除对话记录 */
   const [confirmAction, setConfirmAction] = useState<'deletePersona' | 'clearConversations' | null>(null)
   /** 待发缓冲：真人不会秒回——发出的消息先挂着，停顿几秒没有新消息了才一起交给 AI 回一轮 */
@@ -425,6 +505,10 @@ export default function PersonaChatPage({ sessionId: sessionIdProp, embedded = f
     setPlayedVoice(new Set())
     setRevealedVoice(new Set())
     setVoiceCloneStatus(null)
+    setSpeakingStyleOpen(false)
+    setSpeakingStyleSaving(false)
+    setSpeakingStyleDraft(EMPTY_SPEAKING_STYLE_DRAFT)
+    setSpeakingStyleError('')
     setConfirmAction(null)
     setMessagesRef.current([])
   }, [clearScheduledScroll, sessionId])
@@ -667,6 +751,56 @@ export default function PersonaChatPage({ sessionId: sessionIdProp, embedded = f
     }
   }
 
+  const openSpeakingStyleEditor = () => {
+    if (!persona) return
+    setSpeakingStyleDraft({
+      tone: persona.card.tone || '',
+      personalityTraits: listToDraft(persona.card.personalityTraits),
+      catchphrases: listToDraft(persona.card.catchphrases),
+      punctuationStyle: persona.card.punctuationStyle || '',
+      addressing: persona.card.addressing || '',
+      topics: listToDraft(persona.card.topics),
+      ttsInstructions: persona.card.ttsInstructions || '',
+    })
+    setSpeakingStyleError('')
+    setSpeakingStyleOpen(true)
+  }
+
+  const updateSpeakingStyleDraft = (key: keyof SpeakingStyleDraft, value: string) => {
+    setSpeakingStyleDraft((draft) => ({ ...draft, [key]: value }))
+  }
+
+  const handleSaveSpeakingStyle = async () => {
+    if (!persona || speakingStyleSaving) return
+    setSpeakingStyleSaving(true)
+    setSpeakingStyleError('')
+    try {
+      const res = await window.electronAPI.persona.updateSpeakingStyle({
+        sessionId,
+        card: {
+          tone: speakingStyleDraft.tone,
+          personalityTraits: draftToList(speakingStyleDraft.personalityTraits),
+          catchphrases: draftToList(speakingStyleDraft.catchphrases),
+          punctuationStyle: speakingStyleDraft.punctuationStyle,
+          addressing: speakingStyleDraft.addressing,
+          topics: draftToList(speakingStyleDraft.topics),
+          ttsInstructions: speakingStyleDraft.ttsInstructions,
+        },
+      })
+      if (res.success && res.persona) {
+        setPersona(res.persona)
+        setSpeakingStyleOpen(false)
+        onPersonaChanged?.()
+      } else {
+        setSpeakingStyleError(res.error || '保存说话方式失败')
+      }
+    } catch (e) {
+      setSpeakingStyleError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSpeakingStyleSaving(false)
+    }
+  }
+
   const handleClearConversations = async () => {
     if (busy || clearingConversations) return
     clearPending()
@@ -847,6 +981,21 @@ export default function PersonaChatPage({ sessionId: sessionIdProp, embedded = f
           </Tooltip>
           <Tooltip delay={0}>
             <Tooltip.Trigger>
+              <Button
+                isIconOnly
+                size="sm"
+                variant="ghost"
+                aria-label="修改说话方式"
+                isDisabled={busy || !persona}
+                onPress={openSpeakingStyleEditor}
+              >
+                <PencilLine size={16} />
+              </Button>
+            </Tooltip.Trigger>
+            <Tooltip.Content placement="bottom">修改说话方式</Tooltip.Content>
+          </Tooltip>
+          <Tooltip delay={0}>
+            <Tooltip.Trigger>
               <Button isIconOnly size="sm" variant="ghost" aria-label="重建画像" isDisabled={busy} onPress={() => setPhase('confirm')}>
                 <RefreshCw size={16} />
               </Button>
@@ -890,6 +1039,115 @@ export default function PersonaChatPage({ sessionId: sessionIdProp, embedded = f
           <span>{voiceCloneStatus.text}</span>
         </div>
       )}
+
+      <Modal.Backdrop
+        isOpen={speakingStyleOpen}
+        onOpenChange={(open) => { if (!open && !speakingStyleSaving) setSpeakingStyleOpen(false) }}
+      >
+        <Modal.Container placement="center" size="lg">
+          <Modal.Dialog className="max-h-[calc(100vh-5rem)]">
+            <Modal.CloseTrigger />
+            <Modal.Header>
+              <Modal.Icon className="bg-accent-soft text-accent-soft-foreground">
+                <PencilLine size={20} />
+              </Modal.Icon>
+              <Modal.Heading>修改说话方式</Modal.Heading>
+            </Modal.Header>
+            <Modal.Body>
+              <div className="max-h-[64vh] space-y-5 overflow-y-auto pr-1">
+                <section className="space-y-3">
+                  <div>
+                    <h3 className="m-0 text-sm font-semibold text-foreground">基础语气</h3>
+                    <p className="m-0 mt-1 text-xs text-muted">控制整体聊天感觉。</p>
+                  </div>
+                  <SpeakingStyleField
+                    label="语气风格"
+                    description="描述 TA 整体怎么说话。"
+                    minRows={4}
+                    placeholder="例如：说话直接、短句多，偶尔开玩笑，不太正式。"
+                    value={speakingStyleDraft.tone}
+                    onChange={(value) => updateSpeakingStyleDraft('tone', value)}
+                  />
+                  <SpeakingStyleField
+                    label="性格标签"
+                    description="每行一个标签。"
+                    placeholder={'慢热\n嘴硬\n爱吐槽'}
+                    value={speakingStyleDraft.personalityTraits}
+                    onChange={(value) => updateSpeakingStyleDraft('personalityTraits', value)}
+                  />
+                </section>
+
+                <section className="space-y-3">
+                  <div>
+                    <h3 className="m-0 text-sm font-semibold text-foreground">常用表达</h3>
+                    <p className="m-0 mt-1 text-xs text-muted">控制 TA 经常冒出来的词和称呼。</p>
+                  </div>
+                  <SpeakingStyleField
+                    label="口头禅"
+                    description="每行一个，聊天时只会偶尔使用。"
+                    placeholder={'哈哈哈\n离谱\n算了算了'}
+                    value={speakingStyleDraft.catchphrases}
+                    onChange={(value) => updateSpeakingStyleDraft('catchphrases', value)}
+                  />
+                  <SpeakingStyleField
+                    label="称呼习惯"
+                    description="TA 通常怎么称呼你。"
+                    placeholder="例如：一般直接叫名字，很少用亲昵称呼。"
+                    value={speakingStyleDraft.addressing}
+                    onChange={(value) => updateSpeakingStyleDraft('addressing', value)}
+                  />
+                </section>
+
+                <section className="space-y-3">
+                  <div>
+                    <h3 className="m-0 text-sm font-semibold text-foreground">回复习惯</h3>
+                    <p className="m-0 mt-1 text-xs text-muted">控制标点、排版和经常聊的话题。</p>
+                  </div>
+                  <SpeakingStyleField
+                    label="标点和排版习惯"
+                    description="比如是否爱用句号、波浪号、短句连发。"
+                    placeholder="例如：很少用句号，喜欢分几条短消息发，偶尔用～。"
+                    value={speakingStyleDraft.punctuationStyle}
+                    onChange={(value) => updateSpeakingStyleDraft('punctuationStyle', value)}
+                  />
+                  <SpeakingStyleField
+                    label="常聊话题"
+                    description="每行一个话题。"
+                    placeholder={'工作近况\n吃饭\n游戏\n朋友八卦'}
+                    value={speakingStyleDraft.topics}
+                    onChange={(value) => updateSpeakingStyleDraft('topics', value)}
+                  />
+                </section>
+
+                <section className="space-y-3">
+                  <div>
+                    <h3 className="m-0 text-sm font-semibold text-foreground">语音回复</h3>
+                    <p className="m-0 mt-1 text-xs text-muted">只影响分身发语音时的朗读风格。</p>
+                  </div>
+                  <SpeakingStyleField
+                    label="朗读风格"
+                    description="有专属音色或 TTS 可用时生效。"
+                    minRows={4}
+                    placeholder="例如：语速偏快，语气放松，像随口说话，不要播音腔。"
+                    value={speakingStyleDraft.ttsInstructions}
+                    onChange={(value) => updateSpeakingStyleDraft('ttsInstructions', value)}
+                  />
+                </section>
+                {speakingStyleError && (
+                  <div className="flex items-start gap-2 rounded-lg bg-danger-soft p-3 text-sm text-danger-soft-foreground">
+                    <AlertCircle size={16} className="mt-0.5 shrink-0" />
+                    <span>{speakingStyleError}</span>
+                  </div>
+                )}
+              </div>
+            </Modal.Body>
+            <Modal.Footer>
+              <Button slot="close" variant="tertiary" isDisabled={speakingStyleSaving}>取消</Button>
+              <Button variant="primary" isPending={speakingStyleSaving} onPress={() => void handleSaveSpeakingStyle()}>保存</Button>
+            </Modal.Footer>
+          </Modal.Dialog>
+        </Modal.Container>
+      </Modal.Backdrop>
 
       {/* 消息区 */}
       <div

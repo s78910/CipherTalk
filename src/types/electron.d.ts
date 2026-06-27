@@ -1340,6 +1340,7 @@ export interface ElectronAPI {
     get: (sessionId: string) => Promise<{ success: boolean; persona?: PersonaRecordInfo | null; error?: string }>
     list: () => Promise<{ success: boolean; personas?: PersonaRecordInfo[]; error?: string }>
     build: (payload: { sessionId: string; displayName?: string }) => Promise<{ success: boolean; persona?: PersonaRecordInfo; error?: string }>
+    updateSpeakingStyle: (payload: { sessionId: string; card: Partial<PersonaCardInfo> }) => Promise<{ success: boolean; persona?: PersonaRecordInfo; error?: string }>
     cloneVoice: (payload: { sessionId: string; displayName?: string }) => Promise<{ success: boolean; persona?: PersonaRecordInfo; voice?: PersonaTtsVoiceBindingInfo; warning?: string; error?: string }>
     exportVoiceSample: (payload: { sessionId: string; displayName?: string; outputPath: string }) => Promise<{ success: boolean; outputPath?: string; sampleCount?: number; sampleSeconds?: number; audioBytes?: number; error?: string }>
     delete: (sessionId: string) => Promise<{ success: boolean; error?: string }>

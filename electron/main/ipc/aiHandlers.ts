@@ -5,7 +5,7 @@ import type { UIMessage } from 'ai'
 import type { MainProcessContext } from '../context'
 import type { AgentProviderConfig, AgentProviderConfigOverride, AgentScope, AgentToolProfile, AgentUploadedMediaContext } from '../../services/agent/types'
 import type { CodeWorkspaceRef } from '../../services/agent/codeWorkspaceTypes'
-import type { PersonaNotes, PersonaRecord, PersonaTtsVoiceBinding } from '../../services/agent/persona/personaTypes'
+import type { PersonaCard, PersonaNotes, PersonaRecord, PersonaTtsVoiceBinding } from '../../services/agent/persona/personaTypes'
 
 /** 进行中的 agent 运行：runId → AbortController，用于取消。 */
 const agentAborters = new Map<string, AbortController>()
@@ -91,6 +91,41 @@ function sanitizePersonaForRenderer(persona: PersonaRecord | null | undefined): 
   return {
     ...persona,
     ttsVoice: sanitizePersonaVoiceForRenderer(persona.ttsVoice),
+  }
+}
+
+function sanitizePersonaStyleText(value: unknown, maxLength: number): string {
+  return String(value ?? '').replace(/\r\n/g, '\n').trim().slice(0, maxLength)
+}
+
+function sanitizePersonaStyleList(value: unknown, maxItems = 20, maxItemLength = 80): string[] {
+  if (!Array.isArray(value)) return []
+  const seen = new Set<string>()
+  const items: string[] = []
+  for (const item of value) {
+    const text = sanitizePersonaStyleText(item, maxItemLength)
+    if (!text || seen.has(text)) continue
+    seen.add(text)
+    items.push(text)
+    if (items.length >= maxItems) break
+  }
+  return items
+}
+
+function sanitizePersonaSpeakingStylePatch(card: Partial<PersonaCard> | undefined, current: PersonaCard): PersonaCard {
+  const patch = card || {}
+  return {
+    tone: 'tone' in patch ? sanitizePersonaStyleText(patch.tone, 1200) : current.tone,
+    personalityTraits: 'personalityTraits' in patch
+      ? sanitizePersonaStyleList(patch.personalityTraits)
+      : current.personalityTraits,
+    catchphrases: 'catchphrases' in patch
+      ? sanitizePersonaStyleList(patch.catchphrases)
+      : current.catchphrases,
+    punctuationStyle: 'punctuationStyle' in patch ? sanitizePersonaStyleText(patch.punctuationStyle, 600) : current.punctuationStyle,
+    addressing: 'addressing' in patch ? sanitizePersonaStyleText(patch.addressing, 200) : current.addressing,
+    topics: 'topics' in patch ? sanitizePersonaStyleList(patch.topics) : current.topics,
+    ttsInstructions: 'ttsInstructions' in patch ? sanitizePersonaStyleText(patch.ttsInstructions, 1000) : current.ttsInstructions,
   }
 }
 
@@ -1209,6 +1244,25 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
     try {
       const { personaStore } = await import('../../services/agent/persona/personaStore')
       return { success: true, personas: personaStore.list().map((persona) => sanitizePersonaForRenderer(persona)) }
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : String(e) }
+    }
+  })
+
+  ipcMain.handle('persona:updateSpeakingStyle', async (_event, payload: { sessionId: string; card?: Partial<PersonaCard> }) => {
+    try {
+      const sessionId = String(payload?.sessionId || '').trim()
+      if (!sessionId) return { success: false, error: '缺少 sessionId' }
+
+      const { personaStore } = await import('../../services/agent/persona/personaStore')
+      const current = personaStore.get(sessionId)
+      if (!current) return { success: false, error: '尚未克隆该好友' }
+
+      const updated = personaStore.patch(sessionId, {
+        card: sanitizePersonaSpeakingStylePatch(payload?.card, current.card),
+      })
+      if (!updated) return { success: false, error: '保存说话方式失败' }
+      return { success: true, persona: sanitizePersonaForRenderer(updated) }
     } catch (e) {
       return { success: false, error: e instanceof Error ? e.message : String(e) }
     }
