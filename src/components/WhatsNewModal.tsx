@@ -4,7 +4,6 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSPr
 import * as configService from '../services/config'
 
 interface WhatsNewModalProps {
-  deferCloseUntilAudioEnds?: boolean
   onClose: () => void
   version: string
 }
@@ -256,7 +255,7 @@ const VISION_LINE_STARTS = VISION_LINES.reduce<number[]>((starts, parts, index) 
   return starts
 }, [])
 
-function WhatsNewModal({ deferCloseUntilAudioEnds = false, onClose }: WhatsNewModalProps) {
+function WhatsNewModal({ onClose }: WhatsNewModalProps) {
   const visionAudioRef = useRef<HTMLAudioElement | null>(null)
   const progressFillRef = useRef<HTMLDivElement | null>(null)
   const audioProgressFrameRef = useRef<number | null>(null)
@@ -265,7 +264,8 @@ function WhatsNewModal({ deferCloseUntilAudioEnds = false, onClose }: WhatsNewMo
   const lastStateProgressRef = useRef(-1)
   const closeTimeoutRef = useRef<number | null>(null)
   const [isVisionOpen, setIsVisionOpen] = useState(true)
-  const [isCloseVisible, setIsCloseVisible] = useState(!deferCloseUntilAudioEnds)
+  // 关闭按钮始终显示：不再因「首次看更新」把 X 藏到音频播完（用户反馈那样体验很差）
+  const [isCloseVisible, setIsCloseVisible] = useState(true)
   const [audioProgress, setAudioProgress] = useState(0)
   const [audioCurrentTime, setAudioCurrentTime] = useState(0)
   const [subtitleCues, setSubtitleCues] = useState<SubtitleCue[]>(FALLBACK_SUBTITLE_CUES)

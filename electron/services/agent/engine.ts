@@ -11,7 +11,7 @@ import { isImageGenAvailable } from '../ai/imageGenService'
 import { applyAnthropicCacheControl, buildPromptCacheKey, buildProviderOptions } from './cache'
 import { buildCodeOnlyTools, buildPlanModeTools, buildTools } from './tools'
 import { afterTurnMemory, buildMemoryContext, preloadRelevantMemories } from './tools/memory'
-import { compactMessages } from './compaction'
+import { aiCompactStep, createCompactionState } from './aiCompaction'
 import { runFinalReview, summarizeToolOutput, type ToolOutputSummary } from './finalReview'
 import { loopGuardCondition, withToolTimeouts } from './guards'
 import { reportAgentProgress, withAgentProgress } from './progress'
@@ -246,6 +246,8 @@ export async function runAgent(
     perf('构建工具集', `${Object.keys(baseTools).length} 个`)
     const prepared = buildAgentInstructions(input, memoryContext, relevantMemoryContext, baseTools, webSearchOn, imageGenOn)
     perf('组装系统提示')
+    // 跨步保持的压缩状态：超过模型窗口 90% 时把早期历史交 LLM 摘要折叠，见 aiCompaction.ts
+    const compactionState = createCompactionState()
     const agent = new ToolLoopAgent({
       model: createLanguageModel(input.providerConfig),
       instructions: prepared.instructions,
@@ -254,9 +256,15 @@ export async function runAgent(
       // 步数上限 + 死循环检测（连续 N 步相同工具调用即停），见 guards.ts
       stopWhen: [stepCountIs(MAX_STEPS), loopGuardCondition()],
       providerOptions: buildProviderOptions(input, prepared.promptCacheKey),
-      // 每步压缩上下文（裁旧工具结果/推理痕迹，见 compaction.ts）+ query_sql 执行层门控状态
-      prepareStep: ({ messages, steps }) => ({
-        messages: compactMessages(messages),
+      // 每步先做 >90% AI 压缩（折叠早期历史为摘要并发持久标记），再叠加确定性裁剪 + query_sql 门控状态
+      prepareStep: async ({ messages, steps }) => ({
+        messages: await aiCompactStep({
+          messages,
+          state: compactionState,
+          providerConfig: input.providerConfig,
+          emit: onChunk,
+          signal,
+        }),
         experimental_context: buildToolRuntimeContext(steps),
       }),
     })

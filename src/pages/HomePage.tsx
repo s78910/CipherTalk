@@ -18,7 +18,6 @@ function HomePage() {
   const homeBackground = useThemeStore(s => s.homeBackground)
 
   const [showWhatsNew, setShowWhatsNew] = useState(false)
-  const [deferVisionClose, setDeferVisionClose] = useState(false)
   const [currentVersion, setCurrentVersion] = useState('')
   const [currentAnnouncementId, setCurrentAnnouncementId] = useState('')
   const [currentAnnouncementContentId, setCurrentAnnouncementContentId] = useState('')
@@ -108,10 +107,6 @@ function HomePage() {
         : normalizedSeenVersion !== version
 
       if (normalizedAnnouncementVersion === version && shouldShowAnnouncement) {
-        const hasSeenSameAnnouncementContent = normalizedAnnouncementContentId
-          ? normalizedSeenContentId === normalizedAnnouncementContentId
-          : false
-        setDeferVisionClose(!hasSeenSameAnnouncementContent)
         setShowWhatsNew(true)
       }
     } catch (e) {
@@ -185,16 +180,12 @@ function HomePage() {
       <button
         className="whats-new-btn"
         aria-label="打开开发者愿景"
-        onClick={() => {
-          setDeferVisionClose(false)
-          setShowWhatsNew(true)
-        }}
+        onClick={() => setShowWhatsNew(true)}
       >
         <Smile size={18} />
       </button>
       {showWhatsNew && (
         <WhatsNewModal
-          deferCloseUntilAudioEnds={deferVisionClose}
           version={currentVersion}
           onClose={handleCloseWhatsNew}
         />

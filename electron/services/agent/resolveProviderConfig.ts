@@ -23,6 +23,9 @@ export function resolveProviderConfig(override?: AgentProviderConfigOverride | n
     if (!apiKey) throw new Error('未配置 AI 服务商的 API Key，请先在设置中配置')
     if (!model) throw new Error('未选择模型，请先在设置中选择模型')
 
+    // 模型上下文窗口（token），供引擎 >90% 自动压缩判断用；自定义/未知模型取不到则留空，引擎兜默认值
+    const contextWindow = def.modelDetails?.find((item) => item.id === model)?.limits?.context
+
     return {
       providerKind: providerConfig?.protocol || def.protocol || 'openai-compatible',
       name,
@@ -31,6 +34,7 @@ export function resolveProviderConfig(override?: AgentProviderConfigOverride | n
       model,
       reasoningEffort: providerConfig?.reasoningEffort,
       proxyUrl: getResolvedProxyUrl() || undefined,
+      contextWindow: typeof contextWindow === 'number' && contextWindow > 0 ? contextWindow : undefined,
     }
   } finally {
     config.close()

@@ -19,6 +19,8 @@ export interface AgentProviderConfig {
   reasoningEffort?: AgentReasoningEffort
   /** 主进程注入的系统代理 URL（子进程无 session 探测不了）；空/无则直连。 */
   proxyUrl?: string
+  /** 模型上下文窗口（token 数，来自 catalog limits.context）；用于 >90% 自动压缩的分母。未知则引擎用默认值。 */
+  contextWindow?: number
 }
 
 export type AgentReasoningEffort = 'auto' | 'minimal' | 'low' | 'medium' | 'high'

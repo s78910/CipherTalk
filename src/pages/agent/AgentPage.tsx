@@ -886,6 +886,47 @@ function PlanCard({ text, streaming }: { text: string; streaming: boolean }) {
   )
 }
 
+// 上下文自动压缩标记（data-compaction part）：占满超过模型窗口 90% 时，早期历史被 AI 摘要折叠。
+// 作为历史性记录持久落在消息里——点开看摘要，全程都在。
+type CompactionPartData = {
+  summary?: string
+  foldedMessages?: number
+  approxTokensBefore?: number
+  approxTokensAfter?: number
+  contextWindow?: number
+}
+
+function CompactionMarker({ data }: { data: CompactionPartData }) {
+  const [open, setOpen] = useState(false)
+  const { approxTokensBefore: before, approxTokensAfter: after, contextWindow } = data
+  const triggeredPct = before && contextWindow ? Math.round((before / contextWindow) * 100) : null
+  const savedPct = before && after && before > after ? Math.round((1 - after / before) * 100) : null
+  return (
+    <div className="my-3">
+      <button
+        className="flex w-full items-center gap-2 text-muted-foreground text-xs"
+        onClick={() => setOpen((value) => !value)}
+        type="button"
+      >
+        <span className="h-px flex-1 bg-border" />
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-2.5 py-1">
+          <FileText className="size-3.5 shrink-0" />
+          上下文已自动压缩
+          {triggeredPct != null && <span className="text-muted-foreground/80">· 触发于 {triggeredPct}%</span>}
+          {savedPct != null && savedPct > 0 && <span className="text-muted-foreground/80">· 省 {savedPct}%</span>}
+          <ChevronDown className={`size-3.5 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
+        </span>
+        <span className="h-px flex-1 bg-border" />
+      </button>
+      {open && data.summary && (
+        <div className="mt-2 whitespace-pre-wrap wrap-break-word rounded-(--agent-radius,12px) border border-border bg-surface/70 px-3 py-2 text-muted-foreground text-xs leading-6">
+          {data.summary}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // 进行中默认展开（让用户看到 AI 正在干啥），结束后自动收起；用户手动点过则尊重用户的选择。
 function MessageChainOfThought({ active, children }: { active: boolean; children: ReactNode }) {
   const [open, setOpen] = useState(active)
@@ -1170,15 +1211,6 @@ function subAgentProgressIcon(progress: AgentProgressEvent) {
   return Wrench
 }
 
-function agentProgressIcon(progress: AgentProgressEvent) {
-  const title = progress.title || ''
-  if (progress.stage === 'error') return Info
-  if (title.includes('记忆')) return Brain
-  if (title.includes('工具')) return Wrench
-  if (title.includes('模型')) return Sparkles
-  return Sparkles
-}
-
 // 等待模型首个输出的空窗期（可能 2~12s）轮播的安抚文案：让"死等"看起来像"它在忙"
 const MODEL_WAITING_PHRASES = [
   '大模型正在酝酿措辞…',
@@ -1189,7 +1221,8 @@ const MODEL_WAITING_PHRASES = [
   '快了快了，正在组织语言…',
 ]
 
-function WaitingPhraseStep() {
+// 输出前的等待指示：只显示轮播的动态文案，不套「执行过程」折叠框，也不显示「大模型准备中」这类静态步骤
+function ModelWaitingLine() {
   const [index, setIndex] = useState(() => Math.floor(Math.random() * MODEL_WAITING_PHRASES.length))
   useEffect(() => {
     const timer = window.setInterval(
@@ -1199,39 +1232,10 @@ function WaitingPhraseStep() {
     return () => window.clearInterval(timer)
   }, [])
   return (
-    <ChainOfThoughtStep
-      icon={Sparkles}
-      label={renderChainLabel(MODEL_WAITING_PHRASES[index], true)}
-      status="active"
-    />
-  )
-}
-
-function AgentProgressChain({ active, waiting = false, events }: { active: boolean; waiting?: boolean; events: AgentProgressEvent[] }) {
-  if (events.length === 0) return null
-  const latestKey = subAgentProgressKey(events[events.length - 1])
-
-  return (
-    <MessageChainOfThought active={active}>
-      {events.map((progress) => {
-        const key = subAgentProgressKey(progress)
-        const stepActive = active
-          && !waiting
-          && key === latestKey
-          && progress.stage !== 'run_finished'
-          && progress.stage !== 'error'
-        return (
-          <ChainOfThoughtStep
-            description={progress.detail}
-            icon={agentProgressIcon(progress)}
-            key={key}
-            label={renderChainLabel(formatSubAgentProgressTitle(progress), stepActive)}
-            status={stepActive ? 'active' : progress.stage === 'error' ? 'pending' : 'complete'}
-          />
-        )
-      })}
-      {waiting && <WaitingPhraseStep />}
-    </MessageChainOfThought>
+    <div className="flex items-center gap-2 text-muted-foreground text-sm">
+      <Loader />
+      <Shimmer as="span" duration={1.25}>{MODEL_WAITING_PHRASES[index]}</Shimmer>
+    </div>
   )
 }
 
@@ -3814,8 +3818,6 @@ export default function AgentPage() {
     }
     return { input, output, total: input + output, hasAny }
   }, [messages])
-  const showAgentProgressChain = agentProgress.length > 0
-    && ((status !== 'streaming' && (status === 'submitted' || agentRunPending)) || waitingFirstModelOutput)
   const [conversationTitle, setConversationTitle] = useState('新对话')
   const [titleLoading, setTitleLoading] = useState(false)
   const [titleEditing, setTitleEditing] = useState(false)
@@ -5207,6 +5209,15 @@ export default function AgentPage() {
                             </MessageAttachments>
                           )
                         }
+                        if (part.type === 'data-compaction') {
+                          const partId = (part as { id?: string }).id
+                          return (
+                            <CompactionMarker
+                              data={((part as { data?: CompactionPartData }).data) || {}}
+                              key={`compaction-${partId || index}`}
+                            />
+                          )
+                        }
                         return null
                       })}
                       {outputActivitySteps.length > 0 && (
@@ -5279,14 +5290,10 @@ export default function AgentPage() {
               )
             })
           )}
-          {showAgentProgressChain && (
+          {waitingFirstModelOutput && (
             <Message from="assistant">
               <MessageContent>
-                <AgentProgressChain
-                  active={status === 'submitted' || agentRunPending || waitingFirstModelOutput}
-                  events={agentProgress}
-                  waiting={waitingFirstModelOutput}
-                />
+                <ModelWaitingLine />
               </MessageContent>
             </Message>
           )}
@@ -5302,7 +5309,6 @@ export default function AgentPage() {
             </div>
           )}
           {busy && subAgentProgress.length > 0 && !lastAssistantMessageHasDelegateTool && <SubAgentProgressPanel events={subAgentProgress} />}
-          {status === 'submitted' && agentProgress.length === 0 && <Loader />}
         </ConversationContent>
         <ConversationScrollButton className="bottom-36" />
       </Conversation>
