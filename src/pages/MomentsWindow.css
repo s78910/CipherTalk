@@ -436,7 +436,7 @@
   margin: 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 0;
   padding-bottom: 40px;
 }
 .posts-list .load-more-sentinel {
@@ -463,13 +463,16 @@
 }
 
 .post-item {
-  background: var(--bg-secondary);
-  border-radius: 14px;
-  padding: 22px;
+  background: transparent;
+  padding: 20px 8px;
   margin-bottom: 0;
-  border: 1px solid var(--border-color);
-  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.04);
+  border: none;
+  border-bottom: 1px solid var(--border-color);
+  box-shadow: none;
   overflow: visible;
+}
+.post-item:last-child {
+  border-bottom: none;
 }
 
 .post-header {
@@ -480,7 +483,8 @@
 .post-header .post-avatar {
   width: 44px;
   height: 44px;
-  border-radius: 6px;
+  border-radius: 12px;
+  corner-shape: superellipse(1); /* 连续曲率圆角（Chromium 139+），不支持则退回普通圆弧 */
   overflow: hidden;
   background: var(--bg-tertiary);
   flex-shrink: 0;
@@ -600,7 +604,8 @@
 .post-media-grid .media-item {
   position: relative;
   cursor: pointer;
-  border-radius: 20px;
+  border-radius: 40px;
+  corner-shape: superellipse(2.5); /* 连续曲率圆角（Chromium 139+），img/video 靠 overflow 裁剪跟随 */
   overflow: hidden;
   background: transparent;
   isolation: isolate;
@@ -618,6 +623,7 @@
   outline: none;
   box-shadow: none;
   border-radius: inherit;
+  corner-shape: superellipse(2.5); /* 图片自身也要，否则被裁成普通圆弧盖住容器的 squircle */
   transition: transform 0.18s ease;
   transform-origin: center;
   will-change: transform;
@@ -917,7 +923,8 @@
 
 .post-finder-card {
   background: var(--bg-tertiary);
-  border-radius: 20px;
+  border-radius: 40px;
+  corner-shape: superellipse(2.5); /* 连续曲率圆角；封面 img 无自身圆角，靠卡片 overflow 裁剪跟随 */
   overflow: hidden;
   margin-bottom: 12px;
   max-width: 280px;
