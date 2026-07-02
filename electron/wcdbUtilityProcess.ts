@@ -69,6 +69,9 @@ async function handleMessage(msg: any) {
       case 'execQueryWithParams':
         result = await core.execQueryWithParams(payload.kind, payload.path, payload.sql, payload.params)
         break
+      case 'readMessageChunk':
+        result = await core.readMessageChunk(payload.kind, payload.path, payload.tableName, payload.opts)
+        break
       case 'getSnsTimeline':
         result = await core.getSnsTimeline(
           payload.limit,

@@ -1,6 +1,14 @@
 import { basename, delimiter, dirname, join } from 'path'
 import { existsSync, readdirSync, statSync } from 'fs'
 import * as https from 'https'
+import { decodeMessageContent, getRowField, coerceRowNumber } from './chat/rowDecoders'
+
+// 消息表 local_type 列在不同微信版本下的可能列名
+const MSG_TYPE_COLUMNS = [
+  'local_type', 'localType', 'type', 'Type',
+  'msg_type', 'msgType', 'MsgType',
+  'message_type', 'messageType', 'WCDB_CT_local_type'
+]
 
 /**
  * WcdbCore —— 直连微信加密数据库的底层封装。
@@ -32,6 +40,7 @@ export class WcdbCore {
 
   // 预留的 C 符号（native 未实现则置 null，特性降级）
   private wcdbExecQueryWithParams: any = null
+  private wcdbExportMessageChunk: any = null
   private wcdbGetMessages: any = null
   private wcdbStartMonitorPipe: any = null
   private wcdbStopMonitorPipe: any = null
@@ -123,6 +132,7 @@ export class WcdbCore {
         try { return this.lib.func(decl) } catch { return null }
       }
       this.wcdbExecQueryWithParams = tryBind('int32 wcdb_exec_query_with_params(int64 handle, const char* kind, const char* path, const char* sql, const char* argsJson, _Out_ void** outJson)')
+      this.wcdbExportMessageChunk = tryBind('int32 wcdb_export_message_chunk(int64 handle, const char* kind, const char* path, const char* tableName, int64 afterRid, int32 maxRows, int32 startTime, int32 endTime, const char* extraColsJson, _Out_ void** outJson)')
       this.wcdbGetMessages = tryBind('int32 wcdb_get_messages(int64 handle, const char* username, int32 limit, int32 offset, _Out_ void** outJson)')
       this.wcdbStartMonitorPipe = tryBind('int32 wcdb_start_monitor_pipe()')
       this.wcdbStopMonitorPipe = tryBind('int32 wcdb_stop_monitor_pipe()')
@@ -526,6 +536,122 @@ export class WcdbCore {
       return { type: 'bytes', value: Buffer.from(value).toString('base64') }
     }
     return { type: 'string', value: String(value) }
+  }
+
+  /**
+   * 导出专用批量读取：keyset 分批查询、列裁剪、时间下推与内容解码全部在本进程内完成，
+   * 每次调用最多返回 maxRows 条紧凑行（content/localType 已解码），
+   * 避免把 SELECT m.* 的原始大对象（含 hex/base64 blob）逐批经 IPC 搬回主进程。
+   */
+  async readMessageChunk(
+    kind: string,
+    path: string,
+    tableName: string,
+    opts: { afterRid: number; maxRows?: number; startTime?: number; endTime?: number; extraCols?: string[] }
+  ): Promise<{ success: boolean; rows?: any[]; lastRid?: number; done?: boolean; error?: string }> {
+    if (!/^[A-Za-z0-9_]+$/.test(tableName)) {
+      return { success: false, error: `非法表名: ${tableName}` }
+    }
+
+    // 优先走原生 wcdb_export_message_chunk：列裁剪/时间过滤/zstd 解码全在 DLL 内完成，
+    // content 直接以解码文本返回，省掉 blob→hex→JSON→parse→fzstd 整条搬运链。
+    // 原生失败或未绑定（Mac/旧 DLL）时回退下方 JS 实现。
+    if (this.wcdbExportMessageChunk && this.initialized && this.handle !== null) {
+      try {
+        const outJson = [null]
+        const rc = this.wcdbExportMessageChunk(
+          this.handle, kind, path || '', tableName,
+          typeof opts.afterRid === 'number' ? opts.afterRid : -1,
+          Math.max(1, opts.maxRows || 20000),
+          typeof opts.startTime === 'number' ? Math.floor(opts.startTime) : 0,
+          typeof opts.endTime === 'number' ? Math.floor(opts.endTime) : 0,
+          JSON.stringify((opts.extraCols || []).filter(c => /^[A-Za-z0-9_]+$/.test(c))),
+          outJson
+        )
+        if (rc === 0 && outJson[0]) {
+          const jsonStr = this.koffi.decode(outJson[0], 'char', -1)
+          this.wcdbFreeString(outJson[0])
+          const parsed = JSON.parse(jsonStr)
+          return { success: true, rows: parsed.rows || [], lastRid: parsed.lastRid, done: !!parsed.done }
+        }
+      } catch { /* 回退 JS 实现 */ }
+    }
+
+    const name2id = await this.execQuery(kind, path, "SELECT name FROM sqlite_master WHERE type='table' AND name='Name2Id'")
+    const hasName2Id = !!(name2id.success && name2id.rows && name2id.rows.length > 0)
+
+    // 附加透传列（如 packed_info_data），仅接受合法标识符
+    const extraCols = (opts.extraCols || []).filter(c => /^[A-Za-z0-9_]+$/.test(c))
+    let pickedExtras = extraCols
+
+    // 列裁剪：只取导出需要的列；PRAGMA 失败时回退 m.*（仍保留就地解码与时间下推的收益）
+    let selectCols = 'm.*'
+    let hasCreateTime = true
+    const pragma = await this.execQuery(kind, path, `PRAGMA table_info(${tableName})`)
+    if (pragma.success && pragma.rows && pragma.rows.length > 0) {
+      const cols = new Set(pragma.rows.map((r: any) => String(r.name)))
+      hasCreateTime = cols.has('create_time')
+      const wanted = [
+        'local_id', 'localId', 'server_id', 'msg_svr_id', 'msgSvrId', 'MsgSvrID',
+        'create_time', 'is_send', 'message_content', 'compress_content'
+      ]
+      pickedExtras = extraCols.filter(c => cols.has(c))
+      const picked = [...new Set([...wanted.filter(c => cols.has(c)), ...MSG_TYPE_COLUMNS.filter(c => cols.has(c)), ...pickedExtras])]
+      if (picked.length > 0) selectCols = picked.map(c => `m."${c}"`).join(', ')
+    }
+
+    let sql: string
+    if (hasName2Id) {
+      sql = `SELECT ${selectCols}, n.user_name AS sender_username, m.rowid AS __rid FROM ${tableName} m LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid`
+    } else {
+      sql = `SELECT ${selectCols}, m.rowid AS __rid FROM ${tableName} m`
+    }
+    let timeCond = ''
+    if (hasCreateTime && typeof opts.startTime === 'number' && typeof opts.endTime === 'number') {
+      timeCond = ` AND m.create_time >= ${Math.floor(opts.startTime)} AND m.create_time <= ${Math.floor(opts.endTime)}`
+    }
+
+    const maxRows = Math.max(1, opts.maxRows || 20000)
+    const out: any[] = []
+    let lastRid = typeof opts.afterRid === 'number' ? opts.afterRid : -1
+    let done = false
+    while (out.length < maxRows) {
+      const batch = await this.execQuery(kind, path, `${sql} WHERE m.rowid > ${lastRid}${timeCond} ORDER BY m.rowid ASC LIMIT 2000`)
+      if (!batch.success) return { success: false, error: batch.error }
+      const rows = batch.rows || []
+      if (rows.length === 0) { done = true; break }
+      for (const row of rows) {
+        const compact: Record<string, any> = {
+          __rid: row.__rid,
+          local_id: row.local_id ?? row.localId ?? null,
+          server_id: row.server_id ?? row.msg_svr_id ?? row.msgSvrId ?? row.MsgSvrID ?? null,
+          create_time: coerceRowNumber(row.create_time, 0),
+          is_send: row.is_send ?? null,
+          sender_username: row.sender_username ?? null,
+          localType: this.resolveLocalType(row),
+          content: decodeMessageContent(row.message_content, row.compress_content)
+        }
+        for (const c of pickedExtras) compact[c] = row[c]
+        out.push(compact)
+      }
+      lastRid = rows[rows.length - 1].__rid
+      if (rows.length < 2000) { done = true; break }
+    }
+    return { success: true, rows: out, lastRid, done }
+  }
+
+  /** 兼容不同微信版本的 local_type 列名与字符串类型值 */
+  private resolveLocalType(row: Record<string, any>, fallback = 1): number {
+    let zeroCandidate: number | undefined
+    for (const fieldName of MSG_TYPE_COLUMNS) {
+      const value = getRowField(row, [fieldName])
+      if (value === null || value === undefined || value === '') continue
+      const parsed = coerceRowNumber(value, Number.NaN)
+      if (!Number.isFinite(parsed)) continue
+      if (parsed > 0) return parsed
+      if (parsed === 0 && zeroCandidate === undefined) zeroCandidate = parsed
+    }
+    return zeroCandidate ?? fallback
   }
 
   async getSnsTimeline(limit: number, offset: number, usernames?: string[], keyword?: string, startTime?: number, endTime?: number): Promise<{ success: boolean; timeline?: any[]; error?: string }> {

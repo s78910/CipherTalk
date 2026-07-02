@@ -179,6 +179,16 @@ export class WcdbService extends EventEmitter {
     return this.callWithAutoOpen('getSnsTimeline', { limit, offset, usernames, keyword, startTime, endTime })
   }
 
+  /** 导出专用：在 utility 进程内完成分批查询+解码，按块返回紧凑行（见 WcdbCore.readMessageChunk） */
+  async readMessageChunk(
+    kind: string,
+    path: string,
+    tableName: string,
+    opts: { afterRid: number; maxRows?: number; startTime?: number; endTime?: number }
+  ): Promise<{ success: boolean; rows?: any[]; lastRid?: number; done?: boolean; error?: string }> {
+    return this.callWithAutoOpen('readMessageChunk', { kind, path, tableName, opts })
+  }
+
   async getNativeMessages(sessionId: string, limit: number, offset: number): Promise<{ success: boolean; rows?: any[]; error?: string }> {
     return this.callWithAutoOpen('getNativeMessages', { sessionId, limit, offset })
   }

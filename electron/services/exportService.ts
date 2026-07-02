@@ -9,6 +9,7 @@ import { HtmlExportGenerator } from './htmlExportGenerator'
 import { imageDecryptService } from './imageDecryptService'
 import { videoService } from './videoService'
 import { dbAdapter } from './dbAdapter'
+import { wcdbService } from './wcdbService'
 import { findMessageDbPaths, findDbByName, getDbStoragePath } from './dbStoragePaths'
 import { snsService, isVideoUrl, type SnsPost, type SnsShareInfo } from './snsService'
 import { parseQuoteMessage } from './chat/contentParsers'
@@ -261,6 +262,65 @@ class ExportService {
   }
 
   /**
+   * 快速批量读取消息：keyset 分批、列裁剪、时间下推与内容解码全部在 wcdb 子进程内完成，
+   * 主进程每 5000 行收一次已解码的紧凑行（content/localType 已就绪），避免逐批搬运
+   * SELECT m.* 的原始大对象。向调用方按 2000 行切片并让出事件循环，保持窗口响应。
+   */
+  private async *readMessagesFast(
+    dbTablePairs: { tableName: string; dbPath: string }[],
+    dateRange?: { start: number; end: number } | null,
+    extraCols?: string[]
+  ): AsyncGenerator<any[]> {
+    for (const { tableName, dbPath } of dbTablePairs) {
+      try {
+        let afterRid = -1
+        while (true) {
+          // ponytail: 5000/次是队列占用与 IPC 次数的折中——utility 进程按请求串行，
+          // 单次 chunk 太大导出期间会饿死聊天界面的 wcdb 查询
+          const chunk = await wcdbService.readMessageChunk('message', dbPath, tableName, {
+            afterRid,
+            maxRows: 5000,
+            startTime: dateRange?.start,
+            endTime: dateRange?.end,
+            extraCols
+          })
+          if (!chunk.success) throw new Error(chunk.error || '读取消息失败')
+          const rows = chunk.rows || []
+          for (let i = 0; i < rows.length; i += 2000) {
+            yield rows.slice(i, i + 2000)
+            await new Promise(resolve => setImmediate(resolve))
+          }
+          if (chunk.done || typeof chunk.lastRid !== 'number') break
+          afterRid = chunk.lastRid
+        }
+      } catch (e) {
+        console.error(`读取消息表 ${tableName} 失败:`, e)
+      }
+    }
+  }
+
+  /**
+   * 统计会话消息总数（跨分片，含时间过滤），用于媒体导出进度条的分母。
+   * COUNT 走 rowid 主键计数，代价可忽略。
+   */
+  private async countMessages(
+    dbTablePairs: { tableName: string; dbPath: string }[],
+    dateRange?: { start: number; end: number } | null
+  ): Promise<number> {
+    let total = 0
+    const where = dateRange
+      ? ` WHERE create_time >= ${Math.floor(dateRange.start)} AND create_time <= ${Math.floor(dateRange.end)}`
+      : ''
+    for (const { tableName, dbPath } of dbTablePairs) {
+      try {
+        const row = await dbAdapter.get<any>('message', dbPath, `SELECT COUNT(*) AS c FROM ${tableName}${where}`)
+        total += Number(row?.c || 0)
+      } catch { /* 单表计数失败不影响导出，仅进度分母略偏 */ }
+    }
+    return total
+  }
+
+  /**
    * 获取联系人信息
    */
   private async getContactInfo(username: string): Promise<{ displayName: string; avatarUrl?: string }> {
@@ -406,121 +466,6 @@ class ExportService {
       }
     }
     return MESSAGE_TYPE_MAP[localType] ?? 99 // 未知类型 -> OTHER
-  }
-
-  /**
-   * 解码消息内容
-   */
-  private decodeMessageContent(messageContent: any, compressContent: any): string {
-    let content = this.decodeMaybeCompressed(compressContent)
-    if (!content || content.length === 0) {
-      content = this.decodeMaybeCompressed(messageContent)
-    }
-    return content
-  }
-
-  private decodeMaybeCompressed(raw: any): string {
-    if (!raw) return ''
-    if (Buffer.isBuffer(raw)) {
-      return this.decodeBinaryContent(raw)
-    }
-    if (typeof raw === 'string') {
-      if (raw.length === 0) return ''
-      // 只有当字符串足够长（超过16字符）且看起来像 hex 时才尝试解码
-      // 短字符串（如 "123456" 等纯数字）容易被误判为 hex
-      if (raw.length > 16 && this.looksLikeHex(raw)) {
-        const bytes = Buffer.from(raw, 'hex')
-        if (bytes.length > 0) return this.decodeBinaryContent(bytes)
-      }
-      // 只有当字符串足够长（超过16字符）且看起来像 base64 时才尝试解码
-      // 短字符串（如 "test", "home" 等）容易被误判为 base64
-      if (raw.length > 16 && this.looksLikeBase64(raw)) {
-        try {
-          const bytes = Buffer.from(raw, 'base64')
-          return this.decodeBinaryContent(bytes)
-        } catch { }
-      }
-      return raw
-    }
-    return ''
-  }
-
-  private decodeBinaryContent(data: Buffer): string {
-    if (data.length === 0) return ''
-    try {
-      if (data.length >= 4) {
-        const magic = data.readUInt32LE(0)
-        if (magic === 0xFD2FB528) {
-          const fzstd = require('fzstd')
-          const decompressed = fzstd.decompress(data)
-          return Buffer.from(decompressed).toString('utf-8')
-        }
-      }
-      const decoded = data.toString('utf-8')
-      const replacementCount = (decoded.match(/\uFFFD/g) || []).length
-      if (replacementCount < decoded.length * 0.2) {
-        return decoded.replace(/\uFFFD/g, '')
-      }
-      return data.toString('latin1')
-    } catch {
-      return ''
-    }
-  }
-
-  private looksLikeHex(s: string): boolean {
-    if (s.length % 2 !== 0) return false
-    return /^[0-9a-fA-F]+$/.test(s)
-  }
-
-  private looksLikeBase64(s: string): boolean {
-    if (s.length % 4 !== 0) return false
-    return /^[A-Za-z0-9+/=]+$/.test(s)
-  }
-
-  private coerceRowNumber(value: any, fallback = 0): number {
-    if (value === null || value === undefined || value === '') return fallback
-    if (typeof value === 'number') return Number.isFinite(value) ? value : fallback
-    if (typeof value === 'bigint') return Number(value)
-    const text = String(value).trim()
-    if (!text) return fallback
-    const parsed = Number(text)
-    return Number.isFinite(parsed) ? parsed : fallback
-  }
-
-  private getRowField(row: Record<string, any>, fieldNames: string[]): any {
-    for (const name of fieldNames) {
-      if (row[name] !== undefined && row[name] !== null) return row[name]
-    }
-    const lowerMap = new Map<string, string>()
-    for (const actual of Object.keys(row || {})) {
-      lowerMap.set(actual.toLowerCase(), actual)
-    }
-    for (const name of fieldNames) {
-      const actual = lowerMap.get(name.toLowerCase())
-      if (actual && row[actual] !== undefined && row[actual] !== null) return row[actual]
-    }
-    return undefined
-  }
-
-  /**
-   * 健壮地解析消息的 local_type：兼容不同微信版本的列名与字符串类型值
-   */
-  private resolveMessageLocalType(row: Record<string, any>, fallback = 1): number {
-    const fieldNames = [
-      'local_type', 'localType', 'type', 'Type',
-      'msg_type', 'msgType', 'MsgType',
-      'message_type', 'messageType', 'WCDB_CT_local_type'
-    ]
-    let zeroCandidate: number | undefined
-    for (const fieldName of fieldNames) {
-      const value = this.getRowField(row, [fieldName])
-      if (value === null || value === undefined || value === '') continue
-      const parsed = this.coerceRowNumber(value, Number.NaN)
-      if (!Number.isFinite(parsed)) continue
-      if (parsed > 0) return parsed
-      if (parsed === 0 && zeroCandidate === undefined) zeroCandidate = parsed
-    }
-    return zeroCandidate ?? fallback
   }
 
   /**
@@ -783,29 +728,8 @@ class ExportService {
       // 群昵称缓存 (platformId -> groupNickname)
       const groupNicknameCache = new Map<string, string>()
 
-      for (const { tableName, dbPath } of dbTablePairs) {
-        try {
-          // 检查是否有 Name2Id 表
-          const hasName2Id = await dbAdapter.get<any>(
-            'message',
-            dbPath,
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='Name2Id'"
-          )
-
-          let sql: string
-          if (hasName2Id) {
-            sql = `SELECT m.*, n.user_name AS sender_username, m.rowid AS __rid
-                   FROM ${tableName} m
-                   LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid`
-          } else {
-            sql = `SELECT m.*, m.rowid AS __rid FROM ${tableName} m`
-          }
-
-          // 流式分批读取（keyset 分页）：按 rowid 游标推进，每批 2000 行；避免一次性吞整表 OOM，也避免 OFFSET 深翻页的 O(n²)
-          let __lastRid = -1
-          while (true) {
-          const rows = await dbAdapter.all<any>('message', dbPath, `${sql} WHERE m.rowid > ${__lastRid} ORDER BY m.rowid ASC LIMIT 2000`)
-          if (rows.length === 0) break
+      // 读取+解码在 wcdb 子进程内完成（列裁剪/时间下推/keyset 分批），主进程只收紧凑行
+      for await (const rows of this.readMessagesFast(dbTablePairs, options.dateRange)) {
           for (const row of rows) {
             const createTime = row.create_time || 0
 
@@ -816,8 +740,8 @@ class ExportService {
               }
             }
 
-            const content = this.decodeMessageContent(row.message_content, row.compress_content)
-            const localType = this.resolveMessageLocalType(row, 1)
+            const content = row.content || ''
+            const localType = row.localType || 1
             const senderUsername = row.sender_username || ''
 
             // 判断是否是自己发送
@@ -885,6 +809,7 @@ class ExportService {
 
             allMessages.push({
               createTime,
+              localId: row.local_id,
               localType,
               content,
               senderUsername: actualSender,
@@ -910,13 +835,6 @@ class ExportService {
               memberSet.set(actualSender, { ...existing, groupNickname })
             }
           }
-          __lastRid = rows[rows.length - 1].__rid
-          if (rows.length < 2000) break
-          await new Promise(resolve => setImmediate(resolve))
-          }
-        } catch (e) {
-          console.error('导出消息失败:', e)
-        }
       }
 
       // 按时间排序
@@ -1549,28 +1467,8 @@ class ExportService {
       let firstMessageTime: number | null = null
       let lastMessageTime: number | null = null
 
-      for (const { tableName, dbPath } of dbTablePairs) {
-        try {
-          const hasName2Id = await dbAdapter.get<any>(
-            'message',
-            dbPath,
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='Name2Id'"
-          )
-
-          let sql: string
-          if (hasName2Id) {
-            sql = `SELECT m.*, n.user_name AS sender_username, m.rowid AS __rid
-                   FROM ${tableName} m
-                   LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid`
-          } else {
-            sql = `SELECT m.*, m.rowid AS __rid FROM ${tableName} m`
-          }
-
-          // 流式分批读取（keyset 分页）：按 rowid 游标推进，每批 2000 行；避免一次性吞整表 OOM，也避免 OFFSET 深翻页的 O(n²)
-          let __lastRid = -1
-          while (true) {
-          const rows = await dbAdapter.all<any>('message', dbPath, `${sql} WHERE m.rowid > ${__lastRid} ORDER BY m.rowid ASC LIMIT 2000`)
-          if (rows.length === 0) break
+      // 读取+解码在 wcdb 子进程内完成（列裁剪/时间下推/keyset 分批），主进程只收紧凑行
+      for await (const rows of this.readMessagesFast(dbTablePairs, options.dateRange)) {
           for (const row of rows) {
             const createTime = row.create_time || 0
 
@@ -1580,8 +1478,8 @@ class ExportService {
               }
             }
 
-            const content = this.decodeMessageContent(row.message_content, row.compress_content)
-            const localType = this.resolveMessageLocalType(row, 1)
+            const content = row.content || ''
+            const localType = row.localType || 1
             const senderUsername = row.sender_username || ''
             const isSend = row.is_send === 1 || senderUsername === cleanedMyWxid
 
@@ -1663,13 +1561,6 @@ class ExportService {
               lastMessageTime = createTime
             }
           }
-          __lastRid = rows[rows.length - 1].__rid
-          if (rows.length < 2000) break
-          await new Promise(resolve => setImmediate(resolve))
-          }
-        } catch (e) {
-          console.error('导出消息失败:', e)
-        }
       }
 
       // 按时间排序
@@ -1773,28 +1664,8 @@ class ExportService {
       // 收集所有消息
       const allMessages: any[] = []
 
-      for (const { tableName, dbPath } of dbTablePairs) {
-        try {
-          const hasName2Id = await dbAdapter.get<any>(
-            'message',
-            dbPath,
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='Name2Id'"
-          )
-
-          let sql: string
-          if (hasName2Id) {
-            sql = `SELECT m.*, n.user_name AS sender_username, m.rowid AS __rid
-                   FROM ${tableName} m
-                   LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid`
-          } else {
-            sql = `SELECT m.*, m.rowid AS __rid FROM ${tableName} m`
-          }
-
-          // 流式分批读取（keyset 分页）：按 rowid 游标推进，每批 2000 行；避免一次性吞整表 OOM，也避免 OFFSET 深翻页的 O(n²)
-          let __lastRid = -1
-          while (true) {
-          const rows = await dbAdapter.all<any>('message', dbPath, `${sql} WHERE m.rowid > ${__lastRid} ORDER BY m.rowid ASC LIMIT 2000`)
-          if (rows.length === 0) break
+      // 读取+解码在 wcdb 子进程内完成（列裁剪/时间下推/keyset 分批），主进程只收紧凑行
+      for await (const rows of this.readMessagesFast(dbTablePairs, options.dateRange)) {
           for (const row of rows) {
             const createTime = row.create_time || 0
 
@@ -1804,8 +1675,8 @@ class ExportService {
               }
             }
 
-            const content = this.decodeMessageContent(row.message_content, row.compress_content)
-            const localType = this.resolveMessageLocalType(row, 1)
+            const content = row.content || ''
+            const localType = row.localType || 1
             const senderUsername = row.sender_username || ''
 
             // 判断是否是自己发送的消息
@@ -1843,6 +1714,7 @@ class ExportService {
 
             allMessages.push({
               createTime,
+              localId: row.local_id,
               talker: actualSender,
               type: localType,
               content,
@@ -1852,13 +1724,6 @@ class ExportService {
               chatRecordList
             })
           }
-          __lastRid = rows[rows.length - 1].__rid
-          if (rows.length < 2000) break
-          await new Promise(resolve => setImmediate(resolve))
-          }
-        } catch (e) {
-          console.error(`读取消息表 ${tableName} 失败:`, e)
-        }
       }
 
       if (allMessages.length === 0) {
@@ -2020,28 +1885,8 @@ class ExportService {
       const allMessages: any[] = []
       const memberSet = new Map<string, any>()
 
-      for (const { tableName, dbPath } of dbTablePairs) {
-        try {
-          const hasName2Id = await dbAdapter.get<any>(
-            'message',
-            dbPath,
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='Name2Id'"
-          )
-
-          let sql: string
-          if (hasName2Id) {
-            sql = `SELECT m.*, n.user_name AS sender_username, m.rowid AS __rid
-                   FROM ${tableName} m
-                   LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid`
-          } else {
-            sql = `SELECT m.*, m.rowid AS __rid FROM ${tableName} m`
-          }
-
-          // 流式分批读取（keyset 分页）：按 rowid 游标推进，每批 2000 行；避免一次性吞整表 OOM，也避免 OFFSET 深翻页的 O(n²)
-          let __lastRid = -1
-          while (true) {
-          const rows = await dbAdapter.all<any>('message', dbPath, `${sql} WHERE m.rowid > ${__lastRid} ORDER BY m.rowid ASC LIMIT 2000`)
-          if (rows.length === 0) break
+      // 读取+解码在 wcdb 子进程内完成（列裁剪/时间下推/keyset 分批），主进程只收紧凑行
+      for await (const rows of this.readMessagesFast(dbTablePairs, options.dateRange)) {
           for (const row of rows) {
             const createTime = row.create_time || 0
 
@@ -2051,8 +1896,8 @@ class ExportService {
               }
             }
 
-            const content = this.decodeMessageContent(row.message_content, row.compress_content)
-            const localType = this.resolveMessageLocalType(row, 1)
+            const content = row.content || ''
+            const localType = row.localType || 1
             const senderUsername = row.sender_username || ''
             const isSend = row.is_send === 1 || senderUsername === cleanedMyWxid
 
@@ -2145,13 +1990,6 @@ class ExportService {
               }
             }
           }
-          __lastRid = rows[rows.length - 1].__rid
-          if (rows.length < 2000) break
-          await new Promise(resolve => setImmediate(resolve))
-          }
-        } catch (e) {
-          console.error(`读取消息表 ${tableName} 失败:`, e)
-        }
       }
 
       if (allMessages.length === 0) {
@@ -2262,28 +2100,8 @@ class ExportService {
       let firstMessageTime: number | null = null
       let lastMessageTime: number | null = null
 
-      for (const { tableName, dbPath } of dbTablePairs) {
-        try {
-          const hasName2Id = await dbAdapter.get<any>(
-            'message',
-            dbPath,
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='Name2Id'"
-          )
-
-          let sql: string
-          if (hasName2Id) {
-            sql = `SELECT m.*, n.user_name AS sender_username, m.rowid AS __rid
-                   FROM ${tableName} m
-                   LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid`
-          } else {
-            sql = `SELECT m.*, m.rowid AS __rid FROM ${tableName} m`
-          }
-
-          // 流式分批读取（keyset 分页）：按 rowid 游标推进，每批 2000 行；避免一次性吞整表 OOM，也避免 OFFSET 深翻页的 O(n²)
-          let __lastRid = -1
-          while (true) {
-          const rows = await dbAdapter.all<any>('message', dbPath, `${sql} WHERE m.rowid > ${__lastRid} ORDER BY m.rowid ASC LIMIT 2000`)
-          if (rows.length === 0) break
+      // 读取+解码在 wcdb 子进程内完成（列裁剪/时间下推/keyset 分批），主进程只收紧凑行
+      for await (const rows of this.readMessagesFast(dbTablePairs, options.dateRange)) {
           for (const row of rows) {
             const createTime = row.create_time || 0
 
@@ -2293,8 +2111,8 @@ class ExportService {
               }
             }
 
-            const content = this.decodeMessageContent(row.message_content, row.compress_content)
-            const localType = this.resolveMessageLocalType(row, 1)
+            const content = row.content || ''
+            const localType = row.localType || 1
             const senderUsername = row.sender_username || ''
             const isSend = row.is_send === 1 || senderUsername === cleanedMyWxid
 
@@ -2354,13 +2172,6 @@ class ExportService {
               lastMessageTime = createTime
             }
           }
-          __lastRid = rows[rows.length - 1].__rid
-          if (rows.length < 2000) break
-          await new Promise(resolve => setImmediate(resolve))
-          }
-        } catch (e) {
-          console.error('导出消息失败:', e)
-        }
       }
 
       // 按时间排序
@@ -2580,9 +2391,10 @@ class ExportService {
         let voicePathMap: Map<number, string> | undefined
         if (hasMedia) {
           try {
-            const mediaResult = await this.exportMediaFiles(sessionId, safeName, sessionOutputDir, options, (detail) => {
+            const mediaResult = await this.exportMediaFiles(sessionId, safeName, sessionOutputDir, options, (fraction, detail) => {
+              // 媒体阶段在本会话内推进 [i, i+1)，让单会话导出时进度条也实时走动
               onProgress?.({
-                current: i,
+                current: i + Math.min(Math.max(fraction, 0), 0.999),
                 total: sessionIds.length,
                 currentSession: sessionInfo.displayName,
                 phase: 'writing',
@@ -2890,7 +2702,7 @@ class ExportService {
     safeName: string,
     outputDir: string,
     options: ExportOptions,
-    onDetail?: (detail: string) => void
+    onProgress?: (fraction: number, detail: string) => void
   ): Promise<{ mediaPathMap: Map<number, string>; voicePathMap: Map<number, string> }> {
     // mediaPathMap：图片/视频/表情用 createTime → 相对路径
     // voicePathMap：语音用 localId → 相对路径（避免同时间戳冲突）
@@ -2918,32 +2730,33 @@ class ExportService {
     let imageCount = 0
     let videoCount = 0
     let emojiCount = 0
-    let emojiProcessed = 0
 
     // 是否需要处理图片/视频/表情
     const needMedia = options.exportImages || options.exportVideos || options.exportEmojis
 
+    // 进度分母：图片/视频/表情按扫描到的消息行推进；启用语音时给语音留后 15% 区间
+    const totalMsgs = await this.countMessages(dbTablePairs, options.dateRange)
+    const mediaWeight = needMedia ? (options.exportVoices ? 0.85 : 1.0) : 0
+    let mediaScanned = 0
+    const reportMedia = (extra: number) => {
+      if (!totalMsgs) return
+      const frac = Math.min(1, (mediaScanned + extra) / totalMsgs) * mediaWeight
+      onProgress?.(frac, `导出媒体 图片${imageCount} · 视频${videoCount} · 表情${emojiCount}`)
+    }
+
     // 图片/视频/表情循环（语音在后面独立处理）
     if (needMedia) {
-      if (options.exportEmojis) onDetail?.(`正在导出表情包...`)
+      onProgress?.(0, '正在导出媒体...')
       // 流式分批读取媒体消息行：每批 2000 行、批内 MEDIA_CONCURRENCY 路并发，
       // 处理完即释放，避免一次性吞整表导致 OOM。图片/视频/表情解密下载都是 I/O 密集，并发收益最大。
       const MEDIA_CONCURRENCY = 6
-      for (const { tableName, dbPath } of dbTablePairs) {
-        let __mediaLastRid = -1
-        while (true) {
-          let pageRows: any[] = []
-          try {
-            pageRows = await dbAdapter.all<any>(
-              'message',
-              dbPath,
-              `SELECT *, rowid AS __rid FROM ${tableName} WHERE rowid > ${__mediaLastRid} ORDER BY rowid ASC LIMIT 2000`
-            )
-          } catch (e) {
-            console.error(`[Export] 读取媒体消息失败:`, e)
-            break
-          }
-          if (pageRows.length === 0) break
+      // 媒体行同样走子进程快速通道；packed_info 系列列透传给 parseImageDatName
+      for await (const pageRows of this.readMessagesFast(dbTablePairs, options.dateRange, [
+        'packed_info_data', 'packed_info', 'packedInfoData', 'packedInfo',
+        'PackedInfoData', 'PackedInfo',
+        'WCDB_CT_packed_info_data', 'WCDB_CT_packed_info',
+        'WCDB_CT_PackedInfoData', 'WCDB_CT_PackedInfo'
+      ])) {
           for (let __mediaStart = 0; __mediaStart < pageRows.length; __mediaStart += MEDIA_CONCURRENCY) {
             const __mediaSlice = pageRows.slice(__mediaStart, __mediaStart + MEDIA_CONCURRENCY)
             await Promise.all(__mediaSlice.map((row: any) => (async () => {
@@ -2958,8 +2771,8 @@ class ExportService {
               }
             }
 
-            const localType = this.resolveMessageLocalType(row, 1)
-            const content = this.decodeMessageContent(row.message_content, row.compress_content)
+            const localType = row.localType || 1
+            const content = row.content || ''
 
             // 导出图片
             if (options.exportImages && localType === 3) {
@@ -3036,8 +2849,6 @@ class ExportService {
 
             // 导出表情包
             if (options.exportEmojis && localType === 47) {
-              emojiProcessed++
-              onDetail?.(`表情导出: ${emojiProcessed}`)
               try {
                 // 从 XML 提取 cdnUrl 和 md5
                 const cdnUrlMatch = /cdnurl\s*=\s*['"]([^'"]+)['"]/i.exec(content)
@@ -3097,11 +2908,10 @@ class ExportService {
           // 跳过单行消息的错误
         }
             })()))
+            reportMedia(__mediaStart + __mediaSlice.length)
             await new Promise(resolve => setImmediate(resolve))
           }
-          __mediaLastRid = pageRows[pageRows.length - 1].__rid
-          if (pageRows.length < 2000) break
-        }
+          mediaScanned += pageRows.length
       }
     } // 结束 needMedia
 
@@ -3113,7 +2923,7 @@ class ExportService {
         fs.mkdirSync(voiceOutDir, { recursive: true })
       }
 
-      onDetail?.('正在导出语音消息...')
+      onProgress?.(mediaWeight, '正在导出语音消息...')
 
       // 1. 收集所有语音消息（createTime + localId + serverId，按 localId 升序以稳定同时间戳顺序）
       interface VoiceMsgRef {
@@ -3122,29 +2932,18 @@ class ExportService {
         serverId: number
       }
       const voiceMessages: VoiceMsgRef[] = []
-      for (const { tableName, dbPath } of dbTablePairs) {
-        try {
-          const rows = await dbAdapter.all<any>(
-            'message',
-            dbPath,
-            `SELECT * FROM ${tableName} ORDER BY create_time ASC`
-          )
-          let __rowTick = 0
-          for (const row of rows) {
-            if ((++__rowTick & 0xff) === 0) await new Promise(resolve => setImmediate(resolve))
-            if (this.resolveMessageLocalType(row, 1) !== 34) continue
-            const createTime = row.create_time || 0
-            if (!createTime) continue
-            if (options.dateRange && (createTime < options.dateRange.start || createTime > options.dateRange.end)) {
-              continue
-            }
-            const localId = Number(row.local_id || row.localId || 0)
-            const serverId = Number(
-              row.server_id || row.serverId || row.msg_svr_id || row.msgSvrId || row.MsgSvrID || 0
-            )
-            voiceMessages.push({ createTime, localId, serverId })
+      for await (const rows of this.readMessagesFast(dbTablePairs, options.dateRange)) {
+        for (const row of rows) {
+          if ((row.localType || 1) !== 34) continue
+          const createTime = row.create_time || 0
+          if (!createTime) continue
+          if (options.dateRange && (createTime < options.dateRange.start || createTime > options.dateRange.end)) {
+            continue
           }
-        } catch { }
+          const localId = Number(row.local_id || 0)
+          const serverId = Number(row.server_id || 0)
+          voiceMessages.push({ createTime, localId, serverId })
+        }
       }
       // 稳定排序：createTime 升序，相同时间内按 localId 升序（与 VoiceInfo.rowid 顺序对齐）
       voiceMessages.sort((a, b) => a.createTime - b.createTime || a.localId - b.localId)
@@ -3335,9 +3134,10 @@ class ExportService {
                 }
               } catch { }
 
-              // 进度日志
+              // 进度：语音占 [mediaWeight, 1] 区间
               if ((idx + 1) % 10 === 0 || idx === total - 1) {
-                onDetail?.(`语音导出: ${idx + 1}/${total}`)
+                const voiceFrac = mediaWeight + (total > 0 ? (idx + 1) / total : 1) * (1 - mediaWeight)
+                onProgress?.(voiceFrac, `语音导出: ${idx + 1}/${total}`)
               }
             }
 
@@ -3353,7 +3153,7 @@ class ExportService {
     if (emojiCount > 0) parts.push(`${emojiCount} 个表情`)
     if (voiceCount > 0) parts.push(`${voiceCount} 条语音`)
     const summary = parts.length > 0 ? `媒体导出完成: ${parts.join(', ')}` : '无媒体文件'
-    onDetail?.(summary)
+    onProgress?.(1, summary)
     console.log(`[Export] ${sessionId} ${summary}`)
     return { mediaPathMap, voicePathMap }
   }
