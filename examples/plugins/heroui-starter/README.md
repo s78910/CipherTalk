@@ -42,5 +42,5 @@ npm run pack          # tsc + vite build → dist/，再打包成 <id>-<version>
 同理：任何前端库都可以打进插件自己的 bundle。要和宿主主题一致，用宿主注入的
 CSS 变量取色即可（`var(--background)` / `var(--accent)` / `var(--foreground)` …）。
 
-不想引 React/HeroUI 的轻量插件，可改用宿主注入的 `.ct-*` 类或 `ciphertalk-plugin-ui`
-（见插件开发指南 §6）。
+不想引 React/HeroUI 的轻量插件，可改用宿主注入的 `.ct-*` 类或 SDK 自带的组件库
+`ciphertalk-plugin-sdk/ui`（见插件开发指南 §6）。

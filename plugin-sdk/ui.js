@@ -1,18 +1,18 @@
 /**
- * CipherTalk 插件 UI 组件库（React，单文件 ESM，仅 peer 依赖 react）。
+ * CipherTalk 插件 UI 组件库（React，单文件 ESM，SDK 的 `/ui` 子路径导出）。
  *
  * 这些组件是宿主注入的 `.ct-*` 样式类的薄封装——**不自带 CSS**，观感与暗色
- * 全部由宿主在握手时注入的组件库提供（见 ciphertalk-plugin-sdk 的 connect()）。
- * 因此组件包体极小，且天然与宿主主题一致、随宿主切换暗色。
+ * 全部由宿主在握手时注入的组件库提供（见本包 connect()）。
+ * 因此组件极小，且天然与宿主主题一致、随宿主切换暗色。
  *
  * 用法：
  *   import { connect } from 'ciphertalk-plugin-sdk'
- *   import { Button, Card, DataTable } from 'ciphertalk-plugin-ui'
+ *   import { Button, Card, LazyList } from 'ciphertalk-plugin-sdk/ui'
  *   const api = await connect()   // connect 会注入 .ct-* 样式
  *   // 之后正常渲染 React 组件即可
  *
- * 不使用 React 的插件：直接写 `<button class="ct-btn ct-btn-primary">` 等语义化
- * HTML + `.ct-*` 类，无需本包。
+ * react 为可选 peer 依赖：不用 React 的插件不 import 本入口即可，
+ * 直接写 `<button class="ct-btn ct-btn-primary">` 等语义化 HTML + `.ct-*` 类。
  */
 import { createElement as h, Fragment, useEffect, useRef, useState } from 'react'
 

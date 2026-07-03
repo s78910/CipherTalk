@@ -124,4 +124,11 @@ let firstOnly = null
 for await (const s of api.data.sessions.iterate({ limit: 2 })) { firstOnly = s.sessionId; break }
 assert.strictEqual(firstOnly, 'a', 'iterate 支持提前 break')
 
+// /ui 子路径：可导入且组件导出齐全（react 为可选 peer，测试时由仓库根 node_modules 提供）
+const ui = await import('../ui.js')
+for (const name of ['Button', 'Card', 'List', 'ListItem', 'LazyList', 'DataTable', 'BarChart', 'Dialog', 'Tabs']) {
+  assert.strictEqual(typeof ui[name], 'function', `ui 应导出 ${name}`)
+}
+assert.ok(typeof ui.UI_VERSION === 'string', 'UI_VERSION 应为字符串')
+
 console.log('✅ SDK 运行时 smoke 全部通过')

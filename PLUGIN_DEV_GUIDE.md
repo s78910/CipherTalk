@@ -481,19 +481,15 @@ await api.window.open(viewId, { width?, height? })       // 需 window:create
 **完整活文档**：示例插件 `examples/plugins/ui-gallery` 把上述每个组件都渲染出来
 （含表格排序、柱状图、弹窗、Tabs 交互），开发模式加载该目录即可对照抄用。
 
-### 6.1 React 组件库（ciphertalk-plugin-ui）
+### 6.1 React 组件库（ciphertalk-plugin-sdk/ui）
 
-用 React 写插件时，不必手拼 `.ct-*` 类——装 `ciphertalk-plugin-ui`，它是这些类的
-**薄封装**（不自带 CSS，观感仍由宿主注入），并额外提供 `LazyList`（滚动懒加载）、
-`DataTable`（排序 + 分页）与 `BarChart`：
-
-```bash
-npm i ciphertalk-plugin-ui
-```
+用 React 写插件时，不必手拼 `.ct-*` 类——SDK 包自带 UI 组件库（`/ui` 子路径导出，
+无需另装包），它是这些类的**薄封装**（不自带 CSS，观感仍由宿主注入），并额外提供
+`LazyList`（滚动懒加载）、`DataTable`（排序 + 分页）与 `BarChart`：
 
 ```jsx
 import { connect } from 'ciphertalk-plugin-sdk'
-import { Button, Card, LazyList, ListItem, DataTable, BarChart } from 'ciphertalk-plugin-ui'
+import { Button, Card, LazyList, ListItem, DataTable, BarChart } from 'ciphertalk-plugin-sdk/ui'
 
 const api = await connect()           // connect 负责注入 .ct-* 样式
 

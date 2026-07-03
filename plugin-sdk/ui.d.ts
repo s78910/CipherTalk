@@ -1,4 +1,4 @@
-/** CipherTalk 插件 UI 组件库类型声明（与 index.js 对应） */
+/** CipherTalk 插件 UI 组件库类型声明（与 ui.js 对应，经 `ciphertalk-plugin-sdk/ui` 导入） */
 import type {
   ButtonHTMLAttributes,
   HTMLAttributes,

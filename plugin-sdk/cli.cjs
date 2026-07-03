@@ -271,7 +271,7 @@ function scaffoldVite(dir, manifest) {
       build: 'tsc && vite build',
       pack: 'npm run build && node ./node_modules/ciphertalk-plugin-sdk/cli.cjs pack .',
     },
-    dependencies: { 'ciphertalk-plugin-sdk': '^1.0.0' },
+    dependencies: { 'ciphertalk-plugin-sdk': '^1.1.0' },
     devDependencies: { typescript: '^5.6.0', vite: '^6.0.0' },
   }, null, 2) + '\n')
 
