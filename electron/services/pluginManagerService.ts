@@ -48,12 +48,22 @@ export interface PluginSidebarMenu { id: string; label: string; icon?: string; v
 export interface PluginSettingsTab { id: string; label: string; view: string }
 export interface PluginChatToolbarButton { id: string; label: string; icon?: string; view: string }
 
+export interface PluginAuthor {
+  /** 开发者名称（必填） */
+  name: string
+  /** 联系邮箱（选填，格式校验） */
+  email?: string
+  /** 主页/仓库地址（选填，须为 http(s)） */
+  url?: string
+}
+
 export interface PluginManifest {
   id: string
   name: string
   version: string
   description?: string
   apiVersion: number
+  author: PluginAuthor
   permissions?: PluginPermission[]
   contributes?: {
     sidebarMenus?: PluginSidebarMenu[]
@@ -94,6 +104,23 @@ function validateManifest(raw: unknown): { manifest?: PluginManifest; error?: st
   if (typeof m.version !== 'string' || !m.version.trim()) return { error: 'version 缺失' }
   if (m.apiVersion !== PLUGIN_API_VERSION) {
     return { error: `apiVersion 不兼容（插件 ${String(m.apiVersion)}，宿主 ${PLUGIN_API_VERSION}）` }
+  }
+
+  // 开发者身份标识：author.name 必填；email / url 选填但校验格式
+  const author = m.author as PluginAuthor | undefined
+  if (!author || typeof author !== 'object' || typeof author.name !== 'string' || !author.name.trim()) {
+    return { error: 'author.name（开发者名称）必填' }
+  }
+  if (author.name.trim().length > 64) return { error: 'author.name 过长（最多 64 字符）' }
+  if (author.email !== undefined) {
+    if (typeof author.email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(author.email)) {
+      return { error: 'author.email 格式不合法' }
+    }
+  }
+  if (author.url !== undefined) {
+    if (typeof author.url !== 'string' || !/^https?:\/\//.test(author.url)) {
+      return { error: 'author.url 须为 http(s) 地址' }
+    }
   }
 
   const permissions = (m.permissions ?? []) as unknown
@@ -200,7 +227,7 @@ export class PluginManagerService extends EventEmitter {
       if (fs.existsSync(manifestPath)) {
         const id = expectedDirName ?? path.basename(dir)
         this.plugins.set(id, {
-          manifest: { id, name: id, version: '0.0.0', apiVersion: PLUGIN_API_VERSION },
+          manifest: { id, name: id, version: '0.0.0', apiVersion: PLUGIN_API_VERSION, author: { name: '未知' } },
           dir, isDev, enabled: false, grantedPermissions: [],
           error: `manifest.json 解析失败：${String(e)}`,
         })
@@ -212,7 +239,7 @@ export class PluginManagerService extends EventEmitter {
     if (!manifest) {
       const id = expectedDirName ?? path.basename(dir)
       this.plugins.set(id, {
-        manifest: { id, name: id, version: '0.0.0', apiVersion: PLUGIN_API_VERSION },
+        manifest: { id, name: id, version: '0.0.0', apiVersion: PLUGIN_API_VERSION, author: { name: '未知' } },
         dir, isDev, enabled: false, grantedPermissions: [],
         error,
       })

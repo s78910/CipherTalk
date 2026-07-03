@@ -408,6 +408,7 @@ export interface PluginInfo {
   name: string
   version: string
   description?: string
+  author: { name: string; email?: string; url?: string }
   permissions: string[]
   contributes: PluginContributes
   isDev: boolean

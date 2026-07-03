@@ -144,6 +144,10 @@ function PluginsTab({ showMessage }: { showMessage: (text: string, success: bool
               {plugin.description && (
                 <p className="mt-1 truncate text-sm text-foreground-500">{plugin.description}</p>
               )}
+              <p className="mt-0.5 text-xs text-foreground-400">
+                开发者：{plugin.author?.name || '未知'}
+                {plugin.author?.email && <span className="ml-2">{plugin.author.email}</span>}
+              </p>
               {plugin.error && (
                 <p className="mt-1 text-sm text-danger">{plugin.error}</p>
               )}
@@ -203,6 +207,9 @@ function PluginsTab({ showMessage }: { showMessage: (text: string, success: bool
           message={
             confirmEnable.permissions.length > 0 ? (
               <span>
+                开发者：{confirmEnable.author?.name || '未知'}
+                {confirmEnable.author?.email ? `（${confirmEnable.author.email}）` : ''}
+                <br />
                 该插件将获得以下权限：
                 <ul className="mt-2 list-inside list-disc text-left">
                   {confirmEnable.permissions.map((p) => (

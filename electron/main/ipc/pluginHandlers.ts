@@ -645,6 +645,7 @@ function serializePlugin(plugin: InstalledPlugin) {
     name: plugin.manifest.name,
     version: plugin.manifest.version,
     description: plugin.manifest.description,
+    author: plugin.manifest.author ?? { name: '未知' },
     permissions: plugin.manifest.permissions ?? [],
     contributes: plugin.manifest.contributes ?? {},
     isDev: plugin.isDev,
@@ -756,7 +757,7 @@ export function registerPluginHandlers(ctx: MainProcessContext): void {
     const picked = await dialog.showOpenDialog({
       title: '选择插件安装包',
       properties: ['openFile'],
-      filters: [{ name: 'CipherTalk 插件', extensions: ['ctplugin', 'zip'] }],
+      filters: [{ name: 'CipherTalk 插件', extensions: ['ctp', 'ctplugin', 'zip'] }],
     })
     const zipPath = picked.filePaths[0]
     if (picked.canceled || !zipPath) return { success: false, canceled: true }

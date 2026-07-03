@@ -1,0 +1,19 @@
+{
+  "name": "ciphertalk-plugin-sdk",
+  "version": "1.0.0",
+  "description": "CipherTalk 插件 SDK 与脚手架 CLI（init / pack）",
+  "main": "ciphertalk-plugin-sdk.js",
+  "types": "ciphertalk-plugin-sdk.d.ts",
+  "bin": {
+    "ciphertalk-plugin": "./cli.js"
+  },
+  "files": [
+    "ciphertalk-plugin-sdk.js",
+    "ciphertalk-plugin-sdk.d.ts",
+    "cli.js"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "CC-BY-NC-SA-4.0"
+}
