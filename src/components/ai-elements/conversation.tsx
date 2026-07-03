@@ -142,7 +142,10 @@ export const ConversationAutoScroll = ({
       return;
     }
     if (!enabled) return;
-    void scrollToBottom({ animation: "instant", ignoreEscapes: true });
+    // ignoreEscapes 会随"没追上目标就重排队"传递下去，流式期间动画一直活着，
+    // 用户中途上滚会被每个滚动事件强制拽回底部，和贴底校正互踢直到爆 React 更新深度。
+    // 锚定是瞬时向下跳、逃逸只认向上滚，本就不需要免打扰保护。
+    void scrollToBottom({ animation: "instant" });
   }, [enabled, scrollToBottom, trigger]);
 
   return null;

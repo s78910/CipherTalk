@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState, type Key } from 'react'
-import { Button as HeroButton, Input, Label, ListBox, Modal, ScrollShadow, Select, Switch, Tabs, TextArea, TextField, toast } from '@heroui/react'
-import { ArrowDownToLine, Bell, Calendar, Check, CircleDashed, CircleQuestion, Display, FaceRobot, FileZipper, Magnifier, Plus, TrashBin, Volume } from '@gravity-ui/icons'
+import type { TimeValue } from 'react-aria-components/TimeField'
+import { Button as HeroButton, Calendar as HeroCalendar, DateField, DatePicker, Label, ListBox, Modal, ScrollShadow, Select, Switch, Tabs, TextArea, TextField, TimeField, toast } from '@heroui/react'
+import { ArrowDownToLine, Bell, Calendar as CalendarIcon, Check, CircleDashed, CircleQuestion, Display, FaceRobot, FileZipper, Magnifier, Plus, TrashBin, Volume } from '@gravity-ui/icons'
+import { CalendarDateTime, Time } from '@internationalized/date'
 import { cn } from '../lib/utils'
 import { PetSprite } from '../features/pets/PetSprite'
 import type { PersonaRecordInfo } from '../types/electron'
@@ -37,6 +39,53 @@ function defaultReminderTime(): string {
   return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
 }
 
+function formatDateInputParts(year: number, month: number, day: number): string {
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+}
+
+function formatTimeInputParts(hour: number, minute: number): string {
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
+}
+
+function parseReminderDateParts(value: string): { year: number; month: number; day: number } | null {
+  const [yearText, monthText, dayText] = value.split('-')
+  const year = Number(yearText)
+  const month = Number(monthText)
+  const day = Number(dayText)
+
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return null
+
+  const date = new Date(year, month - 1, day)
+  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return null
+
+  return { year, month, day }
+}
+
+function parseReminderTimeParts(value: string): { hour: number; minute: number } | null {
+  const [hourText, minuteText] = value.split(':')
+  const hour = Number(hourText)
+  const minute = Number(minuteText)
+
+  if (!Number.isInteger(hour) || !Number.isInteger(minute)) return null
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null
+
+  return { hour, minute }
+}
+
+function toReminderDateTimeValue(dateValue: string, timeValue: string): CalendarDateTime | null {
+  const date = parseReminderDateParts(dateValue)
+  const time = parseReminderTimeParts(timeValue) ?? { hour: 0, minute: 0 }
+
+  if (!date) return null
+
+  return new CalendarDateTime(date.year, date.month, date.day, time.hour, time.minute)
+}
+
+function toReminderTimeValue(value: string): Time | null {
+  const time = parseReminderTimeParts(value)
+  if (!time) return null
+  return new Time(time.hour, time.minute)
+}
 function createReminderId(): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID()
   return `reminder-${Date.now()}-${Math.floor(Math.random() * 1e9)}`
@@ -237,6 +286,21 @@ export default function PetsPage() {
 
   const petGridClass = 'grid grid-cols-3 gap-3 sm:grid-cols-4 md:grid-cols-6 xl:grid-cols-8'
   const currentPersona = personas.find((persona) => persona.sessionId === personaSessionId)
+
+  const handleReminderDateTimeChange = (value: CalendarDateTime | null) => {
+    setReminderDraft((draft) => ({
+      ...draft,
+      date: value ? formatDateInputParts(value.year, value.month, value.day) : '',
+      time: value ? formatTimeInputParts(value.hour, value.minute) : draft.time,
+    }))
+  }
+
+  const handleReminderTimeChange = (value: Time | null) => {
+    setReminderDraft((draft) => ({
+      ...draft,
+      time: value ? formatTimeInputParts(value.hour, value.minute) : '',
+    }))
+  }
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
@@ -495,7 +559,7 @@ export default function PetsPage() {
             <div className="rounded-2xl border border-border bg-surface p-4">
               <div className="mb-4 flex items-start gap-3">
                 <span className="rounded-full bg-primary/10 p-2 text-primary">
-                  <Calendar className="size-4.5" />
+                  <CalendarIcon className="size-4.5" />
                 </span>
                 <div className="min-w-0">
                   <h2 className="font-semibold text-foreground text-sm">纪念日 / 定时提醒</h2>
@@ -526,27 +590,90 @@ export default function PetsPage() {
                   </Select.Popover>
                 </Select>
 
-                <div className="grid grid-cols-2 gap-3">
-                  <TextField
+                {reminderDraft.kind === 'daily' ? (
+                  <TimeField
                     fullWidth
-                    isDisabled={reminderDraft.kind === 'daily'}
-                    onChange={(value) => setReminderDraft((draft) => ({ ...draft, date: value }))}
-                    type="date"
-                    value={reminderDraft.date}
+                    granularity="minute"
+                    hourCycle={24}
+                    shouldForceLeadingZeros
+                    value={toReminderTimeValue(reminderDraft.time)}
+                    onChange={handleReminderTimeChange}
                   >
-                    <Label>{reminderDraft.kind === 'yearly' ? '纪念日日期' : '日期'}</Label>
-                    <Input variant="secondary" />
-                  </TextField>
-                  <TextField
-                    fullWidth
-                    onChange={(value) => setReminderDraft((draft) => ({ ...draft, time: value }))}
-                    type="time"
-                    value={reminderDraft.time}
+                    <Label>提醒时间</Label>
+                    <TimeField.Group fullWidth variant="secondary">
+                      <TimeField.Input>
+                        {(segment) => <TimeField.Segment segment={segment} />}
+                      </TimeField.Input>
+                    </TimeField.Group>
+                  </TimeField>
+                ) : (
+                  <DatePicker
+                    className="w-full"
+                    granularity="minute"
+                    hourCycle={24}
+                    shouldForceLeadingZeros
+                    value={toReminderDateTimeValue(reminderDraft.date, reminderDraft.time)}
+                    onChange={handleReminderDateTimeChange}
                   >
-                    <Label>时间</Label>
-                    <Input variant="secondary" />
-                  </TextField>
-                </div>
+                    {({ state }) => (
+                      <>
+                        <Label>{reminderDraft.kind === 'yearly' ? '纪念日时间' : '提醒时间'}</Label>
+                        <DateField.Group fullWidth variant="secondary">
+                          <DateField.Input>
+                            {(segment) => <DateField.Segment segment={segment} />}
+                          </DateField.Input>
+                          <DateField.Suffix>
+                            <DatePicker.Trigger>
+                              <DatePicker.TriggerIndicator />
+                            </DatePicker.Trigger>
+                          </DateField.Suffix>
+                        </DateField.Group>
+                        <DatePicker.Popover className="flex flex-col gap-3">
+                          <HeroCalendar aria-label="选择提醒日期">
+                            <HeroCalendar.Header>
+                              <HeroCalendar.YearPickerTrigger>
+                                <HeroCalendar.YearPickerTriggerHeading />
+                                <HeroCalendar.YearPickerTriggerIndicator />
+                              </HeroCalendar.YearPickerTrigger>
+                              <HeroCalendar.NavButton slot="previous" />
+                              <HeroCalendar.NavButton slot="next" />
+                            </HeroCalendar.Header>
+                            <HeroCalendar.Grid>
+                              <HeroCalendar.GridHeader>
+                                {(day) => <HeroCalendar.HeaderCell>{day}</HeroCalendar.HeaderCell>}
+                              </HeroCalendar.GridHeader>
+                              <HeroCalendar.GridBody>
+                                {(date) => <HeroCalendar.Cell date={date} />}
+                              </HeroCalendar.GridBody>
+                            </HeroCalendar.Grid>
+                            <HeroCalendar.YearPickerGrid>
+                              <HeroCalendar.YearPickerGridBody>
+                                {({ year }) => <HeroCalendar.YearPickerCell year={year} />}
+                              </HeroCalendar.YearPickerGridBody>
+                            </HeroCalendar.YearPickerGrid>
+                          </HeroCalendar>
+                          <div className="flex items-center justify-between gap-3">
+                            <Label>时间</Label>
+                            <TimeField
+                              aria-label="时间"
+                              granularity="minute"
+                              hourCycle={24}
+                              shouldForceLeadingZeros
+                              value={state.timeValue}
+                              onChange={(value) => state.setTimeValue(value as TimeValue)}
+                            >
+                              <TimeField.Group variant="secondary">
+                                <TimeField.Input>
+                                  {(segment) => <TimeField.Segment segment={segment} />}
+                                </TimeField.Input>
+                              </TimeField.Group>
+                            </TimeField>
+                          </div>
+                        </DatePicker.Popover>
+                      </>
+                    )}
+                  </DatePicker>
+                )}
 
                 <TextField
                   fullWidth
