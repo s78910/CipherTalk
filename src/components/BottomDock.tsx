@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { motion } from 'framer-motion'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { House, Comment, Database, Gear, ArrowDownToLine, Aperture, FaceRobot, LogoMcp, PersonPlus, BookOpen, Ghost } from '@gravity-ui/icons'
+import { House, Comment, Database, Gear, ArrowDownToLine, Aperture, FaceRobot, LogoMcp, PersonGear, BookOpen, Ghost } from '@gravity-ui/icons'
 import type { IconComponent } from '@/types/icon'
 import MacOSDock, { type DockApp } from '@/components/ui/mac-os-dock'
 import { useThemeStore } from '@/stores/themeStore'
@@ -117,7 +117,7 @@ function BottomDock() {
   const allApps: DockApp[] = [
     { id: 'home', name: '首页', icon: makeIcon(House) },
     { id: 'agent', name: 'CT-Agent', icon: makeIcon(FaceRobot) },
-    { id: 'personas', name: 'AI 克隆', icon: makeIcon(PersonPlus) },
+    { id: 'personas', name: 'AI 克隆', icon: makeIcon(PersonGear) },
     { id: 'diary', name: '日记', icon: makeIcon(BookOpen) },
     { id: 'pets', name: 'AI 宠物', icon: makeIcon(Ghost) },
     { id: 'chat', name: '聊天查看', icon: makeIcon(Comment) },

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
-import { User, Smile, MessageSquareQuote, RefreshCw } from 'lucide-react'
+import { ArrowsRotateLeft, FaceSmile, Person, QuoteOpen } from '@gravity-ui/icons'
 import { useAppStore } from '../stores/appStore'
 import { getHomeBackgroundPresetSrc, useThemeStore } from '../stores/themeStore'
 import WhatsNewModal from '../components/WhatsNewModal'
@@ -185,7 +185,7 @@ function HomePage() {
         aria-label="打开开发者愿景"
         onClick={() => setShowWhatsNew(true)}
       >
-        <Smile size={18} />
+        <FaceSmile width={18} height={18} />
       </button>
       {showWhatsNew && (
         <WhatsNewModal
@@ -198,7 +198,7 @@ function HomePage() {
         <div className="random-message-card" aria-busy={randomSnippetLoading}>
           <div className="random-message-card-header">
             <h3 className="random-message-heading">
-              <MessageSquareQuote size={16} aria-hidden />
+              <QuoteOpen width={16} height={16} aria-hidden />
               <span>回忆一刻</span>
             </h3>
           </div>
@@ -223,7 +223,7 @@ function HomePage() {
                 {randomSnippet.avatarUrl ? (
                   <img src={randomSnippet.avatarUrl} alt="" referrerPolicy="no-referrer" />
                 ) : (
-                  <User size={22} />
+                  <Person width={22} height={22} />
                 )}
               </div>
               <div className="random-message-main">
@@ -252,7 +252,7 @@ function HomePage() {
                     data-tooltip="换一条"
                     aria-label="换一条"
                   >
-                    <RefreshCw size={15} className={randomSnippetLoading ? 'spinning' : undefined} aria-hidden />
+                    <ArrowsRotateLeft width={15} height={15} className={randomSnippetLoading ? 'spinning' : undefined} aria-hidden />
                   </button>
                 </div>
               </div>

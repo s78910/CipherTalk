@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
-import { AlertCircle, Loader2, Mic } from 'lucide-react'
+import { CircleDashed, CircleExclamation, Microphone } from '@gravity-ui/icons'
 import type { Message } from '../../types/models'
 import { ImagePreview } from '../../components/ImagePreview'
 import MessageContent from '../../components/MessageContent'
@@ -265,8 +265,8 @@ export function RandomMomentBubble({ sessionId, message }: Props) {
     const width = Math.min(200, Math.max(60, 60 + duration * 10))
 
     const VoiceIcon = () => {
-      if (voiceLoading) return <Loader2 size={18} className="spin" />
-      if (voiceError) return <AlertCircle size={18} className="voice-error-icon" />
+      if (voiceLoading) return <CircleDashed width={18} height={18} className="spin" />
+      if (voiceError) return <CircleExclamation width={18} height={18} className="voice-error-icon" />
       if (voicePlaying) {
         return (
           <div className="voice-waves">
@@ -276,7 +276,7 @@ export function RandomMomentBubble({ sessionId, message }: Props) {
           </div>
         )
       }
-      return <Mic size={18} aria-hidden />
+      return <Microphone width={18} height={18} aria-hidden />
     }
 
     return (

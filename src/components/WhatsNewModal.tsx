@@ -1,5 +1,5 @@
 import { Button, Modal } from '@heroui/react'
-import { Send, Volume2, VolumeX, X } from 'lucide-react'
+import { LogoTelegram, Volume, VolumeXmark, Xmark } from '@gravity-ui/icons'
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import * as configService from '../services/config'
 
@@ -548,7 +548,7 @@ function WhatsNewModal({ onClose }: WhatsNewModalProps) {
                 onPress={handleTelegram}
                 variant="outline"
               >
-                <Send className="size-4" />
+                <LogoTelegram className="size-4" />
                 Telegram 频道
               </Button>
             </div>
@@ -576,9 +576,9 @@ function WhatsNewModal({ onClose }: WhatsNewModalProps) {
             type="button"
           >
             {isAudioOn ? (
-              <Volume2 className="size-4.5" />
+              <Volume className="size-4.5" />
             ) : (
-              <VolumeX className="size-4.5" />
+              <VolumeXmark className="size-4.5" />
             )}
           </button>
           <button
@@ -590,7 +590,7 @@ function WhatsNewModal({ onClose }: WhatsNewModalProps) {
             tabIndex={isCloseVisible ? 0 : -1}
             type="button"
           >
-            <X className="size-4.5" />
+            <Xmark className="size-4.5" />
           </button>
         </div>
         <div className="flex size-full items-center overflow-y-auto px-5 py-0 sm:px-10">
@@ -647,7 +647,7 @@ function WhatsNewModal({ onClose }: WhatsNewModalProps) {
           >
             <Modal.Header>
               <Modal.Icon className="bg-white/12 text-white">
-                <Volume2 className="size-5" />
+                <Volume className="size-5" />
               </Modal.Icon>
               <Modal.Heading>{audioPreferenceLoaded ? '这段内容有声音' : '正在读取声音设置'}</Modal.Heading>
             </Modal.Header>
@@ -665,7 +665,7 @@ function WhatsNewModal({ onClose }: WhatsNewModalProps) {
                   onPress={() => commitAudioPreference(false)}
                   variant="outline"
                 >
-                  <VolumeX className="size-4" />
+                  <VolumeXmark className="size-4" />
                   静音观看
                 </Button>
                 <Button
@@ -673,7 +673,7 @@ function WhatsNewModal({ onClose }: WhatsNewModalProps) {
                   onPress={() => commitAudioPreference(true)}
                   variant="primary"
                 >
-                  <Volume2 className="size-4" />
+                  <Volume className="size-4" />
                   开启声音
                 </Button>
               </Modal.Footer>
