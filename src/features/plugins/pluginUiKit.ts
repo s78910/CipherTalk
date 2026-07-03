@@ -344,4 +344,61 @@ body {
   color: var(--text-tertiary);
   font-size: 13px;
 }
+
+/* ===== 表格（DataTable 组件复用，也可直接 <table class="ct-table">） ===== */
+.ct-table-wrap { border: 1px solid var(--border-color); border-radius: 16px; overflow: auto; }
+.ct-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.ct-table th, .ct-table td { padding: 9px 14px; text-align: left; white-space: nowrap; }
+.ct-table thead th {
+  color: var(--text-secondary);
+  font-weight: 600;
+  background: var(--bg-secondary);
+  position: sticky;
+  top: 0;
+  user-select: none;
+}
+.ct-table tbody tr { border-top: 1px solid var(--border-color); }
+.ct-table tbody tr:hover { background: var(--bg-hover); }
+.ct-th-sortable { cursor: pointer; }
+.ct-th-sortable:hover { color: var(--text-primary); }
+.ct-th-arrow { margin-left: 4px; font-size: 11px; opacity: 0.6; }
+.ct-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+/* ===== 柱状图（BarChart 组件；纯 flex，柱体取主题强调色，响应式无变形） ===== */
+.ct-chart { display: flex; align-items: flex-end; gap: 6px; }
+.ct-chart-col {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+}
+.ct-chart-bar {
+  width: 60%;
+  min-height: 2px;
+  border-radius: 4px 4px 0 0;
+  background: var(--accent);
+  transition: opacity 0.15s ease;
+}
+.ct-chart-col:hover .ct-chart-bar { opacity: 0.8; }
+.ct-chart-value { font-size: 11px; color: var(--text-secondary); margin-bottom: 2px; }
+.ct-chart-label {
+  max-width: 100%;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 `

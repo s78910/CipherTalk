@@ -1,0 +1,35 @@
+{
+  "name": "ciphertalk-plugin-ui",
+  "version": "1.0.0",
+  "description": "CipherTalk（密语）插件 UI 组件库 —— 宿主 .ct-* 样式类的 React 薄封装，观感与宿主一致、随主题切换暗色，含 DataTable / BarChart",
+  "keywords": ["ciphertalk", "密语", "plugin", "ui", "react", "components"],
+  "license": "CC-BY-NC-SA-4.0",
+  "author": "ILoveBingLu",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ILoveBingLu/CipherTalk.git",
+    "directory": "plugin-ui"
+  },
+  "main": "./index.js",
+  "module": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.js",
+      "default": "./index.js"
+    }
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "README.md"
+  ],
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -15,6 +15,7 @@ import type { MainProcessContext, WindowManager } from './main/context'
 import { createWindowManager } from './main/windows/windowManager'
 import { registerModularIpcHandlers } from './main/ipc/register'
 import { registerLocalProtocols, registerPluginProtocol } from './main/protocols'
+import { registerPluginNavigationGuard } from './main/pluginNavigationGuard'
 import { pluginManagerService } from './services/pluginManagerService'
 import {
   checkAndConnectOnStartup,
@@ -256,6 +257,7 @@ if (gotSingleInstanceLock) {
     markStartupMilestone('startup:local-protocols-register-start')
     registerLocalProtocols()
     registerPluginProtocol()
+    registerPluginNavigationGuard()
     markStartupMilestone('startup:local-protocols-register-done')
 
     // 插件目录扫描放到启动空闲期，不占启动关键路径

@@ -277,11 +277,12 @@ function scaffoldVite(dir, manifest) {
 
   fs.writeFileSync(path.join(dir, 'vite.config.ts'), `import { defineConfig } from 'vite'
 
-// 插件视图在 iframe 内以相对路径加载，base 必须为 './'
-export default defineConfig({
-  base: './',
+// dev（serve）：base '/dist/' 让 dev server 挂在与 manifest entry 相同的路径，
+// HMR 才命中 http://localhost:5173/dist/index.html；build：base './' 走 ct-plugin 相对路径。
+export default defineConfig(({ command }) => ({
+  base: command === 'serve' ? '/dist/' : './',
   build: { outDir: 'dist', emptyOutDir: true },
-})
+}))
 `)
   fs.writeFileSync(path.join(dir, 'tsconfig.json'), JSON.stringify({
     compilerOptions: {
@@ -312,6 +313,185 @@ const api = await connect()
 const { sessions } = await api.data.sessions.list({ limit: 20 })
 document.getElementById('status')!.textContent = \`已连接，读取到 \${sessions.length} 个会话\`
 `)
+  fs.writeFileSync(path.join(dir, '.gitignore'), 'node_modules\ndist\n*.ctp\n')
+}
+
+/**
+ * React + HeroUI 模板：插件自带真正的 HeroUI v3，主题随宿主自动切换。
+ * 与 examples/plugins/heroui-starter 结构一致。
+ */
+function scaffoldReact(dir, manifest) {
+  manifest.devServer = 'http://localhost:5173'
+  manifest.contributes.views.index.entry = 'dist/index.html'
+  manifest.contributes.sidebarMenus[0].icon = 'sparkles'
+  fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n')
+
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
+    name: manifest.id,
+    version: manifest.version,
+    private: true,
+    type: 'module',
+    scripts: {
+      dev: 'vite',
+      build: 'tsc && vite build',
+      pack: 'npm run build && node ./node_modules/ciphertalk-plugin-sdk/cli.cjs pack .',
+    },
+    dependencies: {
+      '@heroui/react': '^3.1.0',
+      '@heroui/styles': '^3.1.0',
+      'ciphertalk-plugin-sdk': '^1.0.0',
+      react: '^19.2.0',
+      'react-dom': '^19.2.0',
+    },
+    devDependencies: {
+      '@tailwindcss/vite': '^4.3.0',
+      '@types/react': '^19.2.0',
+      '@types/react-dom': '^19.2.0',
+      '@vitejs/plugin-react': '^4.3.0',
+      tailwindcss: '^4.3.0',
+      typescript: '^5.6.0',
+      vite: '^6.0.0',
+    },
+  }, null, 2) + '\n')
+
+  fs.writeFileSync(path.join(dir, 'vite.config.ts'), `import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
+
+// dev（serve）：base '/dist/' 对齐 manifest 的 dist/index.html 入口，HMR 才命中；
+// build：base './' 走 ct-plugin 相对路径。
+export default defineConfig(({ command }) => ({
+  base: command === 'serve' ? '/dist/' : './',
+  plugins: [tailwindcss(), react()],
+  build: { outDir: 'dist', emptyOutDir: true, target: 'es2022' },
+}))
+`)
+
+  fs.writeFileSync(path.join(dir, 'tsconfig.json'), JSON.stringify({
+    compilerOptions: {
+      target: 'ES2022', module: 'ESNext', moduleResolution: 'bundler', jsx: 'react-jsx',
+      lib: ['ES2022', 'DOM', 'DOM.Iterable'], strict: true, skipLibCheck: true, noEmit: true,
+      types: ['vite/client'],
+    },
+    include: ['src', 'vite.config.ts'],
+  }, null, 2) + '\n')
+
+  fs.writeFileSync(path.join(dir, 'index.html'), `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${manifest.name}</title>
+</head>
+<body>
+  <div id="app"></div>
+  <script type="module" src="/src/main.tsx"></script>
+</body>
+</html>
+`)
+
+  fs.mkdirSync(path.join(dir, 'src'), { recursive: true })
+
+  // 主题桥接：HeroUI 语义色映射到宿主注入的变量，dark variant 绑到 SDK 注入的 .dark
+  fs.writeFileSync(path.join(dir, 'src', 'styles.css'), `@import "tailwindcss";
+@import "@heroui/styles";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--surface);
+  --color-card-foreground: var(--surface-foreground);
+  --color-popover: var(--overlay);
+  --color-popover-foreground: var(--overlay-foreground);
+  --color-primary: var(--accent);
+  --color-primary-foreground: var(--accent-foreground);
+  --color-secondary: var(--surface-secondary);
+  --color-secondary-foreground: var(--surface-secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--danger);
+  --color-destructive-foreground: var(--danger-foreground);
+  --color-border: var(--border);
+  --color-input: var(--field-border);
+  --color-ring: var(--focus);
+}
+
+html, body { margin: 0; }
+body { background: var(--background); color: var(--foreground); }
+`)
+
+  fs.writeFileSync(path.join(dir, 'src', 'main.tsx'), `import React from 'react'
+import { createRoot } from 'react-dom/client'
+import { connect } from 'ciphertalk-plugin-sdk'
+import App from './App'
+import './styles.css'
+
+// connect() 完成宿主握手（注入主题变量 + .dark class）后再挂载 React
+connect().then((api) => {
+  createRoot(document.getElementById('app')!).render(
+    <React.StrictMode>
+      <App api={api} />
+    </React.StrictMode>,
+  )
+})
+`)
+
+  fs.writeFileSync(path.join(dir, 'src', 'App.tsx'), `import { useEffect, useState } from 'react'
+import { Button, Card, Chip, Spinner, toast } from '@heroui/react'
+import type { CipherTalkAPI, SessionSummary } from 'ciphertalk-plugin-sdk'
+
+export default function App({ api }: { api: CipherTalkAPI }) {
+  const [sessions, setSessions] = useState<SessionSummary[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    api.data.sessions
+      .list({ limit: 10 })
+      .then((r) => setSessions(r.sessions))
+      .catch((e) => toast.danger(String(e)))
+      .finally(() => setLoading(false))
+  }, [api])
+
+  return (
+    <div className="flex flex-col gap-4 p-6">
+      <div>
+        <h1 className="text-lg font-semibold text-foreground">${manifest.name}</h1>
+        <p className="text-sm text-muted-foreground">用真正的 HeroUI 组件，主题随宿主自动切换。</p>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Button onPress={() => toast.success('HeroUI toast')}>HeroUI toast</Button>
+        <Button variant="secondary" onPress={() => api.ui.toast('宿主 toast')}>宿主 toast</Button>
+      </div>
+      <Card>
+        <Card.Header>
+          <Card.Title>最近会话</Card.Title>
+        </Card.Header>
+        <Card.Content>
+          {loading ? (
+            <div className="flex justify-center py-6"><Spinner /></div>
+          ) : sessions.length === 0 ? (
+            <p className="text-sm text-muted-foreground">没有会话</p>
+          ) : (
+            <ul className="flex flex-col gap-2">
+              {sessions.map((s) => (
+                <li key={s.sessionId} className="flex items-center justify-between gap-3">
+                  <span className="truncate">{s.displayName || s.sessionId}</span>
+                  <Chip size="sm" variant="soft">type {s.type}</Chip>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card.Content>
+      </Card>
+    </div>
+  )
+}
+`)
+
   fs.writeFileSync(path.join(dir, '.gitignore'), 'node_modules\ndist\n*.ctp\n')
 }
 
@@ -346,7 +526,13 @@ async function init(dirArg, opts = {}) {
     },
   }
 
-  if (opts.vite) {
+  if (opts.react) {
+    scaffoldReact(dir, manifest)
+    ok(`React + HeroUI 插件骨架已创建:${dir}`)
+    console.log(`  安装依赖：cd ${dirArg || '.'} && npm install
+  开发：npm run dev（热更新）+ CipherTalk 开发者模式加载本目录
+  打包：npm run pack → <id>-<version>.ctp`)
+  } else if (opts.vite) {
     scaffoldVite(dir, manifest)
     ok(`Vite 插件骨架已创建:${dir}`)
     console.log(`  安装依赖：cd ${dirArg || '.'} && npm install
@@ -371,17 +557,19 @@ if (require.main === module) {
   const command = args[0]
   const positional = args.slice(1).filter((a) => !a.startsWith('-'))
   const useVite = args.includes('--vite')
+  const useReact = args.includes('--react')
 
   if (command === 'pack') {
     pack(positional[0])
   } else if (command === 'init') {
-    init(positional[0], { vite: useVite }).catch((e) => fail(String(e)))
+    init(positional[0], { vite: useVite, react: useReact }).catch((e) => fail(String(e)))
   } else {
     console.log(`CipherTalk 插件脚手架
 
 用法：
-  node cli.cjs init <目录> [--vite]   创建插件项目骨架（--vite 生成 Vite+TS 模板）
-  node cli.cjs pack [目录]            校验 manifest 并打包为 <id>-<version>.ctp`)
+  node cli.cjs init <目录> [--vite|--react]   创建插件项目骨架
+      （默认纯静态；--vite 生成 Vite+TS 模板；--react 生成 React+HeroUI 模板）
+  node cli.cjs pack [目录]                    校验 manifest 并打包为 <id>-<version>.ctp`)
     process.exit(command ? 1 : 0)
   }
 }

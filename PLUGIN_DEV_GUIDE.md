@@ -57,20 +57,26 @@ CLI 位于 `plugin-sdk/cli.cjs`，零依赖（Node 18+）；发布 npm 后等价
 |---|---|
 | `init <目录>` | 纯静态骨架（询问 id、名称、**开发者名称（必填）**、邮箱），自动复制 SDK |
 | `init <目录> --vite` | Vite + TypeScript 工程（`import from 'ciphertalk-plugin-sdk'`，热更新 + 构建） |
+| `init <目录> --react` | React 19 + HeroUI v3 工程（真 HeroUI 组件，主题随宿主自动切换） |
 | `pack [目录]` | 校验 manifest（与宿主同一套规则）+ 检查视图入口文件存在 → 打包为 `<id>-<version>.ctp` |
 
 `pack` 自动排除 `node_modules`、`.git`、`.map`、已有的 `.ctp`。
 校验不过会直接报错并指出字段，**不会产出坏包**。
 
-### 两种起步方式
+### 三种起步方式
 
-| | 纯静态（默认） | Vite + TS（`--vite`） |
-|---|---|---|
-| 结构 | HTML/JS + 相对路径引 SDK | npm 工程，`src/` + 构建产物 `dist/` |
-| SDK 引入 | CLI 拷贝的 `./ciphertalk-plugin-sdk.js` | `import { connect } from 'ciphertalk-plugin-sdk'` |
-| 开发 | 改完在宿主里刷新 | `npm run dev` 热更新（devServer） |
-| 打包 | `pack` 直接打 | `npm run pack`（先 build 再打 dist） |
-| 适合 | 小工具、快速验证 | 有 TS/依赖/构建需求的复杂插件 |
+| | 纯静态（默认） | Vite + TS（`--vite`） | React + HeroUI（`--react`） |
+|---|---|---|---|
+| 结构 | HTML/JS + 相对路径引 SDK | npm 工程，`src/` + `dist/` | npm 工程，React + Tailwind v4 |
+| UI | `.ct-*` 类 | `.ct-*` 类 | **真正的 HeroUI 组件** |
+| 开发 | 改完在宿主里刷新 | `npm run dev` 热更新 | `npm run dev` 热更新 |
+| 打包 | `pack` 直接打 | `npm run pack` | `npm run pack` |
+| 适合 | 小工具、快速验证 | 有 TS/依赖的插件 | 想要与宿主同款 HeroUI 观感的插件 |
+
+> **为什么是「插件自带 HeroUI」而不是「调用宿主的 HeroUI」**：插件在隔离 iframe
+> 里，拿不到宿主的 React 组件实例（那需要拆掉沙箱）。所以 `--react` 模板让插件
+> 把 HeroUI 打进自己的 bundle；宿主握手时注入了全套主题变量，自带的 HeroUI 观感
+> 与宿主一致、随宿主切换暗色。想用别的组件库同理——自带 bundle + 取宿主 CSS 变量。
 
 ### 安装 SDK
 
@@ -415,10 +421,71 @@ api.onThemeChanged((theme) => {})                         // 主题变化（SDK 
 <hr class="ct-divider" />
 <pre class="ct-code">代码/日志块</pre>
 <div class="ct-scroll">统一滚动条容器</div>
+
+<!-- 表格：可直接手写，DataTable 组件也产出同款结构 -->
+<div class="ct-table-wrap">
+  <table class="ct-table">
+    <thead><tr><th class="ct-th-sortable">列名 <span class="ct-th-arrow">▲</span></th></tr></thead>
+    <tbody><tr><td>单元格</td></tr></tbody>
+  </table>
+</div>
+
+<!-- 柱状图：每根柱子一个 .ct-chart-col，柱高用百分比 -->
+<div class="ct-chart" style="height:180px">
+  <div class="ct-chart-col"><span class="ct-chart-value">120</span>
+    <div class="ct-chart-bar" style="height:60%"></div><span class="ct-chart-label">周一</span></div>
+</div>
 ```
 
 浮动提示用 `api.ui.toast()`（显示在宿主层，全局统一），不要自造。
 组件库样式插在 `<head>` 最前，插件自己的样式可覆盖。
+
+**完整活文档**：示例插件 `examples/plugins/ui-gallery` 把上述每个组件都渲染出来
+（含表格排序、柱状图、弹窗、Tabs 交互），开发模式加载该目录即可对照抄用。
+
+### 6.1 React 组件库（ciphertalk-plugin-ui）
+
+用 React 写插件时，不必手拼 `.ct-*` 类——装 `ciphertalk-plugin-ui`，它是这些类的
+**薄封装**（不自带 CSS，观感仍由宿主注入），并额外提供 `DataTable`（排序 + 分页）
+与 `BarChart`：
+
+```bash
+npm i ciphertalk-plugin-ui
+```
+
+```jsx
+import { connect } from 'ciphertalk-plugin-sdk'
+import { Button, Card, DataTable, BarChart } from 'ciphertalk-plugin-ui'
+
+const api = await connect()           // connect 负责注入 .ct-* 样式
+
+<Card>
+  <Button variant="primary" onClick={() => api.ui.toast('已保存')}>保存</Button>
+  <DataTable pageSize={10} columns={[
+    { key: 'name', title: '联系人', sortable: true },
+    { key: 'count', title: '消息数', sortable: true, align: 'right' },
+  ]} rows={rows} />
+  <BarChart height={200} data={[{ label: '周一', value: 120 }]} />
+</Card>
+```
+
+组件清单与用法见该包 README。
+
+### 6.2 图标
+
+组件库不含图标。推荐 [`lucide-react`](https://lucide.dev)（与宿主同款风格），
+自行安装引入：
+
+```bash
+npm i lucide-react
+```
+
+```jsx
+import { Search } from 'lucide-react'
+<Button variant="primary"><Search size={16} /> 搜索</Button>
+```
+
+非 React 插件可用 lucide 的 [静态 SVG](https://lucide.dev)（复制 SVG 内联即可）。
 
 ## 7. 主题与暗色模式
 
@@ -512,12 +579,15 @@ node plugin-sdk/cli.cjs pack my-plugin
 
 ## 12. 示例
 
-完整可运行示例见 [`examples/plugins/word-stats/`](examples/plugins/word-stats/)：
+官方示例插件见 [`examples/plugins/ui-gallery/`](examples/plugins/ui-gallery/) —— **组件画廊**：
 
-- `index.html` / `main.js` —— 侧边栏入口：会话选择（宿主渲染下拉）→
-  游标分页拉取消息 → 词频统计 → 点击复制 + toast
-- `panel.html` / `panel.js` —— 聊天工具栏抽屉：读取会话上下文 →
-  批量转写语音 → 词频统计（含转写文本）→ 导出 HTML（进度事件）
+- `index.html` / `main.js` —— 把全部 `.ct-*` 组件渲染在一页：按钮 / 表单 /
+  下拉（宿主接管弹层）/ 卡片 / 标签 / 骨架 / 进度 / Tabs / 菜单 / 弹窗，
+  以及表格排序与柱状图，并用 `api.ui.toast()` 演示宿主交互。
 
-把该目录作为本地插件加载，或 `node plugin-sdk/cli.cjs pack examples/plugins/word-stats`
-打包后安装体验完整用户流程。
+零构建，照抄即用。把该目录作为本地插件加载（开发者模式 → 加载本地插件目录），
+或 `node plugin-sdk/cli.cjs pack examples/plugins/ui-gallery` 打包后安装体验。
+
+另有 [`examples/plugins/heroui-starter/`](examples/plugins/heroui-starter/) —— **HeroUI 示例**：
+React 19 + Vite + HeroUI v3，用真正的 HeroUI 组件、主题随宿主自动切换（等价 `init --react`
+产出的工程）。需 `npm install && npm run dev`，见该目录 README。
