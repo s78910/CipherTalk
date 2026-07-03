@@ -22,7 +22,7 @@ CipherTalk 插件是纯前端应用（HTML/JS/CSS），运行在独立沙箱 ifr
 ## 1. 五分钟上手
 
 ```bash
-node plugin-sdk/cli.js init my-plugin   # 交互式创建骨架（开发者名称必填）
+node plugin-sdk/cli.cjs init my-plugin   # 交互式创建骨架（开发者名称必填）
 ```
 
 生成的最小结构：
@@ -51,17 +51,60 @@ document.body.textContent = `共 ${sessions.length} 个会话`
 
 ## 2. 脚手架 CLI
 
-CLI 位于 `plugin-sdk/cli.js`，零依赖（Node 18+）：
+CLI 位于 `plugin-sdk/cli.cjs`，零依赖（Node 18+）；发布 npm 后等价 `npx ciphertalk-plugin`：
 
 | 命令 | 作用 |
 |---|---|
-| `node cli.js init <目录>` | 交互式创建插件骨架（询问 id、名称、**开发者名称（必填）**、邮箱），自动复制 SDK |
-| `node cli.js pack [目录]` | 校验 manifest（与宿主同一套规则）+ 检查视图入口文件存在 → 打包为 `<id>-<version>.ctp` |
+| `init <目录>` | 纯静态骨架（询问 id、名称、**开发者名称（必填）**、邮箱），自动复制 SDK |
+| `init <目录> --vite` | Vite + TypeScript 工程（`import from 'ciphertalk-plugin-sdk'`，热更新 + 构建） |
+| `pack [目录]` | 校验 manifest（与宿主同一套规则）+ 检查视图入口文件存在 → 打包为 `<id>-<version>.ctp` |
 
 `pack` 自动排除 `node_modules`、`.git`、`.map`、已有的 `.ctp`。
 校验不过会直接报错并指出字段，**不会产出坏包**。
 
-发布到 npm 后等价命令为 `npx ciphertalk-plugin init/pack`。
+### 两种起步方式
+
+| | 纯静态（默认） | Vite + TS（`--vite`） |
+|---|---|---|
+| 结构 | HTML/JS + 相对路径引 SDK | npm 工程，`src/` + 构建产物 `dist/` |
+| SDK 引入 | CLI 拷贝的 `./ciphertalk-plugin-sdk.js` | `import { connect } from 'ciphertalk-plugin-sdk'` |
+| 开发 | 改完在宿主里刷新 | `npm run dev` 热更新（devServer） |
+| 打包 | `pack` 直接打 | `npm run pack`（先 build 再打 dist） |
+| 适合 | 小工具、快速验证 | 有 TS/依赖/构建需求的复杂插件 |
+
+### 安装 SDK
+
+```bash
+npm install ciphertalk-plugin-sdk        # Vite 模板已在依赖里声明
+```
+
+纯静态模板由 CLI 自动把 SDK 文件拷进目录，无需 npm。SDK 依赖浏览器 API
+（`window`、`MessageChannel`），只在插件页/打包器环境使用，不用于纯 Node。
+
+### 版本与兼容
+
+- **`manifest.apiVersion` 必须等于宿主支持的主版本**（当前 `1`），不符拒绝加载。
+  SDK 导出 `API_VERSION` 常量可对照。
+- **能力探测降级**：宿主可能比插件新/旧，用 `capabilities()` 判断某方法是否可用：
+
+  ```ts
+  const caps = await api.capabilities()
+  if (caps.includes('sns.getTimeline')) {
+    /* 用朋友圈能力 */
+  } else {
+    /* 老宿主：优雅降级 */
+  }
+  ```
+
+- SDK 遵循语义化版本：补丁/次版本向后兼容；`apiVersion` 提升（破坏性变更）时，
+  旧插件需更新 `manifest.apiVersion` 并按迁移说明适配后重新打包。
+- `connect()` 返回值带 `apiVersion` / `sdkVersion`，便于日志与问题上报。
+
+### 发布 SDK 到 npm（维护者）
+
+```bash
+cd plugin-sdk && npm publish        # files 白名单只发 SDK/CLI/README/LICENSE
+```
 
 ## 3. manifest 完整参考
 
@@ -410,7 +453,7 @@ api.onThemeChanged((theme) => {})                         // 主题变化（SDK 
 ## 9. 打包与分发（.ctp）
 
 ```bash
-node plugin-sdk/cli.js pack my-plugin
+node plugin-sdk/cli.cjs pack my-plugin
 # ✓ 已打包 6 个文件 → my-plugin 同级目录/com.you.my-plugin-1.0.0.ctp
 ```
 
@@ -476,5 +519,5 @@ node plugin-sdk/cli.js pack my-plugin
 - `panel.html` / `panel.js` —— 聊天工具栏抽屉：读取会话上下文 →
   批量转写语音 → 词频统计（含转写文本）→ 导出 HTML（进度事件）
 
-把该目录作为本地插件加载，或 `node plugin-sdk/cli.js pack examples/plugins/word-stats`
+把该目录作为本地插件加载，或 `node plugin-sdk/cli.cjs pack examples/plugins/word-stats`
 打包后安装体验完整用户流程。

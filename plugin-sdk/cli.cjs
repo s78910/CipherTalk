@@ -3,8 +3,8 @@
  * CipherTalk 插件脚手架 CLI（零依赖，Node 18+）。
  *
  * 用法：
- *   node cli.js init <目录>     创建插件项目骨架
- *   node cli.js pack [目录]     校验 manifest 并打包为 <id>-<version>.ctp
+ *   node cli.cjs init <目录>     创建插件项目骨架
+ *   node cli.cjs pack [目录]     校验 manifest 并打包为 <id>-<version>.ctp
  *
  * 发布到 npm 后即为：npx ciphertalk-plugin init/pack
  */
@@ -62,7 +62,17 @@ function validateManifest(m) {
     if (path.isAbsolute(entry) || entry.split('/').includes('..')) {
       return `views.${key}.entry 必须是插件目录内的相对路径`
     }
-    return null // entry 存在性在 pack 时按文件检查
+    // entry 存在性在 pack 时按文件检查
+  }
+  // 贡献点引用的 view 必须已定义
+  const contributes = m.contributes || {}
+  const refs = [
+    ...(contributes.sidebarMenus || []),
+    ...(contributes.settingsTabs || []),
+    ...(contributes.chatToolbarButtons || []),
+  ]
+  for (const ref of refs) {
+    if (ref && ref.view && !views[ref.view]) return `贡献点引用了不存在的视图 "${ref.view}"`
   }
   return null
 }
@@ -208,7 +218,104 @@ function readAllLines() {
   })
 }
 
-async function init(dirArg) {
+function copySdk(dir) {
+  const sdkSrc = path.join(__dirname, 'ciphertalk-plugin-sdk.js')
+  if (fs.existsSync(sdkSrc)) {
+    fs.copyFileSync(sdkSrc, path.join(dir, 'ciphertalk-plugin-sdk.js'))
+    const dtsSrc = path.join(__dirname, 'ciphertalk-plugin-sdk.d.ts')
+    if (fs.existsSync(dtsSrc)) fs.copyFileSync(dtsSrc, path.join(dir, 'ciphertalk-plugin-sdk.d.ts'))
+    return true
+  }
+  return false
+}
+
+/** 纯静态骨架：直接 <script type=module> 引相对路径 SDK，无需构建 */
+function scaffoldVanilla(dir, manifest) {
+  fs.writeFileSync(path.join(dir, 'index.html'), `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>${manifest.name}</title>
+  <style>body { padding: 24px; }</style>
+</head>
+<body>
+  <h2 class="ct-title">${manifest.name}</h2>
+  <p class="ct-hint" id="status">连接中…</p>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>
+`)
+  fs.writeFileSync(path.join(dir, 'main.js'), `import { connect } from './ciphertalk-plugin-sdk.js'
+
+const api = await connect()
+const { sessions } = await api.data.sessions.list({ limit: 20 })
+document.getElementById('status').textContent = \`已连接，读取到 \${sessions.length} 个会话\`
+`)
+  if (!copySdk(dir)) console.warn('! 未找到 SDK 文件，请手动复制 ciphertalk-plugin-sdk.js 到插件目录')
+}
+
+/** Vite + TS 模板：npm 依赖 SDK，dev server 热更新，build 产出 dist/ */
+function scaffoldVite(dir, manifest) {
+  // vite 模式下用 devServer 热更新；打包前需 npm run build 生成 dist
+  manifest.devServer = 'http://localhost:5173'
+  manifest.contributes.views.index.entry = 'dist/index.html'
+  fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n')
+
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
+    name: manifest.id,
+    version: manifest.version,
+    private: true,
+    type: 'module',
+    scripts: {
+      dev: 'vite',
+      build: 'tsc && vite build',
+      pack: 'npm run build && node ./node_modules/ciphertalk-plugin-sdk/cli.cjs pack .',
+    },
+    dependencies: { 'ciphertalk-plugin-sdk': '^1.0.0' },
+    devDependencies: { typescript: '^5.6.0', vite: '^6.0.0' },
+  }, null, 2) + '\n')
+
+  fs.writeFileSync(path.join(dir, 'vite.config.ts'), `import { defineConfig } from 'vite'
+
+// 插件视图在 iframe 内以相对路径加载，base 必须为 './'
+export default defineConfig({
+  base: './',
+  build: { outDir: 'dist', emptyOutDir: true },
+})
+`)
+  fs.writeFileSync(path.join(dir, 'tsconfig.json'), JSON.stringify({
+    compilerOptions: {
+      target: 'ES2022', module: 'ESNext', moduleResolution: 'bundler',
+      strict: true, skipLibCheck: true, noEmit: true, lib: ['ES2022', 'DOM'],
+    },
+    include: ['src'],
+  }, null, 2) + '\n')
+
+  fs.writeFileSync(path.join(dir, 'index.html'), `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>${manifest.name}</title>
+  <style>body { padding: 24px; }</style>
+</head>
+<body>
+  <h2 class="ct-title">${manifest.name}</h2>
+  <p class="ct-hint" id="status">连接中…</p>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
+`)
+  fs.mkdirSync(path.join(dir, 'src'), { recursive: true })
+  fs.writeFileSync(path.join(dir, 'src', 'main.ts'), `import { connect } from 'ciphertalk-plugin-sdk'
+
+const api = await connect()
+const { sessions } = await api.data.sessions.list({ limit: 20 })
+document.getElementById('status')!.textContent = \`已连接，读取到 \${sessions.length} 个会话\`
+`)
+  fs.writeFileSync(path.join(dir, '.gitignore'), 'node_modules\ndist\n*.ctp\n')
+}
+
+async function init(dirArg, opts = {}) {
   const dir = path.resolve(dirArg || '.')
   if (fs.existsSync(path.join(dir, 'manifest.json'))) fail(`${dir} 已存在 manifest.json`)
 
@@ -239,53 +346,42 @@ async function init(dirArg) {
     },
   }
 
-  fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n')
-  fs.writeFileSync(path.join(dir, 'index.html'), `<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-  <meta charset="UTF-8" />
-  <title>${name}</title>
-  <style>body { padding: 24px; }</style>
-</head>
-<body>
-  <h2 class="ct-title">${name}</h2>
-  <p class="ct-hint" id="status">连接中…</p>
-  <script type="module" src="./main.js"></script>
-</body>
-</html>
-`)
-  fs.writeFileSync(path.join(dir, 'main.js'), `import { connect } from './ciphertalk-plugin-sdk.js'
-
-const api = await connect()
-const { sessions } = await api.data.sessions.list({ limit: 20 })
-document.getElementById('status').textContent = \`已连接，读取到 \${sessions.length} 个会话\`
-`)
-  const sdkSrc = path.join(__dirname, 'ciphertalk-plugin-sdk.js')
-  if (fs.existsSync(sdkSrc)) {
-    fs.copyFileSync(sdkSrc, path.join(dir, 'ciphertalk-plugin-sdk.js'))
-    const dtsSrc = path.join(__dirname, 'ciphertalk-plugin-sdk.d.ts')
-    if (fs.existsSync(dtsSrc)) fs.copyFileSync(dtsSrc, path.join(dir, 'ciphertalk-plugin-sdk.d.ts'))
+  if (opts.vite) {
+    scaffoldVite(dir, manifest)
+    ok(`Vite 插件骨架已创建:${dir}`)
+    console.log(`  安装依赖：cd ${dirArg || '.'} && npm install
+  开发：npm run dev（热更新）+ CipherTalk 开发者模式加载本目录
+  打包：npm run pack → <id>-<version>.ctp`)
   } else {
-    console.warn('! 未找到 SDK 文件，请手动复制 ciphertalk-plugin-sdk.js 到插件目录')
-  }
-
-  ok(`插件骨架已创建:${dir}`)
-  console.log(`  开发：CipherTalk 设置 → 插件 → 开发者模式 → 加载本地插件目录
+    fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n')
+    scaffoldVanilla(dir, manifest)
+    ok(`插件骨架已创建:${dir}`)
+    console.log(`  开发：CipherTalk 设置 → 插件 → 开发者模式 → 加载本地插件目录
   打包：node ${path.relative(process.cwd(), __filename)} pack ${dirArg || '.'}`)
+  }
 }
+
+// 导出纯逻辑供测试与其它工具复用
+module.exports = { validateManifest, writeZip, collectFiles, pack, KNOWN_PERMISSIONS, API_VERSION }
 
 // ===== main =====
 
-const [, , command, arg] = process.argv
-if (command === 'pack') {
-  pack(arg)
-} else if (command === 'init') {
-  init(arg).catch((e) => fail(String(e)))
-} else {
-  console.log(`CipherTalk 插件脚手架
+if (require.main === module) {
+  const args = process.argv.slice(2)
+  const command = args[0]
+  const positional = args.slice(1).filter((a) => !a.startsWith('-'))
+  const useVite = args.includes('--vite')
+
+  if (command === 'pack') {
+    pack(positional[0])
+  } else if (command === 'init') {
+    init(positional[0], { vite: useVite }).catch((e) => fail(String(e)))
+  } else {
+    console.log(`CipherTalk 插件脚手架
 
 用法：
-  node cli.js init <目录>    创建插件项目骨架（交互式填写开发者信息）
-  node cli.js pack [目录]    校验 manifest 并打包为 <id>-<version>.ctp`)
-  process.exit(command ? 1 : 0)
+  node cli.cjs init <目录> [--vite]   创建插件项目骨架（--vite 生成 Vite+TS 模板）
+  node cli.cjs pack [目录]            校验 manifest 并打包为 <id>-<version>.ctp`)
+    process.exit(command ? 1 : 0)
+  }
 }

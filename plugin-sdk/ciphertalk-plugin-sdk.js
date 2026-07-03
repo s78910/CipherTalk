@@ -12,6 +12,11 @@
  * - 主题：连接时注入一次，宿主切换主题后推送 { type:'theme', theme }
  */
 
+/** 本 SDK 实现的插件 API 主版本；须与 manifest.apiVersion 一致 */
+export const API_VERSION = 1
+/** SDK 语义化版本，便于开发者日志/上报 */
+export const SDK_VERSION = '1.0.0'
+
 /** 把宿主主题 tokens 应用到插件页 :root，观感与宿主一致 */
 function applyTheme(theme) {
   if (!theme || !theme.vars) return
@@ -134,6 +139,8 @@ export function connect() {
       invokeRef = invoke
 
       resolve({
+        apiVersion: API_VERSION,
+        sdkVersion: SDK_VERSION,
         pluginId: data.pluginId,
         viewId: data.viewId,
         /** 视图上下文：聊天工具栏按钮打开时包含 sessionId 等 */

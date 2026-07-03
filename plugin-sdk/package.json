@@ -1,19 +1,41 @@
 {
   "name": "ciphertalk-plugin-sdk",
   "version": "1.0.0",
-  "description": "CipherTalk 插件 SDK 与脚手架 CLI（init / pack）",
-  "main": "ciphertalk-plugin-sdk.js",
-  "types": "ciphertalk-plugin-sdk.d.ts",
+  "description": "CipherTalk（密语）插件开发 SDK 与脚手架 CLI —— 在沙箱中调用聊天数据、媒体、转写、搜索、导出、AI 等宿主能力",
+  "keywords": ["ciphertalk", "密语", "plugin", "sdk", "wechat"],
+  "license": "CC-BY-NC-SA-4.0",
+  "author": "ILoveBingLu",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ILoveBingLu/CipherTalk.git",
+    "directory": "plugin-sdk"
+  },
+  "main": "./ciphertalk-plugin-sdk.js",
+  "module": "./ciphertalk-plugin-sdk.js",
+  "types": "./ciphertalk-plugin-sdk.d.ts",
+  "exports": {
+    ".": {
+      "types": "./ciphertalk-plugin-sdk.d.ts",
+      "import": "./ciphertalk-plugin-sdk.js",
+      "default": "./ciphertalk-plugin-sdk.js"
+    },
+    "./cli": "./cli.cjs"
+  },
   "bin": {
-    "ciphertalk-plugin": "./cli.js"
+    "ciphertalk-plugin": "./cli.cjs"
+  },
+  "scripts": {
+    "test": "node test/test-cli.cjs && node test/test-sdk.mjs"
   },
   "files": [
     "ciphertalk-plugin-sdk.js",
     "ciphertalk-plugin-sdk.d.ts",
-    "cli.js"
+    "cli.cjs",
+    "README.md",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=18"
-  },
-  "license": "CC-BY-NC-SA-4.0"
+  }
 }

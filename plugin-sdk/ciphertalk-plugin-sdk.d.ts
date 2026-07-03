@@ -68,7 +68,16 @@ export interface ThemePayload {
   isDark: boolean
 }
 
+/** 本 SDK 实现的插件 API 主版本 */
+export const API_VERSION: 1
+/** SDK 语义化版本 */
+export const SDK_VERSION: string
+
 export interface CipherTalkAPI {
+  /** 插件 API 主版本（= API_VERSION） */
+  apiVersion: number
+  /** SDK 版本 */
+  sdkVersion: string
   pluginId: string
   viewId: string
   context: PluginContext
