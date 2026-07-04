@@ -5,7 +5,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from '@heroui/react'
-import { Download, Image as ImageIcon, RefreshCw, Smile, Trash2 } from 'lucide-react'
+import { ArrowDownToLine, ArrowsRotateLeft, FaceSmile, Picture, TrashBin } from '@gravity-ui/icons'
 import './DataManagementPage.css'
 
 type TabType = 'images' | 'emojis'
@@ -184,7 +184,7 @@ function DataManagementPage() {
     const ref = target === 'images' ? imageGridRef : emojiGridRef
     const title = target === 'images' ? '图片管理' : '表情包管理'
     const emptyText = target === 'images' ? '未找到图片文件' : '未找到表情包'
-    const Icon = target === 'images' ? ImageIcon : Smile
+    const Icon = target === 'images' ? Picture : FaceSmile
 
     return (
       <>
@@ -198,12 +198,12 @@ function DataManagementPage() {
           <div className="section-actions">
             {target === 'images' && (
               <button className="btn btn-secondary" onClick={() => void handleDeleteThumbnails()} disabled={isDeletingThumbs}>
-                <Trash2 size={16} />
+                <TrashBin width={16} height={16} />
                 {isDeletingThumbs ? '删除中...' : '一键删除缩略图'}
               </button>
             )}
             <button className="btn btn-secondary" onClick={() => void loadMedia(target)} disabled={isMediaLoading}>
-              <RefreshCw size={16} className={isMediaLoading ? 'spin' : ''} />
+              <ArrowsRotateLeft width={16} height={16} className={isMediaLoading ? 'spin' : ''} />
               刷新
             </button>
           </div>
@@ -245,7 +245,7 @@ function DataManagementPage() {
                     onClick={(e) => handleDownloadImage(e, image)}
                     title="下载"
                   >
-                    <Download size={16} />
+                    <ArrowDownToLine width={16} height={16} />
                   </button>
                 </div>
                 <div className="media-info">
@@ -258,7 +258,7 @@ function DataManagementPage() {
 
           {!isMediaLoading && list.length === 0 && (
             <div className="empty-state">
-              <Icon size={48} strokeWidth={1} />
+              <Icon width={48} height={48} />
               <p>{emptyText}</p>
               <p className="hint">请确认图片缓存目录已生成</p>
             </div>
@@ -301,14 +301,14 @@ function DataManagementPage() {
             className={`tab-btn ${activeTab === 'images' ? 'active' : ''}`}
             onClick={() => setActiveTab('images')}
           >
-            <ImageIcon size={16} />
+            <Picture width={16} height={16} />
             图片 ({images.length})
           </button>
           <button
             className={`tab-btn ${activeTab === 'emojis' ? 'active' : ''}`}
             onClick={() => setActiveTab('emojis')}
           >
-            <Smile size={16} />
+            <FaceSmile width={16} height={16} />
             表情包 ({emojis.length})
           </button>
         </div>

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Card, Description, InputGroup, Label, ListBox, Modal, Popover, ScrollShadow, Spinner, TextField, TimeField, Toolbar } from '@heroui/react'
 import { Time } from '@internationalized/date'
-import { BookOpen, Check, Clock3, Copy, Download, PenLine, RefreshCw, RotateCcw, Save, Settings, Trash2, Type } from 'lucide-react'
+import { ArrowDownToLine, ArrowRotateLeft, ArrowsRotateLeft, BookOpen, Check, Clock, Copy, FloppyDisk, Gear, PencilToLine, Text, TrashBin } from '@gravity-ui/icons'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import type { MemoryDiaryEntryInfo } from '../types/electron'
@@ -510,14 +510,14 @@ export default function DiaryPage() {
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <Button isDisabled={summarizing} variant="primary" onPress={() => void summarizeToday()}>
-            <PenLine className="size-4" />
+            <PencilToLine className="size-4" />
             总结日记
           </Button>
           <Button isIconOnly aria-label="日记设置" variant="ghost" onPress={() => setSettingsOpen(true)}>
-            <Settings className="size-4" />
+            <Gear className="size-4" />
           </Button>
           <Button isIconOnly aria-label="刷新日记" variant="ghost" onPress={() => void loadDiaries()}>
-            <RefreshCw className="size-4" />
+            <ArrowsRotateLeft className="size-4" />
           </Button>
         </div>
       </header>
@@ -602,7 +602,7 @@ export default function DiaryPage() {
                           size="sm"
                           variant="ghost"
                         >
-                          <Trash2 className="size-4" />
+                          <TrashBin className="size-4" />
                         </Button>
                         <Popover.Content placement="bottom end" offset={8}>
                           <Popover.Dialog className="w-60 p-3">
@@ -641,7 +641,7 @@ export default function DiaryPage() {
               <Modal.CloseTrigger />
               <Card.Header className="flex-row items-start gap-3 border-b border-border p-5">
                 <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent-soft-foreground">
-                  <Settings className="size-5" />
+                  <Gear className="size-5" />
                 </div>
                 <div className="min-w-0">
                   <Card.Title>日记设置</Card.Title>
@@ -677,7 +677,7 @@ export default function DiaryPage() {
                       <Label>自动总结时间</Label>
                       <TimeField.Group fullWidth variant="secondary">
                         <TimeField.Prefix>
-                          <Clock3 className="size-4 text-muted-foreground" />
+                          <Clock className="size-4 text-muted-foreground" />
                         </TimeField.Prefix>
                         <TimeField.Input>
                           {(segment) => <TimeField.Segment segment={segment} />}
@@ -715,7 +715,7 @@ export default function DiaryPage() {
                   variant="tertiary"
                   onPress={resetSettingsDraft}
                 >
-                  <RotateCcw className="size-4" />
+                  <ArrowRotateLeft className="size-4" />
                   恢复默认
                 </Button>
                 <Button
@@ -725,7 +725,7 @@ export default function DiaryPage() {
                   variant="primary"
                   onPress={() => void saveDiarySettings()}
                 >
-                  <Save className="size-4" />
+                  <FloppyDisk className="size-4" />
                   保存
                 </Button>
               </Card.Footer>
@@ -756,7 +756,7 @@ export default function DiaryPage() {
                       size="sm"
                       variant="tertiary"
                     >
-                      <Type className="size-4" />
+                      <Text className="size-4" />
                     </Button>
                     <Popover.Content placement="bottom start" offset={8}>
                       <Popover.Dialog className="p-1">
@@ -803,7 +803,7 @@ export default function DiaryPage() {
                       size="sm"
                       variant="tertiary"
                     >
-                      {downloadingDiary ? <Spinner size="sm" /> : <Download className="size-4" />}
+                      {downloadingDiary ? <Spinner size="sm" /> : <ArrowDownToLine className="size-4" />}
                     </Button>
                     <Popover.Content placement="bottom start" offset={8}>
                       <Popover.Dialog className="p-1">
@@ -828,7 +828,7 @@ export default function DiaryPage() {
                 {summarizing ? (
                   <div className="flex min-h-[60vh] flex-col items-center justify-center gap-5 px-8 py-20 text-center">
                     <div className="flex size-14 items-center justify-center rounded-full bg-black/5">
-                      <PenLine className="size-6 animate-pulse" />
+                      <PencilToLine className="size-6 animate-pulse" />
                     </div>
                     <div className="text-2xl font-semibold">正在总结日记</div>
                     <p className="diary-summary-line m-0 max-w-md text-base leading-8 opacity-70" key={summarizingLineIndex}>
