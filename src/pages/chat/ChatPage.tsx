@@ -12,6 +12,7 @@ import { BatchDecryptModal } from './components/BatchDecryptModal'
 import { BatchTranscribeModal } from './components/BatchTranscribeModal'
 import { ChatHeader } from './components/ChatHeader'
 import { MessageListVirtual } from './components/MessageListVirtual'
+import { ReplySuggestBar } from './components/ReplySuggestBar'
 import { SessionSidebar } from './components/SessionSidebar'
 import { ContextMenuPortal } from './components/portals/ContextMenuPortal'
 import { EnlargeViewModal } from './components/portals/EnlargeViewModal'
@@ -22,6 +23,7 @@ import { useSidebarResize } from './hooks/useSidebarResize'
 import { useThrottledScroll } from './hooks/useThrottledScroll'
 import { useTopToast } from './hooks/useTopToast'
 import type { BatchImageMessage } from './types'
+import { isReplySuggestSession } from './replySuggest'
 import { checkOnlineSttConfigReady } from './utils/sttConfig'
 import { formatSessionTime } from './utils/time'
 
@@ -1718,6 +1720,9 @@ function ChatPage(_props: ChatPageProps) {
                   bottomSignal={vlistBottomSignal}
                   topSignal={vlistTopSignal}
                 />
+                {isReplySuggestSession(currentSession) && (
+                  <ReplySuggestBar messages={messages} session={currentSession} />
+                )}
               </div>
 
               {selectMode && (

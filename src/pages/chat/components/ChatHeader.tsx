@@ -1,10 +1,21 @@
-import { Aperture, ArrowDownToLine, ArrowsRotateLeft, Bell, BellSlash, CircleDashed, CircleInfo, FaceRobot, FileText, Layers, Microphone, Picture, Sparkles } from '@gravity-ui/icons'
+import { Aperture, ArrowDownToLine, ArrowsRotateLeft, Bell, BellSlash, Bulb, CircleCheck, CircleDashed, CircleInfo, FaceRobot, FileText, Layers, Microphone, Picture, Sparkles } from '@gravity-ui/icons'
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Drawer, Dropdown, Label, Tooltip } from '@heroui/react'
+import { CloneSelfModal } from './CloneSelfModal'
 import { DateJumpPicker } from './DateJumpPicker'
 import type { ChatSession } from '../../../types/models'
 import type { EmbeddingBuildProgress, EmbeddingBuildTarget, EmbeddingVectorStoreInfo } from '../../../types/electron'
 import { isGroupChat } from '../utils/messageGuards'
+import {
+  DEFAULT_REPLY_SUGGEST_SETTINGS,
+  REPLY_SUGGEST_CONFIG_KEY,
+  REPLY_SUGGEST_COUNTS,
+  REPLY_SUGGEST_STYLES,
+  type ReplySuggestSettings,
+  type ReplySuggestStyle,
+  getReplySuggestSettings,
+  updateReplySuggestSettings,
+} from '../replySuggest'
 import { SessionAvatar } from './SessionSidebar'
 import PluginChatToolbar from '../../../features/plugins/PluginChatToolbar'
 
@@ -194,6 +205,38 @@ export function ChatHeader({
       void window.electronAPI.notify.setSessionEnabled(currentSession.username, next)
       return next
     })
+  }, [currentSession.username])
+
+  // 回复建议设置：会话级，改动写回 config；ReplySuggestBar 靠 config.onChanged 同步
+  const [replySettings, setReplySettings] = useState<ReplySuggestSettings>(DEFAULT_REPLY_SUGGEST_SETTINGS)
+  useEffect(() => {
+    let cancelled = false
+    void getReplySuggestSettings(currentSession.username).then((s) => {
+      if (!cancelled) setReplySettings(s)
+    })
+    const off = window.electronAPI.config.onChanged(({ key }) => {
+      if (key !== REPLY_SUGGEST_CONFIG_KEY) return
+      void getReplySuggestSettings(currentSession.username).then((s) => {
+        if (!cancelled) setReplySettings(s)
+      })
+    })
+    return () => { cancelled = true; off() }
+  }, [currentSession.username])
+
+  const patchReplySettings = useCallback((patch: Partial<ReplySuggestSettings>) => {
+    setReplySettings((prev) => ({ ...prev, ...patch }))
+    void updateReplySuggestSettings(currentSession.username, patch)
+  }, [currentSession.username])
+
+  // 自画像状态：是否已克隆"我"对此联系人的说话画像（self: 前缀键），用于菜单显示
+  const [myPersonaExists, setMyPersonaExists] = useState(false)
+  const [cloneSelfOpen, setCloneSelfOpen] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    void window.electronAPI.persona.get(`self:${currentSession.username}`).then((res) => {
+      if (!cancelled) setMyPersonaExists(!!(res.success && res.persona))
+    })
+    return () => { cancelled = true }
   }, [currentSession.username])
 
   const syncDetailDrawerBounds = useCallback(() => {
@@ -498,6 +541,98 @@ export function ChatHeader({
         )}
 
         {isPrivateSession && (
+          <Dropdown>
+            <Button
+              isIconOnly
+              size="sm"
+              variant="ghost"
+              aria-label="回复建议设置"
+            >
+              <Bulb width={18} height={18} className={replySettings.enabled ? 'text-primary' : ''} />
+            </Button>
+            <Dropdown.Popover className="min-w-56" placement="bottom end">
+              <Dropdown.Menu
+                onAction={(key) => {
+                  if (key === 'toggle') patchReplySettings({ enabled: !replySettings.enabled })
+                  if (key === 'deep') patchReplySettings({ deep: !replySettings.deep })
+                  if (key === 'cloneSelf') setCloneSelfOpen(true)
+                }}
+              >
+                <Dropdown.Item id="cloneSelf" textValue="克隆我自己">
+                  <FaceRobot className="size-4 shrink-0 text-muted" />
+                  <Label>{myPersonaExists ? '重建我的自画像' : '克隆我自己'}</Label>
+                  <span className={`ml-auto text-xs ${myPersonaExists ? 'text-success' : 'text-muted-foreground'}`}>
+                    {myPersonaExists ? (
+                      <span className="inline-flex items-center gap-0.5">
+                        <CircleCheck width={12} height={12} />
+                        已克隆
+                      </span>
+                    ) : '未克隆'}
+                  </span>
+                </Dropdown.Item>
+                <Dropdown.Item id="toggle" textValue="自动建议">
+                  <Bulb className="size-4 shrink-0 text-muted" />
+                  <Label>自动建议</Label>
+                  <span className={`ml-auto text-xs ${replySettings.enabled ? 'text-primary' : 'text-muted-foreground'}`}>
+                    {replySettings.enabled ? '已开启' : '已关闭'}
+                  </span>
+                </Dropdown.Item>
+                <Dropdown.SubmenuTrigger>
+                  <Dropdown.Item id="style" textValue="风格">
+                    <Label className="min-w-0 flex-1 text-left">风格</Label>
+                    <span className="shrink-0 text-muted-foreground text-xs">
+                      {REPLY_SUGGEST_STYLES.find((s) => s.id === replySettings.style)?.label}
+                    </span>
+                    <Dropdown.SubmenuIndicator />
+                  </Dropdown.Item>
+                  <Dropdown.Popover className="min-w-36" placement="right top">
+                    <Dropdown.Menu
+                      selectedKeys={new Set([replySettings.style])}
+                      selectionMode="single"
+                      onAction={(key) => patchReplySettings({ style: String(key) as ReplySuggestStyle })}
+                    >
+                      {REPLY_SUGGEST_STYLES.map((style) => (
+                        <Dropdown.Item id={style.id} key={style.id} textValue={style.label}>
+                          <Dropdown.ItemIndicator />
+                          <Label>{style.label}</Label>
+                        </Dropdown.Item>
+                      ))}
+                    </Dropdown.Menu>
+                  </Dropdown.Popover>
+                </Dropdown.SubmenuTrigger>
+                <Dropdown.SubmenuTrigger>
+                  <Dropdown.Item id="count" textValue="建议数量">
+                    <Label className="min-w-0 flex-1 text-left">建议数量</Label>
+                    <span className="shrink-0 text-muted-foreground text-xs">{replySettings.count} 条</span>
+                    <Dropdown.SubmenuIndicator />
+                  </Dropdown.Item>
+                  <Dropdown.Popover className="min-w-28" placement="right top">
+                    <Dropdown.Menu
+                      selectedKeys={new Set([String(replySettings.count)])}
+                      selectionMode="single"
+                      onAction={(key) => patchReplySettings({ count: Number(key) })}
+                    >
+                      {REPLY_SUGGEST_COUNTS.map((count) => (
+                        <Dropdown.Item id={String(count)} key={count} textValue={`${count} 条`}>
+                          <Dropdown.ItemIndicator />
+                          <Label>{count} 条</Label>
+                        </Dropdown.Item>
+                      ))}
+                    </Dropdown.Menu>
+                  </Dropdown.Popover>
+                </Dropdown.SubmenuTrigger>
+                <Dropdown.Item id="deep" textValue="深度模式">
+                  <Label>深度模式</Label>
+                  <span className={`ml-auto text-xs ${replySettings.deep ? 'text-primary' : 'text-muted-foreground'}`}>
+                    {replySettings.deep ? '开' : '关'}
+                  </span>
+                </Dropdown.Item>
+              </Dropdown.Menu>
+            </Dropdown.Popover>
+          </Dropdown>
+        )}
+
+        {isPrivateSession && (
           <Tooltip delay={0}>
             <Tooltip.Trigger>
               <Button
@@ -610,6 +745,22 @@ export function ChatHeader({
       </div>
 
       {detailDrawerHost ? detailDrawer : null}
+
+      {isPrivateSession && (
+        <CloneSelfModal
+          isOpen={cloneSelfOpen}
+          onOpenChange={(open) => {
+            setCloneSelfOpen(open)
+            // 关闭后刷新自画像存在状态（克隆完成/删除后会变）
+            if (!open) {
+              void window.electronAPI.persona.get(`self:${currentSession.username}`).then((res) => {
+                setMyPersonaExists(!!(res.success && res.persona))
+              })
+            }
+          }}
+          session={currentSession}
+        />
+      )}
     </div>
   )
 }

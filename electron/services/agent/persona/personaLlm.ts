@@ -71,10 +71,10 @@ export async function generateValidated<T>(
 }
 
 function corpusPreamble(input: PersonaExtractInput): string {
-  const { friendName, stats } = input
+  const { subjectName, otherName, stats } = input
   return [
-    `下面是「我」和「${friendName}」的微信聊天记录（按时间正序，一行一轮；同一人连发多条时用「／」分隔）。`,
-    `已知统计：${friendName} 共 ${stats.friendMessageCount} 条消息，单条平均 ${stats.avgFriendMsgChars} 字，平均一轮连发 ${stats.avgFriendBurst} 条。`,
+    `下面是「${otherName}」和「${subjectName}」的微信聊天记录（按时间正序，一行一轮；同一人连发多条时用「／」分隔）。`,
+    `已知统计：${subjectName} 共 ${stats.friendMessageCount} 条消息，单条平均 ${stats.avgFriendMsgChars} 字，平均一轮连发 ${stats.avgFriendBurst} 条。`,
     '',
     input.corpusText,
   ].join('\n')
@@ -87,31 +87,38 @@ function cardCorpus(input: PersonaExtractInput): string {
   return [
     base,
     '',
-    `【补充语料】以下是「${input.friendName}」在群聊中的发言节选（共 ${input.stats.groupMessageCount || 0} 条，来自 TA 所在的群）。`,
-    '「群友」是群里其他人，不是「我」；这部分只用于分析 TA 的说话风格与性格，注意群聊语气可能比私聊更随意。',
+    `【补充语料】以下是「${input.subjectName}」在群聊中的发言节选（共 ${input.stats.groupMessageCount || 0} 条，来自 TA 所在的群）。`,
+    `「群友」是群里其他人，不是「${input.otherName}」；这部分只用于分析「${input.subjectName}」的说话风格与性格，注意群聊语气可能比私聊更随意。`,
     input.groupCorpusText,
   ].join('\n')
 }
 
-const CARD_JSON_SHAPE = `{
+/** 画像卡 JSON 形状；addressing 里要称呼的"聊天对象"在 self 克隆时是联系人，不是"我"。 */
+function cardJsonShape(otherName: string): string {
+  return `{
   "tone": "语气与说话风格，2-4 句中文描述",
   "personalityTraits": ["性格特征短语", "..."],
   "catchphrases": ["口头禅/高频用语，没有就给空数组"],
   "punctuationStyle": "标点与排版习惯，如：几乎不用句号、爱用~和省略号、习惯连发短句",
-  "addressing": "对聊天对象（语料中的'我'）的称呼习惯，没有特别称呼就写'无特别称呼'",
+  "addressing": "对聊天对象（语料中的「${otherName}」）的称呼习惯，没有特别称呼就写'无特别称呼'",
   "topics": ["常聊话题", "..."],
   "ttsInstructions": "给语音合成模型的自然语言指令，描述 TA 说语音时的语速、情绪、口语感、停顿和语气；不要包含具体要朗读的文本"
 }`
+}
 
-const FEWSHOT_JSON_SHAPE = `{
+/** few-shot 问答对形状：user=对话方说的，replies=被侧写者回的。 */
+function fewshotJsonShape(otherName: string, subjectName: string): string {
+  return `{
   "examples": [
-    { "user": "'我'说的内容（一轮内多条可合并成一句）", "replies": ["对方的回复，连发的保持逐条、一条一项，必须摘自原文"] }
+    { "user": "「${otherName}」说的内容（一轮内多条可合并成一句）", "replies": ["${subjectName === '我' ? '我' : '对方'}的回复，连发的保持逐条、一条一项，必须摘自原文"] }
   ]
 }`
+}
 
 export async function extractPersona(input: PersonaExtractInput, signal?: AbortSignal): Promise<PersonaExtractResult> {
   const model = createLanguageModel(input.providerConfig)
   const corpus = corpusPreamble(input)
+  const { subjectName, otherName } = input
 
   const [card, fewShot] = await Promise.all([
     generateValidated(
@@ -120,8 +127,8 @@ export async function extractPersona(input: PersonaExtractInput, signal?: AbortS
         system:
           '你是一名语言风格侧写师。根据聊天记录总结目标人物的说话风格与性格，' +
           '只依据记录本身，不要臆造；描述要具体可执行（能直接指导模仿其说话），避免空泛形容词。' +
-          `\n只输出一个 JSON 对象，不要任何解释或代码围栏，格式如下：\n${CARD_JSON_SHAPE}`,
-        prompt: `${cardCorpus(input)}\n\n请侧写「${input.friendName}」，按要求输出 JSON。`,
+          `\n只输出一个 JSON 对象，不要任何解释或代码围栏，格式如下：\n${cardJsonShape(otherName)}`,
+        prompt: `${cardCorpus(input)}\n\n请侧写「${subjectName}」，按要求输出 JSON。`,
         temperature: 0.3,
         signal,
       },
@@ -133,10 +140,10 @@ export async function extractPersona(input: PersonaExtractInput, signal?: AbortS
         model,
         system:
           '你是对话样本挖掘器。从聊天记录中挑选最能体现目标人物说话风格的真实问答对：' +
-          '「我」说了什么、对方怎么回的。必须原样摘抄原文（可去掉无关上下文），不许改写、不许编造。' +
+          `「${otherName}」说了什么、「${subjectName}」怎么回的。必须原样摘抄原文（可去掉无关上下文），不许改写、不许编造。` +
           '优先挑风格鲜明（口头禅、玩笑、典型语气）且不含隐私敏感内容（金额、地址、证件号）的样本。' +
-          `\n只输出一个 JSON 对象，不要任何解释或代码围栏，格式如下：\n${FEWSHOT_JSON_SHAPE}`,
-        prompt: `${corpus}\n\n请从中挑选 5-8 组「我 → ${input.friendName}」的代表性问答对，按要求输出 JSON。`,
+          `\n只输出一个 JSON 对象，不要任何解释或代码围栏，格式如下：\n${fewshotJsonShape(otherName, subjectName)}`,
+        prompt: `${corpus}\n\n请从中挑选 5-8 组「${otherName} → ${subjectName}」的代表性问答对，按要求输出 JSON。`,
         temperature: 0.2,
         signal,
       },

@@ -375,3 +375,79 @@ function sanitizeGeneratedTitle(value: string): string {
     .trim()
   return title.slice(0, 24) || '新对话'
 }
+
+export type ReplySuggestStyle = 'natural' | 'short' | 'formal' | 'humorous' | 'warm' | 'likeme'
+
+export type ReplySuggestInput = {
+  contactName: string
+  /** 对话上下文，从旧到新；深度模式由渲染端多传消息实现，本函数不感知 */
+  context: Array<{ fromMe: boolean; text: string }>
+  style: ReplySuggestStyle
+  count: number
+  /** style === 'likeme' 时的"我"历史发言 few-shot（无自画像时的兜底） */
+  myRecentTexts?: string[]
+  /** style === 'likeme' 时由自画像画像卡渲染成的提示文本；优先于 myRecentTexts */
+  myPersonaContext?: string
+  providerConfig: AgentProviderConfig
+}
+
+const REPLY_STYLE_HINTS: Record<ReplySuggestStyle, string> = {
+  natural: '自然日常，像平时和朋友聊天',
+  short: '简短干脆，尽量一句话说完',
+  formal: '得体正式，措辞礼貌',
+  humorous: '幽默轻松，可以适度玩梗',
+  warm: '热情贴心，多给情绪价值',
+  likeme: '严格模仿"我"的说话语气、用词、口头禅和标点习惯',
+}
+
+export async function generateReplySuggestions(
+  input: ReplySuggestInput,
+  signal?: AbortSignal,
+): Promise<string[]> {
+  const count = Math.min(5, Math.max(1, Math.round(input.count) || 3))
+  const contactName = input.contactName.trim() || '对方'
+  const lines = input.context
+    .map((m) => ({ ...m, text: m.text.trim() }))
+    .filter((m) => m.text)
+    .map((m) => `${m.fromMe ? '我' : contactName}：${m.text.slice(0, 300)}`)
+  if (lines.length === 0) return []
+
+  const fewShot = input.style === 'likeme'
+    ? input.myPersonaContext
+      ? `\n\n"我"的说话画像（严格遵循其中的语气、口头禅、标点习惯来生成回复）：\n${input.myPersonaContext}`
+      : input.myRecentTexts?.length
+        ? `\n\n"我"的历史发言示例（模仿这种语气）：\n${input.myRecentTexts.slice(0, 20).map((t) => `- ${t.trim().slice(0, 100)}`).join('\n')}`
+        : ''
+    : ''
+
+  const result = await generateText({
+    model: createLanguageModel(input.providerConfig),
+    system: `你是微信回复建议助手。根据对话上下文，替"我"拟出 ${count} 条可以直接发送给「${contactName}」的回复。要求：口语化中文；紧贴最后一条消息；${count} 条之间角度或语气要有区分度；不要解释、不要编号、不要称呼前缀。风格要求：${REPLY_STYLE_HINTS[input.style] ?? REPLY_STYLE_HINTS.natural}。只输出 JSON 字符串数组，形如 ["回复一","回复二"]，不要输出其它任何内容。`,
+    prompt: `对话记录（从旧到新）：\n${lines.join('\n')}${fewShot}\n\n请给出 ${count} 条回复建议。`,
+    abortSignal: signal,
+  })
+
+  return parseReplySuggestions(result.text, count)
+}
+
+function parseReplySuggestions(text: string, count: number): string[] {
+  const start = text.indexOf('[')
+  const end = text.lastIndexOf(']')
+  if (start >= 0 && end > start) {
+    try {
+      const parsed: unknown = JSON.parse(text.slice(start, end + 1))
+      if (Array.isArray(parsed)) {
+        const items = parsed.map((v) => String(v).trim()).filter(Boolean)
+        if (items.length > 0) return items.slice(0, count)
+      }
+    } catch {
+      // 落到按行兜底
+    }
+  }
+  // ponytail: 模型不守 JSON 约定时按行兜底，去掉列表前缀
+  return text
+    .split('\n')
+    .map((line) => line.replace(/^[\s\-*\d.、'"“”]+/, '').replace(/['"“”]+$/, '').trim())
+    .filter(Boolean)
+    .slice(0, count)
+}

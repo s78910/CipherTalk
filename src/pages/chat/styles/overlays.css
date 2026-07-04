@@ -749,3 +749,99 @@ video::-webkit-media-controls-fullscreen-button {
     transform: translateY(0);
   }
 }
+
+/* ===== 回复建议悬浮栏（ReplySuggestBar）===== */
+.reply-suggest-bar {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 12px;
+  z-index: 20;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  pointer-events: none;
+  animation: reply-suggest-in 0.18s ease-out;
+}
+
+.reply-suggest-bar__cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.reply-suggest-bar__card {
+  pointer-events: auto;
+  max-width: 420px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-color, rgba(0, 0, 0, 0.08));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg-secondary, #fff) 78%, transparent);
+  backdrop-filter: blur(12px) saturate(160%);
+  -webkit-backdrop-filter: blur(12px) saturate(160%);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+  color: var(--text-primary, #222);
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.reply-suggest-bar__card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+}
+
+.reply-suggest-bar__loading {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--border-color, rgba(0, 0, 0, 0.08));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg-secondary, #fff) 78%, transparent);
+  backdrop-filter: blur(12px) saturate(160%);
+  -webkit-backdrop-filter: blur(12px) saturate(160%);
+  color: var(--text-secondary, #888);
+  font-size: 12px;
+}
+
+.reply-suggest-bar__close {
+  pointer-events: auto;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border-color, rgba(0, 0, 0, 0.08));
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--bg-secondary, #fff) 78%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  color: var(--text-secondary, #888);
+  cursor: pointer;
+}
+
+.reply-suggest-bar__close:hover {
+  color: var(--text-primary, #222);
+}
+
+@keyframes reply-suggest-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

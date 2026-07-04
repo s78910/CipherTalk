@@ -189,6 +189,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     abort: (runId: string) => ipcRenderer.invoke('agent:abort', runId) as Promise<{ success: boolean }>,
     generateTitle: (firstMessage: string, modelConfig?: unknown) =>
       ipcRenderer.invoke('agent:generateTitle', { firstMessage, modelConfig }) as Promise<{ success: boolean; title?: string; error?: string }>,
+    replySuggest: (input: unknown, modelConfig?: unknown) =>
+      ipcRenderer.invoke('agent:replySuggest', { input, modelConfig }) as Promise<{ success: boolean; suggestions?: string[]; error?: string }>,
     listConversations: (scope?: unknown) =>
       ipcRenderer.invoke('agent:listConversations', scope) as Promise<{ success: boolean; conversations?: unknown[]; error?: string }>,
     loadConversation: (id: number) =>
@@ -250,6 +252,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('persona:list') as Promise<{ success: boolean; personas?: unknown[]; error?: string }>,
     build: (payload: { sessionId: string; displayName?: string }) =>
       ipcRenderer.invoke('persona:build', payload) as Promise<{ success: boolean; persona?: unknown; error?: string }>,
+    // 克隆我自己（自画像）：用与克隆好友一致的 AI 管线，按 self: 前缀存储；供"像我"建议使用
+    buildSelf: (payload: { sessionId: string; displayName?: string }) =>
+      ipcRenderer.invoke('persona:buildSelf', payload) as Promise<{ success: boolean; persona?: unknown; error?: string }>,
     updateSpeakingStyle: (payload: { sessionId: string; card: unknown }) =>
       ipcRenderer.invoke('persona:updateSpeakingStyle', payload) as Promise<{ success: boolean; persona?: unknown; error?: string }>,
     cloneVoice: (payload: { sessionId: string; displayName?: string }) =>

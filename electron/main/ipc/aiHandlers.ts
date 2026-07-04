@@ -1532,6 +1532,49 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
     }
   })
 
+  ipcMain.handle('agent:replySuggest', async (_event, payload: {
+    input: Omit<import('../../services/agent/engine').ReplySuggestInput, 'providerConfig'>
+    modelConfig?: AgentProviderConfigOverride | null
+  }) => {
+    try {
+      const { agentProcessService } = await import('../../services/agent/agentProcessService')
+      const { resolveProviderConfig } = await import('../../services/agent/resolveProviderConfig')
+      const { refreshResolvedProxyUrl } = await import('../../services/ai/proxyFetch')
+      await refreshResolvedProxyUrl()
+      const providerConfig = resolveProviderConfig(payload.modelConfig)
+      const suggestions = await agentProcessService.replySuggest({
+        ...payload.input,
+        providerConfig,
+      })
+      return { success: true, suggestions }
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : String(e) }
+    }
+  })
+
+  // 克隆我自己：用与克隆好友一致的 AI 管线提炼"我"对此联系人的说话风格自画像，
+  // 按 self: 前缀存储；供"像我"回复建议使用。进度经 persona:buildProgress 推回（sessionId='self:'+原sessionId）
+  ipcMain.handle('persona:buildSelf', async (event, payload: { sessionId: string; displayName?: string }) => {
+    const sender = event.sender
+    const sessionId = String(payload?.sessionId || '').trim()
+    const displayName = String(payload?.displayName || '').trim() || sessionId
+    const logger = ctx.getLogService()
+    const { buildPersonaFromSession } = await import('../../services/agent/persona/personaBuildService')
+    const result = await buildPersonaFromSession({
+      sessionId,
+      displayName,
+      role: 'self',
+      logger,
+      onProgress: (progress) => {
+        if (!sender.isDestroyed()) sender.send('persona:buildProgress', progress)
+      },
+    })
+    if (result.success && result.persona) {
+      return { ...result, persona: sanitizePersonaForRenderer(result.persona) }
+    }
+    return result
+  })
+
 
   ipcMain.handle('ai:getProviders', async () => {
     try {

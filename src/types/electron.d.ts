@@ -1348,6 +1348,18 @@ export interface ElectronAPI {
     ) => Promise<{ success: boolean; error?: string }>
     abort: (runId: string) => Promise<{ success: boolean }>
     generateTitle: (firstMessage: string, modelConfig?: unknown) => Promise<{ success: boolean; title?: string; error?: string }>
+    replySuggest: (
+      input: {
+        contactName: string
+        context: Array<{ fromMe: boolean; text: string }>
+        style: string
+        count: number
+        myRecentTexts?: string[]
+        /** likeme 模式下由自画像画像卡渲染成的提示文本，优先于 myRecentTexts */
+        myPersonaContext?: string
+      },
+      modelConfig?: unknown
+    ) => Promise<{ success: boolean; suggestions?: string[]; error?: string }>
     onChunk: (runId: string, callback: (chunk: unknown) => void) => () => void
     onProgress: (runId: string, callback: (progress: unknown) => void) => () => void
     listConversations: (scope?: unknown) => Promise<{ success: boolean; conversations?: unknown[]; error?: string }>
@@ -1375,6 +1387,8 @@ export interface ElectronAPI {
     get: (sessionId: string) => Promise<{ success: boolean; persona?: PersonaRecordInfo | null; error?: string }>
     list: () => Promise<{ success: boolean; personas?: PersonaRecordInfo[]; error?: string }>
     build: (payload: { sessionId: string; displayName?: string }) => Promise<{ success: boolean; persona?: PersonaRecordInfo; error?: string }>
+    /** 克隆我自己：用与克隆好友一致的 AI 管线提炼"我"对此联系人的说话风格自画像，按 self: 前缀存储 */
+    buildSelf: (payload: { sessionId: string; displayName?: string }) => Promise<{ success: boolean; persona?: PersonaRecordInfo; error?: string }>
     updateSpeakingStyle: (payload: { sessionId: string; card: Partial<PersonaCardInfo> }) => Promise<{ success: boolean; persona?: PersonaRecordInfo; error?: string }>
     cloneVoice: (payload: { sessionId: string; displayName?: string }) => Promise<{ success: boolean; persona?: PersonaRecordInfo; voice?: PersonaTtsVoiceBindingInfo; warning?: string; error?: string }>
     exportVoiceSample: (payload: { sessionId: string; displayName?: string; outputPath: string }) => Promise<{ success: boolean; outputPath?: string; sampleCount?: number; sampleSeconds?: number; audioBytes?: number; error?: string }>

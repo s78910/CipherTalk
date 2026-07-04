@@ -141,11 +141,20 @@ export interface PersonaRecord {
   updatedAt: number
 }
 
+/** 克隆角色：'friend' = 克隆好友（对方为被侧写者），'self' = 克隆我自己（"我"为被侧写者）。 */
+export type PersonaRole = 'friend' | 'self'
+
 /** 主进程 → AI 子进程的画像提取请求载荷。 */
 export interface PersonaExtractInput {
   providerConfig: AgentProviderConfig
-  /** 被克隆好友的显示名 */
+  /** 被克隆好友的显示名（保留旧字段名以减少改动；role='self' 时为 "我"） */
   friendName: string
+  /** 克隆角色 */
+  role: PersonaRole
+  /** 被侧写者显示名（语料标签/prompt 主体用，friend=联系人名/self="我"） */
+  subjectName: string
+  /** 对话方显示名（语料标签用，friend="我"/self=联系人名） */
+  otherName: string
   /** 渲染好的对话语料（轮次合并后，连发用 ／ 分隔） */
   corpusText: string
   /** 群聊补充语料（TA 在群里的发言节选）：只喂风格卡，不喂 few-shot 挖掘（群聊问答错位） */
@@ -162,6 +171,12 @@ export interface PersonaExtractResult {
 export interface PersonaProfileChunkInput {
   providerConfig: AgentProviderConfig
   friendName: string
+  /** 克隆角色 */
+  role: PersonaRole
+  /** 被侧写者显示名 */
+  subjectName: string
+  /** 对话方显示名 */
+  otherName: string
   chunkText: string
 }
 
@@ -169,6 +184,12 @@ export interface PersonaProfileChunkInput {
 export interface PersonaProfileMergeInput {
   providerConfig: AgentProviderConfig
   friendName: string
+  /** 克隆角色 */
+  role: PersonaRole
+  /** 被侧写者显示名 */
+  subjectName: string
+  /** 对话方显示名 */
+  otherName: string
   parts: PersonaProfile[]
 }
 

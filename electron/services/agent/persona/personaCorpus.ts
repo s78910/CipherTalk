@@ -29,7 +29,7 @@ const PAIR_TEXT_CAP = 160
 const PAIR_MAX_REPLIES = 6
 
 export interface PersonaTurn {
-  /** true = 对方（被克隆者）说的 */
+  /** true = 被侧写者说的（克隆好友时=对方，克隆我自己时="我"） */
   isFriend: boolean
   texts: string[]
   startTime: number
@@ -50,13 +50,17 @@ export function messageText(m: ChatSearchMemoryMessage): string {
   return ''
 }
 
-export function mergeTurns(messages: ChatSearchMemoryMessage[]): PersonaTurn[] {
+/**
+ * 合并连发为轮次。
+ * @param subjectIsSend 被侧写者是不是"我"：friend 克隆=false（对方），self 克隆=true（"我"）
+ */
+export function mergeTurns(messages: ChatSearchMemoryMessage[], subjectIsSend = false): PersonaTurn[] {
   const turns: PersonaTurn[] = []
   let prevTime = 0
   for (const m of messages) {
     const text = messageText(m)
     if (!text) continue
-    const isFriend = m.isSend !== 1
+    const isFriend = subjectIsSend ? m.isSend === 1 : m.isSend !== 1
     const last = turns[turns.length - 1]
     if (last && last.isFriend === isFriend && m.createTime - prevTime <= TURN_GAP_SECONDS) {
       last.texts.push(text.slice(0, MSG_CHAR_CAP))
@@ -88,25 +92,26 @@ function computeStats(turns: PersonaTurn[]): PersonaStats {
   }
 }
 
-/** 对方语音消息占比：语音 / (文本 + 语音)，按原始消息数（含未转写语音），反映本人爱不爱用语音。 */
-function computeVoiceRatio(messages: ChatSearchMemoryMessage[]): number {
+/** 被侧写者语音消息占比：语音 / (文本 + 语音)，按原始消息数（含未转写语音），反映本人爱不爱用语音。 */
+function computeVoiceRatio(messages: ChatSearchMemoryMessage[], subjectIsSend = false): number {
   let voice = 0
   let convo = 0
   for (const m of messages) {
-    if (m.isSend === 1) continue // 只看对方（被克隆者）
+    const isSubject = subjectIsSend ? m.isSend === 1 : m.isSend !== 1
+    if (!isSubject) continue // 只看被侧写者
     if (m.localType === 1) convo += 1
     else if (m.localType === 34) { convo += 1; voice += 1 }
   }
   return convo > 0 ? Math.round((voice / convo) * 1000) / 1000 : 0
 }
 
-/** 把轮次渲染成「我: xxx／xxx」式对话文本；从最新往回装，装满预算后按时间正序输出。 */
-function renderCorpus(turns: PersonaTurn[], friendName: string): { text: string; usedTurns: number } {
+/** 把轮次渲染成「subjectName: xxx／xxx」式对话文本；从最新往回装，装满预算后按时间正序输出。 */
+function renderCorpus(turns: PersonaTurn[], subjectName: string, otherName: string): { text: string; usedTurns: number } {
   const lines: string[] = []
   let used = 0
   for (let i = turns.length - 1; i >= 0; i -= 1) {
     const turn = turns[i]
-    const line = `${turn.isFriend ? friendName : '我'}: ${turn.texts.join(BURST_JOINER)}`
+    const line = `${turn.isFriend ? subjectName : otherName}: ${turn.texts.join(BURST_JOINER)}`
     if (used + line.length > CORPUS_CHAR_BUDGET && lines.length > 0) break
     lines.push(line)
     used += line.length
@@ -114,11 +119,19 @@ function renderCorpus(turns: PersonaTurn[], friendName: string): { text: string;
   return { text: lines.reverse().join('\n'), usedTurns: lines.length }
 }
 
-export function buildPersonaCorpus(messages: ChatSearchMemoryMessage[], friendName: string): PersonaCorpus {
-  const turns = mergeTurns(messages)
+export function buildPersonaCorpus(
+  messages: ChatSearchMemoryMessage[],
+  friendName: string,
+  subjectIsSend = false,
+): PersonaCorpus {
+  const turns = mergeTurns(messages, subjectIsSend)
   const stats = computeStats(turns)
-  stats.voiceRatio = computeVoiceRatio(messages)
-  const { text } = renderCorpus(turns, friendName)
+  stats.voiceRatio = computeVoiceRatio(messages, subjectIsSend)
+  // friend 克隆：subject=对方(friendName)、other="我"
+  // self 克隆：subject="我"、other=对方(friendName)
+  const subjectName = subjectIsSend ? '我' : friendName
+  const otherName = subjectIsSend ? friendName : '我'
+  const { text } = renderCorpus(turns, subjectName, otherName)
   return { corpusText: text, stats, turnCount: turns.length }
 }
 
@@ -126,12 +139,14 @@ export function buildPersonaCorpus(messages: ChatSearchMemoryMessage[], friendNa
  * 深层画像语料：全部轮次按时间正序渲染后切成 ≤PROFILE_CHUNK_CHARS 的块。
  * 超过 PROFILE_MAX_CHUNKS 时保留最近的块（近期生活状态比远古历史更重要）。
  */
-export function renderProfileChunks(turns: PersonaTurn[], friendName: string): string[] {
+export function renderProfileChunks(turns: PersonaTurn[], friendName: string, subjectIsSend = false): string[] {
+  const subjectName = subjectIsSend ? '我' : friendName
+  const otherName = subjectIsSend ? friendName : '我'
   const chunks: string[] = []
   let current: string[] = []
   let chars = 0
   for (const turn of turns) {
-    const line = `${turn.isFriend ? friendName : '我'}: ${turn.texts.join(BURST_JOINER)}`
+    const line = `${turn.isFriend ? subjectName : otherName}: ${turn.texts.join(BURST_JOINER)}`
     if (chars + line.length > PROFILE_CHUNK_CHARS && current.length > 0) {
       chunks.push(current.join('\n'))
       current = []
@@ -145,8 +160,11 @@ export function renderProfileChunks(turns: PersonaTurn[], friendName: string): s
 }
 
 /**
- * 抽取「我的一轮 → TA 的下一轮」真实问答对（检索式 few-shot 的索引单元）。
- * sinceTime > 0 时只取 TA 回复轮晚于该水位的对（增量进化用）。
+ * 抽取「对话方的一轮 → 被侧写者的下一轮」真实问答对（检索式 few-shot 的索引单元）。
+ * 方向天然适配两种角色：
+ *  - friend 克隆：被侧写者=对方，ask.isFriend=false(我问)、reply.isFriend=true(对方答) → 「我问→对方答」
+ *  - self 克隆：  被侧写者="我"，ask.isFriend=false(联系人问)、reply.isFriend=true(我答) → 「联系人问→我答」
+ * sinceTime > 0 时只取被侧写者回复轮晚于该水位的对（增量进化用）。
  */
 export function extractPersonaPairs(turns: PersonaTurn[], sinceTime = 0): PersonaPair[] {
   const pairs: PersonaPair[] = []
