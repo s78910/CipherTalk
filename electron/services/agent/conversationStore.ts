@@ -34,6 +34,32 @@ export interface AgentConversationLoaded extends AgentConversationRecord {
   messages: UIMessage[]
 }
 
+export type AgentConversationChangeType =
+  | 'created'
+  | 'messages-appended'
+  | 'messages-replaced'
+  | 'renamed'
+  | 'metadata-updated'
+  | 'deleted'
+
+export interface AgentConversationUpdatedEvent extends AgentConversationRecord {
+  changeType: AgentConversationChangeType
+  originClientId?: string | null
+}
+
+type AgentConversationChangeBroadcaster = (event: AgentConversationUpdatedEvent) => void
+
+let agentConversationChangeBroadcaster: AgentConversationChangeBroadcaster | null = null
+
+export function setAgentConversationChangeBroadcaster(broadcaster: AgentConversationChangeBroadcaster | null): void {
+  agentConversationChangeBroadcaster = broadcaster
+}
+
+interface ConversationChangeOptions {
+  originClientId?: string | null
+  emit?: boolean
+}
+
 interface CreateConversationInput {
   scope?: AgentScope
   title?: string
@@ -41,6 +67,7 @@ interface CreateConversationInput {
   modelId?: string
   source?: string
   externalId?: string | null
+  originClientId?: string | null
 }
 
 interface ListConversationOptions {
@@ -253,6 +280,23 @@ export class AgentConversationStore {
     }
   }
 
+  private emitChange(
+    changeType: AgentConversationChangeType,
+    record: AgentConversationRecord | null | undefined,
+    options: ConversationChangeOptions = {},
+  ): void {
+    if (!record || options.emit === false || !agentConversationChangeBroadcaster) return
+    try {
+      agentConversationChangeBroadcaster({
+        ...record,
+        changeType,
+        originClientId: options.originClientId ?? null,
+      })
+    } catch {
+      // 广播失败不影响本地写入
+    }
+  }
+
   list(options: ListConversationOptions = {}): AgentConversationRecord[] {
     const db = this.getDb()
     const identity = this.getAccountIdentity()
@@ -305,12 +349,14 @@ export class AgentConversationStore {
       now,
     )
 
-    return this.loadMeta(Number(result.lastInsertRowid))
+    const record = this.loadMeta(Number(result.lastInsertRowid))
+    this.emitChange('created', record, { originClientId: input.originClientId })
+    return record
   }
 
   /** 按来源+外部标识找会话，没有就新建（用于微信等外部接入按联系人归档）。
    *  传入 scope 时会把会话归入对应作用域（如微信分身→persona），并回填旧的 global 行。 */
-  getOrCreateExternal(input: { source: string; externalId: string; title?: string; scope?: AgentScope }): AgentConversationRecord {
+  getOrCreateExternal(input: { source: string; externalId: string; title?: string; scope?: AgentScope; originClientId?: string | null }): AgentConversationRecord {
     const db = this.getDb()
     const accountId = this.getAccountId()
     const row = db.prepare(`
@@ -322,20 +368,22 @@ export class AgentConversationStore {
     if (row) {
       const record = this.mapConversation(row)
       // 回填 scope：把历史上存成 global 的外部会话归入对应好友的 persona/session 历史
-      if (input.scope && (input.scope.kind === 'persona' || input.scope.kind === 'session') && record.scope.kind !== input.scope.kind) {
+      if (input.scope && (input.scope.kind === 'persona' || input.scope.kind === 'session') && (record.scope.kind !== input.scope.kind || record.scope.sessionId !== input.scope.sessionId)) {
         const cols = scopeColumns(input.scope)
-        db.prepare('UPDATE agent_conversations SET scope_kind = ?, session_id = ?, display_name = ? WHERE id = ?')
-          .run(cols.kind, cols.sessionId, cols.displayName, record.id)
-        return this.loadMeta(record.id)
+        db.prepare('UPDATE agent_conversations SET scope_kind = ?, session_id = ?, display_name = ?, updated_at = ? WHERE id = ?')
+          .run(cols.kind, cols.sessionId, cols.displayName, Date.now(), record.id)
+        const updated = this.loadMeta(record.id)
+        this.emitChange('metadata-updated', updated, { originClientId: input.originClientId })
+        return updated
       }
       return record
     }
-    return this.create({ source: input.source, externalId: input.externalId, title: input.title, scope: input.scope })
+    return this.create({ source: input.source, externalId: input.externalId, title: input.title, scope: input.scope, originClientId: input.originClientId })
   }
 
   /** 显式开启一个新的外部来源会话；旧会话保留，后续 getOrCreateExternal 会取最新这条。 */
-  createExternal(input: { source: string; externalId: string; title?: string; scope?: AgentScope }): AgentConversationRecord {
-    return this.create({ source: input.source, externalId: input.externalId, title: input.title, scope: input.scope })
+  createExternal(input: { source: string; externalId: string; title?: string; scope?: AgentScope; originClientId?: string | null }): AgentConversationRecord {
+    return this.create({ source: input.source, externalId: input.externalId, title: input.title, scope: input.scope, originClientId: input.originClientId })
   }
 
   load(id: number): AgentConversationLoaded | null {
@@ -363,17 +411,19 @@ export class AgentConversationStore {
     return this.mapConversation(row)
   }
 
-  remove(id: number): { success: boolean } {
+  remove(id: number, options: ConversationChangeOptions = {}): { success: boolean } {
+    const record = this.loadMeta(id, false)
     const db = this.getDb()
     const tx = db.transaction((conversationId: number) => {
       db.prepare('DELETE FROM agent_messages WHERE conversation_id = ?').run(conversationId)
       db.prepare('DELETE FROM agent_conversations WHERE id = ?').run(conversationId)
     })
     tx(id)
+    this.emitChange('deleted', record ? { ...record, updatedAt: Date.now() } : null, options)
     return { success: true }
   }
 
-  removeByScope(scope: AgentScope): { success: boolean; deleted: number } {
+  removeByScope(scope: AgentScope, options: ConversationChangeOptions = {}): { success: boolean; deleted: number } {
     const db = this.getDb()
     const accountId = this.getAccountId()
     const filters = ['account_id = @accountId', 'scope_kind = @scopeKind']
@@ -390,10 +440,11 @@ export class AgentConversationStore {
     }
 
     const rows = db.prepare(`
-      SELECT id FROM agent_conversations
+      SELECT * FROM agent_conversations
       WHERE ${filters.join(' AND ')}
-    `).all(params) as Array<{ id: number }>
-    const ids = rows.map((row) => Number(row.id)).filter((id) => Number.isFinite(id) && id > 0)
+    `).all(params) as any[]
+    const records = rows.map((row) => this.mapConversation(row))
+    const ids = records.map((row) => Number(row.id)).filter((id) => Number.isFinite(id) && id > 0)
     if (ids.length === 0) return { success: true, deleted: 0 }
 
     const tx = db.transaction((conversationIds: number[]) => {
@@ -405,20 +456,24 @@ export class AgentConversationStore {
       }
     })
     tx(ids)
+    const deletedAt = Date.now()
+    for (const record of records) this.emitChange('deleted', { ...record, updatedAt: deletedAt }, options)
     return { success: true, deleted: ids.length }
   }
 
-  rename(id: number, title: string): AgentConversationRecord {
+  rename(id: number, title: string, options: ConversationChangeOptions = {}): AgentConversationRecord {
     const nextTitle = String(title || '新对话').trim().slice(0, 80) || '新对话'
     this.getDb().prepare(`
       UPDATE agent_conversations
       SET title = ?, updated_at = ?
       WHERE id = ?
     `).run(nextTitle, Date.now(), id)
-    return this.loadMeta(id)
+    const record = this.loadMeta(id)
+    this.emitChange('renamed', record, options)
+    return record
   }
 
-  updateMeta(id: number, patch: { scope?: AgentScope; modelProvider?: string; modelId?: string }): AgentConversationRecord {
+  updateMeta(id: number, patch: { scope?: AgentScope; modelProvider?: string; modelId?: string }, options: ConversationChangeOptions = {}): AgentConversationRecord {
     const scope = patch.scope ? scopeColumns(patch.scope) : null
     const db = this.getDb()
     const current = this.loadMeta(id)
@@ -429,17 +484,19 @@ export class AgentConversationStore {
       WHERE id = ?
     `).run(
       scope?.kind || current.scope.kind,
-      scope ? scope.sessionId : (current.scope.kind === 'session' ? current.scope.sessionId : null),
-      scope ? scope.displayName : (current.scope.kind === 'session' ? current.scope.displayName || null : null),
+      scope ? scope.sessionId : ((current.scope.kind === 'session' || current.scope.kind === 'persona') ? current.scope.sessionId : null),
+      scope ? scope.displayName : ((current.scope.kind === 'session' || current.scope.kind === 'persona') ? current.scope.displayName || null : null),
       patch.modelProvider ?? current.modelProvider,
       patch.modelId ?? current.modelId,
       Date.now(),
       id,
     )
-    return this.loadMeta(id)
+    const record = this.loadMeta(id)
+    this.emitChange('metadata-updated', record, options)
+    return record
   }
 
-  append(id: number, messages: UIMessage[]): AgentConversationRecord {
+  append(id: number, messages: UIMessage[], options: ConversationChangeOptions = {}): AgentConversationRecord {
     const db = this.getDb()
     const insert = db.prepare(`
       INSERT INTO agent_messages (conversation_id, role, ui_message_json, created_at)
@@ -452,10 +509,12 @@ export class AgentConversationStore {
       db.prepare('UPDATE agent_conversations SET updated_at = ? WHERE id = ?').run(Date.now(), id)
     })
     tx(messages)
-    return this.loadMeta(id)
+    const record = this.loadMeta(id)
+    if (messages.length > 0) this.emitChange('messages-appended', record, options)
+    return record
   }
 
-  replaceMessages(id: number, messages: UIMessage[]): AgentConversationRecord {
+  replaceMessages(id: number, messages: UIMessage[], options: ConversationChangeOptions = {}): AgentConversationRecord {
     const db = this.getDb()
     const insert = db.prepare(`
       INSERT INTO agent_messages (conversation_id, role, ui_message_json, created_at)
@@ -470,7 +529,9 @@ export class AgentConversationStore {
       db.prepare('UPDATE agent_conversations SET updated_at = ? WHERE id = ?').run(Date.now(), id)
     })
     tx(messages)
-    return this.loadMeta(id)
+    const record = this.loadMeta(id)
+    this.emitChange('messages-replaced', record, options)
+    return record
   }
 
   getLast(scope?: AgentScope): AgentConversationRecord | null {

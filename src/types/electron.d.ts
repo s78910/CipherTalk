@@ -30,6 +30,30 @@ export interface WebSearchConfig {
   maxResults: number
 }
 
+
+export type AgentConversationChangeType =
+  | 'created'
+  | 'messages-appended'
+  | 'messages-replaced'
+  | 'renamed'
+  | 'metadata-updated'
+  | 'deleted'
+
+export interface AgentConversationUpdatedEvent {
+  id: number
+  accountId?: string
+  scope?: unknown
+  title?: string
+  modelProvider?: string
+  modelId?: string
+  source?: string
+  externalId?: string | null
+  createdAt?: number
+  updatedAt?: number
+  changeType: AgentConversationChangeType
+  originClientId?: string | null
+}
+
 export type TtsProviderId = 'xiaomi' | 'volcengine' | 'aliyun-qwen'
 export type TtsProtocol = 'xiaomi-mimo-tts' | 'volcengine-bidirectional' | 'aliyun-qwen-realtime'
 
@@ -1383,11 +1407,13 @@ export interface ElectronAPI {
     listConversations: (scope?: unknown) => Promise<{ success: boolean; conversations?: unknown[]; error?: string }>
     loadConversation: (id: number) => Promise<{ success: boolean; conversation?: unknown; error?: string }>
     createConversation: (payload: unknown) => Promise<{ success: boolean; conversation?: unknown; error?: string }>
-    deleteConversation: (id: number) => Promise<{ success: boolean; error?: string }>
+    deleteConversation: (idOrPayload: number | { id?: number; originClientId?: string | null }) => Promise<{ success: boolean; error?: string }>
     deleteConversationsByScope: (scope: unknown) => Promise<{ success: boolean; deleted?: number; error?: string }>
     renameConversation: (id: number, title: string) => Promise<{ success: boolean; conversation?: unknown; error?: string }>
-    saveConversationMessages: (payload: unknown) => Promise<{ success: boolean; conversation?: unknown; error?: string }>
+    saveConversationMessages: (payload: unknown) => Promise<{ success: boolean; conversation?: unknown; staleMerged?: boolean; error?: string }>
     getLastConversation: (scope?: unknown) => Promise<{ success: boolean; conversation?: unknown; error?: string }>
+    sendConversationReplyToWechat: (payload: { conversationId: number; messageId: string; bubbles: string[] }) => Promise<{ success: boolean; sent?: boolean; skipped?: boolean; error?: string }>
+    onConversationUpdated: (callback: (event: AgentConversationUpdatedEvent) => void) => () => void
   }
   agentWorkspace: {
     selectWorkspace: () => Promise<{ success: boolean; canceled?: boolean; state?: CodeWorkspaceState; error?: string }>

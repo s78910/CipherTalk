@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef, useCallback, useLayoutEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Tooltip } from '@heroui/react'
-import { ZoomIn, ZoomOut, RotateCw, RotateCcw, ChevronLeft, ChevronRight } from 'lucide-react'
+import { ArrowRotateLeft, ArrowRotateRight, ChevronLeft, ChevronRight, MagnifierMinus, MagnifierPlus } from '@gravity-ui/icons'
 import { LivePhotoIcon } from '../components/LivePhotoIcon'
 import type { ImageListItem } from '../types/electron'
 import { createLiquidGlassMap, type GlassFilterMap } from '../utils/liquidGlass'
@@ -552,7 +552,7 @@ export default function ImageWindow() {
                     <Tooltip delay={0} closeDelay={60}>
                         <Tooltip.Trigger>
                             <button onClick={handleZoomOut} aria-label="缩小">
-                                <ZoomOut size={16} />
+                                <MagnifierMinus width={16} height={16} />
                             </button>
                         </Tooltip.Trigger>
                         <Tooltip.Content placement="top">缩小（-）</Tooltip.Content>
@@ -561,7 +561,7 @@ export default function ImageWindow() {
                     <Tooltip delay={0} closeDelay={60}>
                         <Tooltip.Trigger>
                             <button onClick={handleZoomIn} aria-label="放大">
-                                <ZoomIn size={16} />
+                                <MagnifierPlus width={16} height={16} />
                             </button>
                         </Tooltip.Trigger>
                         <Tooltip.Content placement="top">放大（+）</Tooltip.Content>
@@ -570,7 +570,7 @@ export default function ImageWindow() {
                     <Tooltip delay={0} closeDelay={60}>
                         <Tooltip.Trigger>
                             <button onClick={handleRotateCcw} aria-label="逆时针旋转">
-                                <RotateCcw size={16} />
+                                <ArrowRotateLeft width={16} height={16} />
                             </button>
                         </Tooltip.Trigger>
                         <Tooltip.Content placement="top">逆时针旋转</Tooltip.Content>
@@ -578,7 +578,7 @@ export default function ImageWindow() {
                     <Tooltip delay={0} closeDelay={60}>
                         <Tooltip.Trigger>
                             <button onClick={handleRotate} aria-label="顺时针旋转">
-                                <RotateCw size={16} />
+                                <ArrowRotateRight width={16} height={16} />
                             </button>
                         </Tooltip.Trigger>
                         <Tooltip.Content placement="top">顺时针旋转（R）</Tooltip.Content>
@@ -632,12 +632,12 @@ export default function ImageWindow() {
                     <>
                         {canGoPrev && (
                             <button className="nav-btn nav-prev" onClick={goPrev}>
-                                <ChevronLeft size={28} />
+                                <ChevronLeft width={28} height={28} />
                             </button>
                         )}
                         {canGoNext && (
                             <button className="nav-btn nav-next" onClick={goNext}>
-                                <ChevronRight size={28} />
+                                <ChevronRight width={28} height={28} />
                             </button>
                         )}
                     </>

@@ -24,7 +24,7 @@ import {
   Typography,
 } from '@heroui/react'
 import JSZip from 'jszip'
-import { Copy, Download, Save, Plus, Trash2, Eye, Pencil, Plug, Unplug, Upload, FileCode, X } from 'lucide-react'
+import { ArrowDownToLine, ArrowUpToLine, Copy, Eye, FileCode, FloppyDisk, Pencil, PlugConnection, PlugWire, Plus, TrashBin, Xmark } from '@gravity-ui/icons'
 import * as configService from '../services/config'
 
 type McpLaunchConfig = {
@@ -499,7 +499,7 @@ function McpPage() {
   const renderCloseFormButton = () => (
     <Tooltip delay={0}>
       <Button isIconOnly variant="tertiary" size="sm" onPress={closeServerPanel}>
-        <X size={16} />
+        <Xmark width={16} height={16} />
       </Button>
       <Tooltip.Content>关闭表单</Tooltip.Content>
     </Tooltip>
@@ -687,7 +687,7 @@ function McpPage() {
   const renderDeleteDialog = (type: 'skill' | 'server', name: string, isDisabled = false) => (
     <AlertDialog>
       <Button variant="danger" size="sm" isDisabled={isDisabled}>
-        <Trash2 size={14} />
+        <TrashBin width={14} height={14} />
         删除
       </Button>
       <AlertDialog.Backdrop>
@@ -726,7 +726,7 @@ function McpPage() {
     <Surface key={skill.name} variant="transparent" className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
       <div className="min-w-0">
         <div className="flex items-center gap-2">
-          <FileCode size={18} />
+          <FileCode width={18} height={18} />
           <Typography type="body-sm" weight="semibold" truncate>{skill.name}</Typography>
           <Chip variant="secondary" size="sm">v{skill.version}</Chip>
           {skill.builtin && <Chip color="accent" variant="primary" size="sm">内置</Chip>}
@@ -736,7 +736,7 @@ function McpPage() {
       {variant === 'external' ? (
         <ButtonGroup variant="tertiary" size="sm">
           <Button onPress={() => openSkillPanel(skill.name, 'preview')}>
-            <Eye size={14} />
+            <Eye width={14} height={14} />
             预览
           </Button>
           <Button
@@ -744,19 +744,19 @@ function McpPage() {
             onPress={() => exportSkillZip(skill.name)}
           >
             <ButtonGroup.Separator />
-            <Download size={14} />
+            <ArrowDownToLine width={14} height={14} />
             {exportingSkillZip === skill.name ? '导出中...' : '导出 zip'}
           </Button>
         </ButtonGroup>
       ) : (
         <div className="flex items-center gap-2">
           <Button variant="tertiary" size="sm" onPress={() => openSkillPanel(skill.name, 'preview')}>
-            <Eye size={14} />
+            <Eye width={14} height={14} />
             预览
           </Button>
           {!skill.builtin && (
             <Button variant="tertiary" size="sm" onPress={() => openSkillPanel(skill.name, 'edit')}>
-              <Pencil size={14} />
+              <Pencil width={14} height={14} />
               编辑
             </Button>
           )}
@@ -766,7 +766,7 @@ function McpPage() {
             isDisabled={exportingSkillZip === skill.name}
             onPress={() => exportSkillZip(skill.name)}
           >
-            <Download size={14} />
+            <ArrowDownToLine width={14} height={14} />
             {exportingSkillZip === skill.name ? '导出中...' : '导出'}
           </Button>
           {!skill.builtin && renderDeleteDialog('skill', skill.name)}
@@ -787,7 +787,7 @@ function McpPage() {
         <Surface variant="transparent" className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <Plug size={16} />
+              <PlugConnection width={16} height={16} />
               <Typography type="body-sm" weight="semibold" truncate>{srv.name}</Typography>
               <Chip variant="secondary" size="sm">{srv.config.type.toUpperCase()}</Chip>
               {renderStatusChip(srv.status)}
@@ -818,21 +818,21 @@ function McpPage() {
             {srv.status === 'connected' ? (
               <Tooltip delay={0}>
                 <Button isIconOnly variant="tertiary" size="sm" isDisabled={Boolean(serverBusy[srv.name])} onPress={() => disconnectServer(srv.name)}>
-                  {serverBusy[srv.name] === 'disconnect' ? <Spinner size="sm" color="current" /> : <Unplug size={14} />}
+                  {serverBusy[srv.name] === 'disconnect' ? <Spinner size="sm" color="current" /> : <PlugWire width={14} height={14} />}
                 </Button>
                 <Tooltip.Content>断开</Tooltip.Content>
               </Tooltip>
             ) : (
               <Tooltip delay={0}>
                 <Button isIconOnly variant="tertiary" size="sm" isDisabled={isBusy} onPress={() => connectServer(srv.name)}>
-                  {serverBusy[srv.name] === 'connect' || srv.status === 'connecting' ? <Spinner size="sm" color="current" /> : <Plug size={14} />}
+                  {serverBusy[srv.name] === 'connect' || srv.status === 'connecting' ? <Spinner size="sm" color="current" /> : <PlugConnection width={14} height={14} />}
                 </Button>
                 <Tooltip.Content>连接</Tooltip.Content>
               </Tooltip>
             )}
             <Tooltip delay={0}>
               <Button isIconOnly variant="tertiary" size="sm" isDisabled={isBusy} onPress={() => openEditServer(srv)}>
-                <Pencil size={14} />
+                <Pencil width={14} height={14} />
               </Button>
               <Tooltip.Content>编辑</Tooltip.Content>
             </Tooltip>
@@ -865,7 +865,7 @@ function McpPage() {
                   </div>
                   <Tooltip delay={0}>
                     <Button variant="primary" isIconOnly isPending={saving} isDisabled={loading || saving} onPress={handleSave}>
-                      <Save size={16} />
+                      <FloppyDisk width={16} height={16} />
                     </Button>
                     <Tooltip.Content>保存配置</Tooltip.Content>
                   </Tooltip>
@@ -917,7 +917,7 @@ function McpPage() {
                   </Description>
                 </div>
                 <Button variant="tertiary" onPress={() => copyText(mcpServerJsonTemplate, 'mcpServers 配置')}>
-                  <Copy size={14} />
+                  <Copy width={14} height={14} />
                   复制 mcpServers 配置
                 </Button>
               </section>
@@ -951,7 +951,7 @@ function McpPage() {
                     <Description>连接外部 MCP 服务器并调用其工具。</Description>
                   </div>
                   <Button variant="tertiary" size="sm" onPress={openAddServer}>
-                    {serverPanelOpen && !editingServer ? <><X size={14} /> 收起</> : <><Plus size={14} /> 添加服务器</>}
+                    {serverPanelOpen && !editingServer ? <><Xmark width={14} height={14} /> 收起</> : <><Plus width={14} height={14} /> 添加服务器</>}
                   </Button>
                 </div>
                 {mcpServers.length === 0 && (
@@ -976,12 +976,12 @@ function McpPage() {
                   </div>
                   <ButtonGroup variant="tertiary" size="sm">
                     <Button onPress={downloadSkillTemplate}>
-                      <Download size={14} />
+                      <ArrowDownToLine width={14} height={14} />
                       下载模板
                     </Button>
                     <Button onPress={importSkill}>
                       <ButtonGroup.Separator />
-                      <Upload size={14} />
+                      <ArrowUpToLine width={14} height={14} />
                       导入
                     </Button>
                   </ButtonGroup>
@@ -1008,7 +1008,7 @@ function McpPage() {
             <Modal.Dialog>
               <Modal.CloseTrigger />
               <Modal.Header>
-                <Modal.Icon><Plug size={20} /></Modal.Icon>
+                <Modal.Icon><PlugConnection width={20} height={20} /></Modal.Icon>
                 <Modal.Heading>工具预览: {toolDialogServer}</Modal.Heading>
               </Modal.Header>
               <Modal.Body>{toolDialogServer && renderToolsContent(toolDialogServer)}</Modal.Body>
@@ -1030,7 +1030,7 @@ function McpPage() {
             <Modal.Dialog>
               <Modal.CloseTrigger />
               <Modal.Header>
-                <Modal.Icon><FileCode size={20} /></Modal.Icon>
+                <Modal.Icon><FileCode width={20} height={20} /></Modal.Icon>
                 <Modal.Heading>编辑 Skill: {skillDialog?.name}</Modal.Heading>
               </Modal.Header>
               <Modal.Body>

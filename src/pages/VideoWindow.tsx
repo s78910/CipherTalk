@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Play, Pause, PlayCircle, Volume2, VolumeX, RotateCcw } from 'lucide-react'
+import { ArrowRotateLeft, Pause, Play, Volume, VolumeXmark } from '@gravity-ui/icons'
 import './VideoWindow.css'
 
 export default function VideoWindow() {
@@ -147,7 +147,7 @@ export default function VideoWindow() {
                 />
                 {!isPlaying && !isLoading && !error && (
                     <div className="play-overlay">
-                        <Play size={48} fill="currentColor" />
+                        <Play width={48} height={48} fill="currentColor" />
                     </div>
                 )}
 
@@ -165,10 +165,10 @@ export default function VideoWindow() {
                     <div className="controls-row">
                         <div className="controls-left">
                             <button onClick={togglePlay} title={isPlaying ? '暂停 (空格)' : '播放 (空格)'}>
-                                {isPlaying ? <Pause size={18} /> : <Play size={18} />}
+                                {isPlaying ? <Pause width={18} height={18} /> : <Play width={18} height={18} />}
                             </button>
                             <button onClick={handleReplay} title="重新播放">
-                                <RotateCcw size={16} />
+                                <ArrowRotateLeft width={16} height={16} />
                             </button>
                             <span className="time-display">
                                 {formatTime(currentTime)} / {formatTime(duration)}
@@ -178,7 +178,7 @@ export default function VideoWindow() {
                         <div className="controls-right">
                             <div className="volume-control">
                                 <button onClick={toggleMute} title={isMuted ? '取消静音 (M)' : '静音 (M)'}>
-                                    {isMuted || volume === 0 ? <VolumeX size={16} /> : <Volume2 size={16} />}
+                                    {isMuted || volume === 0 ? <VolumeXmark width={16} height={16} /> : <Volume width={16} height={16} />}
                                 </button>
                                 <input
                                     type="range"

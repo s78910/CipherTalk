@@ -4,7 +4,7 @@ import { Alert, Button, Chip, ScrollShadow, Spinner, Typography } from '@heroui/
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 import { bundledLanguages, type BundledLanguage } from 'shiki'
-import { ChevronRight, File, Folder, FolderOpen } from 'lucide-react'
+import { ChevronRight, File, Folder, FolderOpen } from '@gravity-ui/icons'
 import { CodeBlock } from '../components/ai-elements/code-block'
 import type { SkillFileItem } from '../types/electron'
 

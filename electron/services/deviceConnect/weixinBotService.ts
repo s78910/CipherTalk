@@ -777,6 +777,7 @@ class WeixinBotService {
   private modes: Record<string, WechatConversationMode> = {}
   private pendingPersonaSelections = new Map<string, PendingPersonaSelection>()
   private pendingPersonaQueues = new Map<string, PendingPersonaQueue>()
+  private sentConversationReplyMessageIds = new Set<string>()
 
   // logger 实时从 ctx 取，不缓存：init 在建窗(setLogService)之前注册，缓存会永久拿到 null
   private get logger(): BotLogger | null {
@@ -804,7 +805,59 @@ class WeixinBotService {
     }
   }
 
-  /** 开始扫码连接：取二维码 → 渲染成图 → 推前端 → 后台轮询确认。 */
+  /**
+   * Send a desktop-generated assistant reply back to the bound WeChat bot conversation.
+   * Only external conversations with source=wechat/wechat-persona are allowed; messageId prevents resend on history reload.
+   */
+  async sendConversationReplyToWechat(input: {
+    conversationId: number
+    messageId: string
+    bubbles: string[]
+    contextToken?: string
+  }): Promise<{ success: boolean; sent?: boolean; skipped?: boolean; error?: string }> {
+    const conversationId = Number(input.conversationId)
+    const messageId = String(input.messageId || '').trim()
+    const bubbles = normalizeWechatTextBubbles(input.bubbles.map((bubble) => String(bubble || '').trim()).filter(Boolean))
+    if (!Number.isFinite(conversationId) || conversationId <= 0) return { success: false, error: 'Invalid conversation ID' }
+    if (!messageId) return { success: false, error: 'Missing message ID' }
+    if (bubbles.length === 0) return { success: true, skipped: true }
+
+    const sentKey = `${conversationId}:${messageId}`
+    if (this.sentConversationReplyMessageIds.has(sentKey)) return { success: true, skipped: true }
+    if (!this.session) return { success: false, error: 'WeChat bot is not connected' }
+
+    const { agentConversationStore } = await import('../agent/conversationStore')
+    const conversation = agentConversationStore.load(conversationId)
+    if (!conversation) return { success: false, error: 'AI conversation not found' }
+
+    const message = conversation.messages.find((item: any) => String(item?.id || '') === messageId)
+    if (!message || message.role !== 'assistant') return { success: false, error: 'Only saved assistant messages can be pushed to WeChat' }
+
+    const source = String(conversation.source || '')
+    const externalId = String(conversation.externalId || '').trim()
+    let toUserId = ''
+    if (source === 'wechat') {
+      toUserId = externalId
+    } else if (source === 'wechat-persona') {
+      toUserId = externalId.split(':')[0] || ''
+    } else {
+      return { success: true, skipped: true }
+    }
+    if (!toUserId) return { success: false, error: 'Conversation is not bound to a WeChat bot user' }
+
+    await this.sendTextBubbles(toUserId, bubbles, input.contextToken)
+    this.sentConversationReplyMessageIds.add(sentKey)
+    this.logger?.warn('WechatBot', 'Desktop assistant reply pushed to WeChat bot', {
+      conversationId,
+      messageId,
+      source,
+      toUserId,
+      bubbleCount: bubbles.length,
+    })
+    return { success: true, sent: true }
+  }
+
+  /** Start QR connection: fetch QR code, render, push to renderer, then poll confirmation. */
   async startConnect(): Promise<{ success: boolean; qrcodeImage?: string; error?: string }> {
     try {
       this.cancelConnect()

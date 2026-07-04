@@ -18,10 +18,14 @@ export function buildFallbackConversationTitle(text: string): string {
 
 export type AgentConversationRecord = {
   id: number
+  accountId?: string
   title: string
   scope?: AgentScope
   modelProvider?: string
   modelId?: string
+  source?: string
+  externalId?: string | null
+  createdAt?: number
   updatedAt: number
 }
 
@@ -62,13 +66,18 @@ export function normalizeConversationRecord(value: any): AgentConversationRecord
   if (!Number.isFinite(id) || id <= 0) return null
   return {
     id,
+    accountId: value?.accountId ? String(value.accountId) : undefined,
     title: String(value?.title || '新对话'),
     scope: value?.scope,
     modelProvider: value?.modelProvider,
     modelId: value?.modelId,
+    source: typeof value?.source === 'string' ? value.source : undefined,
+    externalId: value?.externalId == null ? null : String(value.externalId),
+    createdAt: Number(value?.createdAt || 0) || undefined,
     updatedAt: Number(value?.updatedAt || Date.now()),
   }
 }
+
 
 export function normalizeLoadedConversation(value: any): AgentConversationLoaded | null {
   const record = normalizeConversationRecord(value)

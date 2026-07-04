@@ -30,12 +30,13 @@ import { PersonaChatTransport } from '../features/aiagent/transport/personaChatT
 import { cn } from '../lib/utils'
 import { useTtsSpeaker } from '../lib/ttsPlayer'
 import { parseWechatEmoji } from '../utils/wechatEmoji'
-import type { PersonaBuildProgressInfo, PersonaRecordInfo } from '../types/electron'
+import type { AgentConversationUpdatedEvent, PersonaBuildProgressInfo, PersonaRecordInfo } from '../types/electron'
 
 type Phase = 'loading' | 'confirm' | 'building' | 'chat'
 
 /** 历史对话记录（含微信分身归档）：listConversations 返回的会话元数据子集。 */
-type PersonaConversationRecord = { id: number; title: string; source: string; updatedAt: number }
+type PersonaConversationRecord = { id: number; title: string; source: string; updatedAt: number; scope?: unknown }
+type PersonaLoadedConversation = PersonaConversationRecord & { messages: UIMessage[] }
 
 type PersonaChatPageProps = {
   sessionId?: string
@@ -392,10 +393,19 @@ export default function PersonaChatPage({ sessionId: sessionIdProp, embedded = f
   const scrollFrameRef = useRef<number | null>(null)
   const scrollTimersRef = useRef<Array<ReturnType<typeof setTimeout>>>([])
   const lastSavedCountRef = useRef(0)
+  const conversationIdRef = useRef<number | null>(null)
+  const conversationUpdatedAtRef = useRef(0)
+  const pendingConversationReloadRef = useRef<number | null>(null)
+  const clientIdRef = useRef(`persona-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+  const busyRef = useRef(false)
+  const historyOpenRef = useRef(false)
 
   const transport = useMemo(() => new PersonaChatTransport(() => sessionId), [sessionId])
   const { messages, sendMessage, setMessages, status, stop, error } = useChat({ transport, experimental_throttle: 50 })
   const busy = status === 'submitted' || status === 'streaming'
+  conversationIdRef.current = conversationId
+  busyRef.current = busy
+  historyOpenRef.current = historyOpen
   const stopRef = useRef(stop)
   const stopVoiceRef = useRef<() => void>(() => {})
   const setMessagesRef = useRef(setMessages)
@@ -497,6 +507,9 @@ export default function PersonaChatPage({ sessionId: sessionIdProp, embedded = f
     loadingOlderRef.current = false
     visibleMessageCountRef.current = INITIAL_RENDERED_MESSAGE_COUNT
     lastSavedCountRef.current = 0
+    conversationIdRef.current = null
+    conversationUpdatedAtRef.current = 0
+    pendingConversationReloadRef.current = null
     setDisplayName('')
     setAvatarUrl(undefined)
     setMyAvatarUrl(undefined)
@@ -594,6 +607,39 @@ export default function PersonaChatPage({ sessionId: sessionIdProp, embedded = f
     setPendingTexts([])
   }
 
+  const restoreConversation = useCallback((conv: PersonaLoadedConversation) => {
+    const id = Number(conv.id)
+    if (!Number.isFinite(id) || id <= 0) return
+    const nextMessages = Array.isArray(conv.messages) ? conv.messages : []
+    setMessages(nextMessages)
+    setConversationId(id)
+    conversationIdRef.current = id
+    conversationUpdatedAtRef.current = Number(conv.updatedAt || Date.now())
+    lastSavedCountRef.current = nextMessages.length
+    pendingConversationReloadRef.current = null
+    setPlayedVoice(new Set())
+    setRevealedVoice(new Set())
+    setVisibleMessageCount(INITIAL_RENDERED_MESSAGE_COUNT)
+  }, [setMessages])
+
+  const loadConversationIntoState = useCallback(async (id: number) => {
+    const res = await window.electronAPI.agent.loadConversation(id)
+    const conv = res.success && res.conversation
+      ? (res.conversation as PersonaLoadedConversation)
+      : null
+    if (!conv) {
+      throw new Error(res.error || '读取对话记录失败')
+    }
+    restoreConversation(conv)
+  }, [restoreConversation])
+
+  const refreshHistory = useCallback(async () => {
+    const res = await window.electronAPI.agent.listConversations({ kind: 'persona', sessionId })
+    if (res.success && Array.isArray(res.conversations)) {
+      setHistoryRecords(res.conversations as PersonaConversationRecord[])
+    }
+  }, [sessionId])
+
   // 卸载时清掉待发计时器
   useEffect(() => () => {
     if (flushTimerRef.current) clearTimeout(flushTimerRef.current)
@@ -668,29 +714,16 @@ export default function PersonaChatPage({ sessionId: sessionIdProp, embedded = f
           if (!meta || cancelled) return
           const loaded = await window.electronAPI.agent.loadConversation(meta.id)
           const conv = loaded.success && loaded.conversation
-            ? (loaded.conversation as { id: number; messages: UIMessage[] })
+            ? (loaded.conversation as PersonaLoadedConversation)
             : null
-          if (conv && !cancelled) {
-            setConversationId(conv.id)
-            lastSavedCountRef.current = conv.messages.length
-            setMessages(conv.messages)
-            // 历史里的语音视为已听过：红点只给本次会话新收到的语音
-            const played = new Set<string>()
-            for (const message of conv.messages) {
-              if (message.role !== 'assistant') continue
-              messageTextParts(message).forEach((raw, index) => {
-                if (parseBubble(raw).isVoice) played.add(`${message.id}:${index}`)
-              })
-            }
-            setPlayedVoice(played)
-          }
+          if (conv && !cancelled) restoreConversation(conv)
         } catch { /* 恢复失败就从空对话开始 */ }
       } else {
         setPhase('confirm')
       }
     })
     return () => { cancelled = true }
-  }, [sessionId, setMessages])
+  }, [restoreConversation, sessionId])
 
   // 画像构建进度
   useEffect(() => {
@@ -700,14 +733,67 @@ export default function PersonaChatPage({ sessionId: sessionIdProp, embedded = f
   }, [sessionId])
 
   // 每轮结束保存对话；保存后触发对话反思（主进程攒够未反思消息才真正跑，提炼导演笔记）
+  // 保存时携带当前加载版本；如果数据库已有外部新消息，主进程会合并后再写回。
   useEffect(() => {
     if (status !== 'ready' || !conversationId || messages.length === 0) return
     if (messages.length === lastSavedCountRef.current) return
     lastSavedCountRef.current = messages.length
-    void window.electronAPI.agent.saveConversationMessages({ id: conversationId, messages })
-      .then(() => window.electronAPI.persona.reflect({ sessionId, conversationId }))
-      .catch(() => { /* 反思失败不影响聊天 */ })
-  }, [status, conversationId, messages, sessionId])
+    const baseUpdatedAt = conversationUpdatedAtRef.current
+    void window.electronAPI.agent.saveConversationMessages({
+      id: conversationId,
+      messages,
+      baseUpdatedAt,
+      mergeIfStale: true,
+      originClientId: clientIdRef.current,
+    })
+      .then(async (result: any) => {
+        if (result?.success && result.conversation) {
+          conversationUpdatedAtRef.current = Number(result.conversation.updatedAt || conversationUpdatedAtRef.current)
+          if (result.staleMerged) await loadConversationIntoState(conversationId)
+        }
+        return window.electronAPI.persona.reflect({ sessionId, conversationId })
+      })
+      .catch(() => { /* 保存失败不打断聊天 */ })
+  }, [status, conversationId, messages, sessionId, loadConversationIntoState])
+
+  useEffect(() => {
+    return window.electronAPI.agent.onConversationUpdated((event: AgentConversationUpdatedEvent) => {
+      const eventId = Number(event?.id || 0)
+      if (!eventId) return
+      const eventScope = event?.scope as { kind?: string; sessionId?: string } | undefined
+      const matchesPersona = eventScope?.kind === 'persona' && eventScope.sessionId === sessionId
+      if (matchesPersona && historyOpenRef.current) void refreshHistory()
+
+      if (eventId !== conversationIdRef.current) return
+      if (event.changeType === 'deleted') {
+        setMessages([])
+        setConversationId(null)
+        conversationIdRef.current = null
+        conversationUpdatedAtRef.current = 0
+        lastSavedCountRef.current = 0
+        pendingConversationReloadRef.current = null
+        setPlayedVoice(new Set())
+        setRevealedVoice(new Set())
+        return
+      }
+      if (event.originClientId && event.originClientId === clientIdRef.current) return
+      conversationUpdatedAtRef.current = Number(event.updatedAt || conversationUpdatedAtRef.current)
+      if (busyRef.current) {
+        pendingConversationReloadRef.current = eventId
+        return
+      }
+      void loadConversationIntoState(eventId)
+    })
+  }, [loadConversationIntoState, refreshHistory, sessionId])
+
+  useEffect(() => {
+    if (status !== 'ready' || busy) return
+    const pendingId = pendingConversationReloadRef.current
+    if (!pendingId) return
+    pendingConversationReloadRef.current = null
+    void loadConversationIntoState(pendingId)
+  }, [busy, loadConversationIntoState, status])
+
 
   const handleBuild = async () => {
     setPhase('building')
@@ -731,7 +817,10 @@ export default function PersonaChatPage({ sessionId: sessionIdProp, embedded = f
     setPersona(null)
     setMessages([])
     setConversationId(null)
+    conversationIdRef.current = null
     lastSavedCountRef.current = 0
+    conversationUpdatedAtRef.current = 0
+    pendingConversationReloadRef.current = null
     setPhase('confirm')
     onPersonaChanged?.()
   }
@@ -844,6 +933,9 @@ export default function PersonaChatPage({ sessionId: sessionIdProp, embedded = f
       setMessages([])
       setConversationId(null)
       lastSavedCountRef.current = 0
+      conversationIdRef.current = null
+      conversationUpdatedAtRef.current = 0
+      pendingConversationReloadRef.current = null
     } catch (e) {
       window.alert(e instanceof Error ? e.message : String(e))
     } finally {
@@ -851,14 +943,9 @@ export default function PersonaChatPage({ sessionId: sessionIdProp, embedded = f
     }
   }
 
-  const refreshHistory = async () => {
-    const res = await window.electronAPI.agent.listConversations({ kind: 'persona', sessionId })
-    if (res.success && Array.isArray(res.conversations)) {
-      setHistoryRecords(res.conversations as PersonaConversationRecord[])
-    }
-  }
 
   const handleHistoryOpenChange = (open: boolean) => {
+    historyOpenRef.current = open
     setHistoryOpen(open)
     if (open) void refreshHistory()
   }
@@ -866,29 +953,11 @@ export default function PersonaChatPage({ sessionId: sessionIdProp, embedded = f
   /** 把历史里某条对话（含微信分身归档）载入当前窗口继续聊。 */
   const openConversation = async (id: number) => {
     setHistoryOpen(false)
-    if (id === conversationId) return
+    historyOpenRef.current = false
     if (busy) stop()
     clearPending()
     stopVoice()
-    const loaded = await window.electronAPI.agent.loadConversation(id)
-    const conv = loaded.success && loaded.conversation
-      ? (loaded.conversation as { id: number; messages: UIMessage[] })
-      : null
-    if (!conv) return
-    setConversationId(conv.id)
-    lastSavedCountRef.current = conv.messages.length
-    setMessages(conv.messages)
-    // 历史里的语音视为已听过：红点只给本次会话新收到的语音
-    const played = new Set<string>()
-    for (const message of conv.messages) {
-      if (message.role !== 'assistant') continue
-      messageTextParts(message).forEach((raw, index) => {
-        if (parseBubble(raw).isVoice) played.add(`${message.id}:${index}`)
-      })
-    }
-    setPlayedVoice(played)
-    setRevealedVoice(new Set())
-    setVisibleMessageCount(INITIAL_RENDERED_MESSAGE_COUNT)
+    await loadConversationIntoState(id)
   }
 
   /** 开启一段全新对话：清空当前消息，conversationId 留空，首次发送时再懒创建。 */
@@ -899,7 +968,10 @@ export default function PersonaChatPage({ sessionId: sessionIdProp, embedded = f
     stopVoice()
     setMessages([])
     setConversationId(null)
+    conversationIdRef.current = null
     lastSavedCountRef.current = 0
+    conversationUpdatedAtRef.current = 0
+    pendingConversationReloadRef.current = null
     setPlayedVoice(new Set())
     setRevealedVoice(new Set())
     setVisibleMessageCount(INITIAL_RENDERED_MESSAGE_COUNT)
@@ -915,7 +987,10 @@ export default function PersonaChatPage({ sessionId: sessionIdProp, embedded = f
     if (record.id === conversationId) {
       setMessages([])
       setConversationId(null)
+      conversationIdRef.current = null
       lastSavedCountRef.current = 0
+      conversationUpdatedAtRef.current = 0
+      pendingConversationReloadRef.current = null
       setPlayedVoice(new Set())
       setRevealedVoice(new Set())
     }
@@ -923,14 +998,18 @@ export default function PersonaChatPage({ sessionId: sessionIdProp, embedded = f
 
   const ensureConversation = async () => {
     inputValueRef.current = ''
-    if (!conversationId) {
+    if (!conversationIdRef.current) {
       try {
         const created = await window.electronAPI.agent.createConversation({
           scope: { kind: 'persona', sessionId, displayName },
           title: `${displayName || sessionId}的分身`,
+          originClientId: clientIdRef.current,
         })
         if (created.success && created.conversation) {
-          setConversationId((created.conversation as { id: number }).id)
+          const record = created.conversation as { id: number; updatedAt?: number }
+          setConversationId(record.id)
+          conversationIdRef.current = record.id
+          conversationUpdatedAtRef.current = Number(record.updatedAt || Date.now())
         }
       } catch { /* 创建失败不阻塞发送，本轮不持久化 */ }
     }

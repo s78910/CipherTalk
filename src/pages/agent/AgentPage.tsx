@@ -40,7 +40,7 @@ import { IpcChatTransport, type AgentModelConfig, type AgentProgressEvent, type 
 import { CODE_WORKSPACE_FILE_REF_MIME, CodeWorkspacePanel, CodeWorkspacePanelPopover, CodeWorkspaceSidebar, type CodeWorkspaceFileDragReference, type CodeWorkspacePanelTab } from './CodeWorkspacePanel'
 import * as configService from '@/services/config'
 import { useTtsSpeaker } from '@/lib/ttsPlayer'
-import type { CodeWorkspaceApprovalPolicy, CodeWorkspaceApprovalRequest, CodeWorkspaceEvent, CodeWorkspaceState } from '@/types/electron'
+import type { AgentConversationUpdatedEvent, CodeWorkspaceApprovalPolicy, CodeWorkspaceApprovalRequest, CodeWorkspaceEvent, CodeWorkspaceState } from '@/types/electron'
 import { REASONING_EFFORT_OPTIONS, reasoningEffortLabel } from './agentPromptPresets'
 import {
   AgentPromptPrimaryAction,
@@ -495,6 +495,12 @@ export default function AgentPage() {
   const lastStreamingSaveAtRef = useRef(0)
   const [modelOpen, setModelOpen] = useState(false)
   const busy = status === 'submitted' || status === 'streaming'
+  const clientIdRef = useRef(`agent-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+  const conversationUpdatedAtRef = useRef(0)
+  const pendingConversationReloadRef = useRef<number | null>(null)
+  const loadConversationByIdRef = useRef<((id: number, options?: { closeRecords?: boolean }) => Promise<boolean>) | null>(null)
+  const busyRef = useRef(false)
+  busyRef.current = busy
   const [memoryIntroStatus, setMemoryIntroStatus] = useState<AgentMemoryIntroStatus>('checking')
   const markMemoryIntroSatisfied = useCallback(() => {
     setMemoryIntroStatus('hidden')
@@ -786,12 +792,25 @@ export default function AgentPage() {
   ) => {
     if (!targetId || nextMessages.length === 0) return null
     const config = selectedModelConfigRef.current
+    const baseUpdatedAt = conversationUpdatedAtRef.current
     return window.electronAPI.agent.saveConversationMessages({
       id: targetId,
       messages: nextMessages,
       scope: nextScope,
       modelProvider: modelConfigProvider(config),
       modelId: modelConfigId(config),
+      baseUpdatedAt,
+      mergeIfStale: true,
+      originClientId: clientIdRef.current,
+    }).then((result) => {
+      if (result?.success && result.conversation) {
+        const record = normalizeConversationRecord(result.conversation)
+        if (record) conversationUpdatedAtRef.current = Number(record.updatedAt || conversationUpdatedAtRef.current)
+        if ((result as { staleMerged?: boolean }).staleMerged) {
+          void loadConversationByIdRef.current?.(targetId, { closeRecords: false })
+        }
+      }
+      return result
     })
   }, [])
 
@@ -861,10 +880,12 @@ export default function AgentPage() {
       title,
       modelProvider: modelConfigProvider(config),
       modelId: modelConfigId(config),
+      originClientId: clientIdRef.current,
     })
     const record = result.success ? normalizeConversationRecord(result.conversation) : null
     if (!record) return null
     applyConversationId(record.id)
+    conversationUpdatedAtRef.current = Number(record.updatedAt || Date.now())
     setConversationTitle(record.title)
     void refreshConversationRecords()
     return record.id
@@ -878,6 +899,8 @@ export default function AgentPage() {
     messagesRef.current = loaded.messages
     lastSavedMessagesRef.current = signatureAgentMessages(loaded.messages)
     applyConversationId(loaded.id)
+    conversationUpdatedAtRef.current = Number(loaded.updatedAt || Date.now())
+    pendingConversationReloadRef.current = null
     setConversationTitle(loaded.title)
     setTitleEditing(false)
     setTitleDraft('')
@@ -905,6 +928,54 @@ export default function AgentPage() {
     restoreLoadedConversation(loaded, options)
     return true
   }, [restoreLoadedConversation])
+
+  loadConversationByIdRef.current = loadConversationById
+
+
+  useEffect(() => {
+    return window.electronAPI.agent.onConversationUpdated((event: AgentConversationUpdatedEvent) => {
+      const eventId = Number(event?.id || 0)
+      if (!eventId) return
+
+      void refreshConversationRecords()
+      if (eventId !== conversationIdRef.current) return
+
+      if (event.changeType === 'deleted') {
+        setMessages([])
+        messagesRef.current = []
+        applyConversationId(null)
+        setConversationTitle('???')
+        setTitleEditing(false)
+        setTitleDraft('')
+        activeScopeRef.current = { kind: 'global' }
+        lastSavedMessagesRef.current = ''
+        conversationUpdatedAtRef.current = 0
+        pendingConversationReloadRef.current = null
+        setToolElapsedByKey({})
+        setAgentProgress([])
+        setAgentRunPending(false)
+        setSubAgentProgress([])
+        return
+      }
+
+      conversationUpdatedAtRef.current = Number(event.updatedAt || conversationUpdatedAtRef.current)
+      if (event.originClientId && event.originClientId === clientIdRef.current) return
+
+      if (busyRef.current) {
+        pendingConversationReloadRef.current = eventId
+        return
+      }
+      void loadConversationById(eventId, { closeRecords: false })
+    })
+  }, [applyConversationId, loadConversationById, refreshConversationRecords, setMessages])
+
+  useEffect(() => {
+    if (busy) return
+    const pendingId = pendingConversationReloadRef.current
+    if (!pendingId) return
+    pendingConversationReloadRef.current = null
+    void loadConversationById(pendingId, { closeRecords: false })
+  }, [busy, loadConversationById])
 
   const shareFilteredRecords = useMemo(() => {
     const keyword = shareSearch.trim().toLowerCase()
@@ -1027,6 +1098,8 @@ export default function AgentPage() {
     setAgentNotice('')
     activeScopeRef.current = { kind: 'global' }
     lastSavedMessagesRef.current = ''
+    conversationUpdatedAtRef.current = 0
+    pendingConversationReloadRef.current = null
     titleRequestSeqRef.current += 1
     applyConversationId(null)
     setRecordsOpen(false)
@@ -1054,6 +1127,8 @@ export default function AgentPage() {
         setTitleDraft('')
         activeScopeRef.current = { kind: 'global' }
         lastSavedMessagesRef.current = ''
+        conversationUpdatedAtRef.current = 0
+        pendingConversationReloadRef.current = null
         setToolElapsedByKey({})
         setAgentProgress([])
         setAgentRunPending(false)
@@ -1354,10 +1429,11 @@ export default function AgentPage() {
     }
     if (!text && message.files.length === 0) return
 
-    const submitScope: AgentScope =
+    const computedScope: AgentScope =
       currentMentions.length === 1
         ? { kind: 'session', sessionId: currentMentions[0].username, displayName: currentMentions[0].displayName }
         : { kind: 'global' }
+    const submitScope: AgentScope = conversationIdRef.current ? activeScopeRef.current : computedScope
     activeScopeRef.current = submitScope
     submitScopeRef.current = submitScope
     runIsPlanRef.current = planModeRef.current

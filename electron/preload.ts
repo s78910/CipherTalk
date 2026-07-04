@@ -197,16 +197,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('agent:loadConversation', id) as Promise<{ success: boolean; conversation?: unknown; error?: string }>,
     createConversation: (payload: unknown) =>
       ipcRenderer.invoke('agent:createConversation', payload) as Promise<{ success: boolean; conversation?: unknown; error?: string }>,
-    deleteConversation: (id: number) =>
-      ipcRenderer.invoke('agent:deleteConversation', id) as Promise<{ success: boolean; error?: string }>,
+    deleteConversation: (idOrPayload: number | { id?: number; originClientId?: string | null }) =>
+      ipcRenderer.invoke('agent:deleteConversation', idOrPayload) as Promise<{ success: boolean; error?: string }>,
     deleteConversationsByScope: (scope: unknown) =>
       ipcRenderer.invoke('agent:deleteConversationsByScope', scope) as Promise<{ success: boolean; deleted?: number; error?: string }>,
     renameConversation: (id: number, title: string) =>
       ipcRenderer.invoke('agent:renameConversation', id, title) as Promise<{ success: boolean; conversation?: unknown; error?: string }>,
     saveConversationMessages: (payload: unknown) =>
-      ipcRenderer.invoke('agent:saveConversationMessages', payload) as Promise<{ success: boolean; conversation?: unknown; error?: string }>,
+      ipcRenderer.invoke('agent:saveConversationMessages', payload) as Promise<{ success: boolean; conversation?: unknown; staleMerged?: boolean; error?: string }>,
     getLastConversation: (scope?: unknown) =>
       ipcRenderer.invoke('agent:getLastConversation', scope) as Promise<{ success: boolean; conversation?: unknown; error?: string }>,
+    sendConversationReplyToWechat: (payload: { conversationId: number; messageId: string; bubbles: string[] }) =>
+      ipcRenderer.invoke('agent:sendConversationReplyToWechat', payload) as Promise<{ success: boolean; sent?: boolean; skipped?: boolean; error?: string }>,
+    onConversationUpdated: (callback: (event: unknown) => void): (() => void) => {
+      const listener = (_e: unknown, event: unknown) => callback(event)
+      ipcRenderer.on('agent:conversationUpdated', listener)
+      return () => ipcRenderer.removeListener('agent:conversationUpdated', listener)
+    },
     onChunk: (runId: string, callback: (chunk: unknown) => void): (() => void) => {
       const listener = (_e: unknown, data: { runId: string; chunk: unknown }) => {
         if (data?.runId === runId) callback(data.chunk)
