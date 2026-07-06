@@ -3,11 +3,6 @@ import type {
   Message,
   Contact,
   ContactInfo,
-  RelationshipGraphBuildProgress,
-  RelationshipGraphOptions,
-  RelationshipGraphPathResult,
-  RelationshipGraphPartialResult,
-  RelationshipGraphResult,
 } from './models'
 import type { AccountProfile, AccountProfileInput, AccountProfilePatch } from './account'
 import type { AIModelInfo, AIProviderInfo } from './ai'
@@ -1072,14 +1067,6 @@ export interface ElectronAPI {
       error?: string
     }>
     onSessionsUpdated: (callback: (sessions: ChatSession[]) => void) => () => void
-  }
-  relationshipGraph: {
-    getGraph: (options?: RelationshipGraphOptions) => Promise<RelationshipGraphResult>
-    rebuild: (options?: RelationshipGraphOptions) => Promise<RelationshipGraphResult>
-    getNeighborhood: (nodeId: string, options?: RelationshipGraphOptions) => Promise<RelationshipGraphResult>
-    getPath: (sourceId: string, targetId: string, options?: RelationshipGraphOptions) => Promise<RelationshipGraphPathResult>
-    onProgress: (callback: (progress: RelationshipGraphBuildProgress) => void) => () => void
-    onPartial: (callback: (partial: RelationshipGraphPartialResult) => void) => () => void
   }
   // 朋友圈相关
   sns: {

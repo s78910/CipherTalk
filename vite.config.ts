@@ -128,15 +128,6 @@ export default defineConfig(async () => {
           }
         },
         {
-          entry: 'electron/relationshipGraphUtilityProcess.ts',
-          vite: {
-            build: {
-              outDir: 'dist-electron',
-              rollupOptions: { external }
-            }
-          }
-        },
-        {
           entry: 'electron/exportUtilityProcess.ts',
           vite: {
             build: {

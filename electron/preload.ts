@@ -757,25 +757,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }
   },
 
-  relationshipGraph: {
-    getGraph: (options?: any) => ipcRenderer.invoke('relationshipGraph:getGraph', options),
-    rebuild: (options?: any) => ipcRenderer.invoke('relationshipGraph:rebuild', options),
-    getNeighborhood: (nodeId: string, options?: any) =>
-      ipcRenderer.invoke('relationshipGraph:getNeighborhood', nodeId, options),
-    getPath: (sourceId: string, targetId: string, options?: any) =>
-      ipcRenderer.invoke('relationshipGraph:getPath', sourceId, targetId, options),
-    onProgress: (callback: (progress: any) => void) => {
-      const listener = (_: any, progress: any) => callback(progress)
-      ipcRenderer.on('relationshipGraph:progress', listener)
-      return () => ipcRenderer.removeListener('relationshipGraph:progress', listener)
-    },
-    onPartial: (callback: (partial: any) => void) => {
-      const listener = (_: any, partial: any) => callback(partial)
-      ipcRenderer.on('relationshipGraph:partial', listener)
-      return () => ipcRenderer.removeListener('relationshipGraph:partial', listener)
-    }
-  },
-
   // 朋友圈
   sns: {
     getTimeline: (limit?: number, offset?: number, usernames?: string[], keyword?: string, startTime?: number, endTime?: number) =>

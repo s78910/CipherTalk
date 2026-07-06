@@ -20,7 +20,6 @@ import { registerMcpHandlers } from './mcpHandlers'
 import { registerNotifyHandlers } from './notifyHandlers'
 import { registerPetHandlers } from './petHandlers'
 import { registerPluginHandlers } from './pluginHandlers'
-import { registerRelationshipGraphHandlers } from './relationshipGraphHandlers'
 import { registerSnsHandlers } from './snsHandlers'
 import { registerSkillHandlers } from './skillHandlers'
 import { registerSttHandlers } from './sttHandlers'
@@ -58,5 +57,4 @@ export function registerModularIpcHandlers(ctx: MainProcessContext): void {
   registerPluginHandlers(ctx)
   registerNotifyHandlers(ctx)
   registerDeviceConnectHandlers(ctx)
-  registerRelationshipGraphHandlers(ctx)
 }
