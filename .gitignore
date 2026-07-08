@@ -32,6 +32,7 @@ dist-electron
 # Build output
 out
 release
+.tmp-old-check/
 .tmp/release-announcement.json
 
 # TypeScript 增量编译缓存
