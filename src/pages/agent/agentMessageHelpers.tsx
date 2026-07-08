@@ -106,6 +106,23 @@ export function formatToolName(toolName: string) {
   return TOOL_LABELS[toolName] ?? toolName.replace(/[_-]+/g, ' ')
 }
 
+// ====== 工具审批一行动态说明（输入框上方审批条用）======
+// 通用兜底：不为每个工具写专属映射，按常见字段名取第一个命中的当关键信息
+const APPROVAL_DETAIL_KEYS = ['title', 'command', 'filePath', 'media', 'path', 'query', 'sessionId', 'md5', 'name']
+
+export function describeToolApprovalRequest(toolName: string, input: unknown): string {
+  const label = formatToolName(toolName)
+  const record = input && typeof input === 'object' && !Array.isArray(input) ? input as Record<string, unknown> : null
+  if (!record) return label
+  for (const key of APPROVAL_DETAIL_KEYS) {
+    const value = record[key]
+    if (typeof value === 'string' && value.trim()) {
+      return `${label} · ${value.trim().slice(0, 60)}`
+    }
+  }
+  return label
+}
+
 export function getPersonaControlOutput(part: unknown): PersonaControlOutput | null {
   const p = part as { type?: unknown; state?: unknown; output?: unknown }
   if (p?.type !== 'tool-persona_control' || p.state !== 'output-available') return null

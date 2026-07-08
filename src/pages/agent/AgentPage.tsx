@@ -38,6 +38,7 @@ import { getAIProviders, type AIModelInfo, type AIProviderInfo } from '@/types/a
 import { Loader } from '@/components/ai-elements/loader'
 import { IpcChatTransport, type AgentModelConfig, type AgentProgressEvent, type AgentReasoningEffort, type AgentScope, type AgentToolProfile, type CodeWorkspaceRef } from '@/features/aiagent/transport/ipcChatTransport'
 import { CODE_WORKSPACE_FILE_REF_MIME, CodeWorkspacePanel, CodeWorkspacePanelPopover, CodeWorkspaceSidebar, type CodeWorkspaceFileDragReference, type CodeWorkspacePanelTab } from './CodeWorkspacePanel'
+import { AgentApprovalBar, type ToolApprovalBarItem } from './AgentApprovalBar'
 import * as configService from '@/services/config'
 import { useTtsSpeaker } from '@/lib/ttsPlayer'
 import type { AgentConversationUpdatedEvent, CodeWorkspaceApprovalPolicy, CodeWorkspaceApprovalRequest, CodeWorkspaceEvent, CodeWorkspaceState } from '@/types/electron'
@@ -63,7 +64,7 @@ import {
   toMentionTarget,
   type MentionTarget,
 } from './AgentMentions'
-import { extractSources, getPersonaControlOutput, toolProgressKey } from './agentMessageHelpers'
+import { describeToolApprovalRequest, extractSources, getPersonaControlOutput, toolProgressKey } from './agentMessageHelpers'
 import { createLiquidGlassMap, type GlassFilterMap } from '@/utils/liquidGlass'
 import {
   buildFallbackConversationTitle,
@@ -182,6 +183,7 @@ export default function AgentPage() {
   }, [webSearchOn, webSearchHasKey])
   const [codeWorkspaceState, setCodeWorkspaceState] = useState<CodeWorkspaceState | null>(null)
   const [codeWorkspaceApproval, setCodeWorkspaceApproval] = useState<CodeWorkspaceApprovalRequest | null>(null)
+  const [codeWorkspaceApprovalExpanded, setCodeWorkspaceApprovalExpanded] = useState(false)
   const [workspaceSidebarOpen, setWorkspaceSidebarOpen] = useState(false)
   const [codeWorkspacePanelOpen, setCodeWorkspacePanelOpen] = useState(false)
   const [codeWorkspacePanelTab, setCodeWorkspacePanelTab] = useState<CodeWorkspacePanelTab>('preview')
@@ -234,6 +236,7 @@ export default function AgentPage() {
     })
     const offApproval = window.electronAPI.agentWorkspace.onApprovalRequest((request) => {
       setCodeWorkspaceApproval(request)
+      setCodeWorkspaceApprovalExpanded(false)
     })
     const offEvent = window.electronAPI.agentWorkspace.onWorkspaceEvent((event: CodeWorkspaceEvent) => {
       if (event.state) {
@@ -1611,6 +1614,26 @@ export default function AgentPage() {
     })
   }, [addToolApprovalResponse, busy])
 
+  // 只有最后一条消息里可能挂着待确认的工具调用（见 toolApproval.ts：本轮结束即暂停等待用户响应）
+  const pendingToolApprovals = useMemo<ToolApprovalBarItem[]>(() => {
+    if (busy) return []
+    const lastMessage = messages[messages.length - 1]
+    if (!lastMessage || lastMessage.role !== 'assistant') return []
+    const items: ToolApprovalBarItem[] = []
+    for (const part of lastMessage.parts) {
+      if (!('state' in part) || part.state !== 'approval-requested') continue
+      const approvalId = (part as { approval?: { id?: unknown } }).approval?.id
+      if (typeof approvalId !== 'string' || !approvalId) continue
+      const toolName = part.type.replace(/^tool-/, '')
+      items.push({
+        approvalId,
+        toolName,
+        description: describeToolApprovalRequest(toolName, (part as { input?: unknown }).input),
+      })
+    }
+    return items
+  }, [busy, messages])
+
   const handleModelSelect = useCallback((id: string) => {
     const model = models.find((item) => item.id === id)
     if (!model || model.disabled) return
@@ -1874,7 +1897,6 @@ export default function AgentPage() {
                 onRegenerate={handleRegenerateAssistantMessage}
                 onRetry={handleRetryUserMessage}
                 onSpeak={handleSpeakAssistantMessage}
-                onToolApproval={handleToolApproval}
                 runIsPlan={runIsPlanRef.current}
                 selectedModelSupportsTools={selectedModelSupportsTools}
                 sessionNameOf={sessionNameOf}
@@ -1911,6 +1933,14 @@ export default function AgentPage() {
       <div className="pointer-events-none absolute right-0 bottom-0 left-0 h-44">
         <div className="absolute right-0 bottom-3 left-0 grid place-items-center px-5">
           <div className="pointer-events-auto w-full max-w-4xl">
+        <AgentApprovalBar
+          codeWorkspaceApproval={codeWorkspaceApproval}
+          onCodeWorkspaceApprove={handleApproveCodeWorkspace}
+          onCodeWorkspaceReject={handleRejectCodeWorkspace}
+          onExpandCodeWorkspaceApproval={() => setCodeWorkspaceApprovalExpanded(true)}
+          onToolApprove={handleToolApproval}
+          toolApprovals={pendingToolApprovals}
+        />
         <PromptInputProvider>
           <PromptInputControllerBridge controllerRef={promptInputControllerRef} />
           <PromptInput
@@ -2096,7 +2126,9 @@ export default function AgentPage() {
           <CodeWorkspacePanel
             approval={codeWorkspaceApproval}
             className="min-w-0 flex-1"
+            expanded={codeWorkspaceApprovalExpanded}
             onApprove={handleApproveCodeWorkspace}
+            onExpandedChange={setCodeWorkspaceApprovalExpanded}
             onReject={handleRejectCodeWorkspace}
             onSelect={handleSelectCodeWorkspace}
             onStopDevServer={handleStopCodeDevServer}

@@ -13,7 +13,9 @@ export type CodeWorkspaceFileDragReference = {
 type CodeWorkspacePanelProps = {
   approval: CodeWorkspaceApprovalRequest | null
   className?: string
+  expanded: boolean
   onApprove: (requestId: string) => void
+  onExpandedChange: (expanded: boolean) => void
   onReject: (requestId: string) => void
   onSelect: () => void
   onStopDevServer: () => void
@@ -43,10 +45,14 @@ function basename(value: string): string {
   return parts[parts.length - 1] || value
 }
 
-function riskText(risk: CodeWorkspaceApprovalRequest['risk']): string {
+export function riskText(risk: CodeWorkspaceApprovalRequest['risk']): string {
   if (risk === 'high') return '高风险'
   if (risk === 'medium') return '中风险'
   return '低风险'
+}
+
+export function describeCodeWorkspaceApproval(approval: CodeWorkspaceApprovalRequest): string {
+  return `${kindText(approval.kind)} · ${approval.summary}`
 }
 
 function kindText(kind: CodeWorkspaceApprovalRequest['kind']): string {
@@ -466,7 +472,9 @@ export function CodeWorkspacePanelPopover(props: CodeWorkspacePanelPopoverProps)
 export function CodeWorkspacePanel({
   approval,
   className,
+  expanded,
   onApprove,
+  onExpandedChange,
   onReject,
   state,
 }: CodeWorkspacePanelProps) {
@@ -500,7 +508,7 @@ export function CodeWorkspacePanel({
         </div>
       </div>
 
-      <AlertDialog.Backdrop isOpen={approval !== null}>
+      <AlertDialog.Backdrop isOpen={approval !== null && expanded} onOpenChange={onExpandedChange}>
         <AlertDialog.Container>
           <AlertDialog.Dialog className="sm:max-w-3xl">
             <AlertDialog.Header>

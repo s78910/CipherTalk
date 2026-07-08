@@ -114,7 +114,10 @@ function trackToolChunk(
   if (
     chunk.type === 'tool-input-error' ||
     chunk.type === 'tool-output-error' ||
-    chunk.type === 'tool-output-denied'
+    chunk.type === 'tool-output-denied' ||
+    // 等待审批是本轮正常结束的状态（见 toolApproval.ts），不是工具没返回结果，
+    // 不摘掉的话下面的"补齐未完成工具状态"会把等待确认的卡片盖成假错误
+    chunk.type === 'tool-approval-request'
   ) {
     pendingToolCalls?.delete(chunk.toolCallId)
     return
