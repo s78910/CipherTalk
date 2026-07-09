@@ -19,9 +19,10 @@ const SYSTEM_CONTACT_USERNAMES = new Set([
 
 export function isSystemContactUsername(username: string): boolean {
   const lower = username.trim().toLowerCase()
+  const normalized = lower.replace(/^@+/, '')
   if (!lower) return true
-  if (SYSTEM_CONTACT_USERNAMES.has(lower)) return true
-  return lower.startsWith('fake_') || lower.includes('@kefu.openim') || lower.includes('service_')
+  if (SYSTEM_CONTACT_USERNAMES.has(lower) || SYSTEM_CONTACT_USERNAMES.has(normalized)) return true
+  return lower.startsWith('fake_') || normalized.startsWith('fake_') || lower.includes('@kefu.openim') || lower.includes('service_')
 }
 
 export function detectContactInfoType(username: string, row: Record<string, any>): ContactInfo['type'] | null {
