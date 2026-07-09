@@ -21,6 +21,8 @@ export interface AgentProviderConfig {
   proxyUrl?: string
   /** 模型上下文窗口（token 数，来自 catalog limits.context）；用于 >90% 自动压缩的分母。未知则引擎用默认值。 */
   contextWindow?: number
+  /** Anthropic prompt cache 断点 TTL（config key anthropicCacheTtl），默认 5m；1h 档写入计价 2×。 */
+  anthropicCacheTtl?: '5m' | '1h'
 }
 
 export type AgentReasoningEffort = 'auto' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'

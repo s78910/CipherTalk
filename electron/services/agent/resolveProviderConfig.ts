@@ -35,6 +35,7 @@ export function resolveProviderConfig(override?: AgentProviderConfigOverride | n
       reasoningEffort: providerConfig?.reasoningEffort,
       proxyUrl: getResolvedProxyUrl() || undefined,
       contextWindow: typeof contextWindow === 'number' && contextWindow > 0 ? contextWindow : undefined,
+      anthropicCacheTtl: config.get('anthropicCacheTtl') === '1h' ? '1h' : '5m',
     }
   } finally {
     config.close()

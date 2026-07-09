@@ -73,7 +73,7 @@ export function buildAgentInstructions(
   const promptCacheKey = buildPromptCacheKey(promptParts, tools)
 
   if (input.providerConfig.providerKind === 'anthropic') {
-    const cached = applyAnthropicCacheControl(instructions, tools)
+    const cached = applyAnthropicCacheControl(instructions, tools, input.providerConfig.anthropicCacheTtl)
     return { instructions: cached.messages, tools: cached.tools, promptCacheKey, turnMessage }
   }
 

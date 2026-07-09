@@ -10,6 +10,8 @@ import type { LanguageModel } from 'ai'
 import type { FilesV4 } from '@ai-sdk/provider'
 import { createProxyFetch } from '../ai/proxyFetch'
 import { withOpenAIResponsesSanitizer } from '../ai/openaiResponsesSanitizer'
+import { withGoogleExplicitCache } from './googleCacheFetch'
+import { isArkBaseURL, withArkContextCache } from './arkContextFetch'
 import type { AgentProviderConfig } from './types'
 
 export type AgentLanguageModelOptions = {
@@ -70,7 +72,8 @@ export function createLanguageModel(config: AgentProviderConfig, options: AgentL
     return createAnthropic({ apiKey, baseURL, name, headers, fetch: withAnthropicSanitizer(fetch) })(model as any)
   }
   if (providerKind === 'google') {
-    return createGoogle({ apiKey, baseURL, name, headers, fetch })(model as any)
+    // 显式 cachedContent 缓存：fetch 层自动创建/复用，见 googleCacheFetch.ts
+    return createGoogle({ apiKey, baseURL, name, headers, fetch: withGoogleExplicitCache(fetch) })(model as any)
   }
   if (providerKind === 'openai-responses') {
     return createOpenAI({ apiKey, baseURL, name, headers, fetch: withOpenAIResponsesSanitizer(fetch) }).responses(model as any)
@@ -82,7 +85,8 @@ export function createLanguageModel(config: AgentProviderConfig, options: AgentL
     baseURL,
     headers,
     includeUsage: true,
-    fetch,
+    // 火山方舟端点：system 前缀自动走 context 缓存，见 arkContextFetch.ts
+    fetch: isArkBaseURL(baseURL) ? withArkContextCache(fetch) : fetch,
     transformRequestBody: (args) => injectOpenAICompatiblePromptCacheKey(args, options.promptCacheKey),
   }).chatModel(model)
 }

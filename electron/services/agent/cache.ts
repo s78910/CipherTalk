@@ -1,6 +1,7 @@
 import { createHash } from 'crypto'
 import type { ProviderOptions, SystemModelMessage } from '@ai-sdk/provider-utils'
 import type { ToolSet } from 'ai'
+import { isArkBaseURL } from './arkContextFetch'
 import type { AgentReasoningEffort, AgentRunInput } from './types'
 
 export interface AgentPromptParts {
@@ -10,7 +11,7 @@ export interface AgentPromptParts {
   turnSystem: string
 }
 
-const ANTHROPIC_CACHE_CONTROL = { type: 'ephemeral', ttl: '5m' } as const
+export type AnthropicCacheTtl = '5m' | '1h'
 const MAX_ANTHROPIC_CACHE_BREAKPOINTS = 4
 
 const CACHEABLE_BUILTIN_TOOL_NAMES = new Set([
@@ -213,17 +214,27 @@ export function buildProviderCacheStatus(input: AgentRunInput, promptCacheKey: s
       ...base,
       promptCacheEnabled: true,
       promptCacheProvider: 'anthropic',
+      reason: `cache_control 断点 TTL ${input.providerConfig.anthropicCacheTtl || '5m'}（config key anthropicCacheTtl 可切 1h，写入计价 2×）。`,
     }
   }
   if (input.providerConfig.providerKind === 'google') {
     return {
       ...base,
-      promptCacheEnabled: false,
+      promptCacheEnabled: true,
       promptCacheProvider: 'google',
-      reason: 'Google 需要预先创建 cachedContent，当前仅读取返回的 cachedContentTokenCount，尚未创建 cachedContent。',
+      reason: '自动创建 cachedContent 缓存稳定前缀（system+tools，TTL 1h，Google 按 token·小时收存储费）；前缀低于模型最小缓存长度或创建失败时回退直连，命中读 cachedContentTokenCount。',
     }
   }
   if (input.providerConfig.providerKind === 'openai-compatible') {
+    if (isArkBaseURL(input.providerConfig.baseURL)) {
+      return {
+        ...base,
+        promptCacheEnabled: true,
+        promptCacheProvider: 'openai-compatible',
+        requestBodyPromptCacheField: 'prompt_cache_key',
+        reason: '火山方舟端点：system 前缀自动走 context 缓存（common_prefix，TTL 1h），创建失败回退直连。',
+      }
+    }
     if (isDeepSeekProvider(input)) {
       return {
         ...base,
@@ -249,12 +260,12 @@ export function buildProviderCacheStatus(input: AgentRunInput, promptCacheKey: s
   }
 }
 
-function withAnthropicCacheControl(providerOptions?: ProviderOptions): ProviderOptions {
+function withAnthropicCacheControl(providerOptions: ProviderOptions | undefined, ttl: AnthropicCacheTtl): ProviderOptions {
   return {
     ...(providerOptions || {}),
     anthropic: {
       ...((providerOptions?.anthropic as Record<string, unknown> | undefined) || {}),
-      cacheControl: ANTHROPIC_CACHE_CONTROL,
+      cacheControl: { type: 'ephemeral', ttl },
     },
   }
 }
@@ -262,6 +273,7 @@ function withAnthropicCacheControl(providerOptions?: ProviderOptions): ProviderO
 export function applyAnthropicCacheControl(
   messages: SystemModelMessage[],
   tools: ToolSet,
+  ttl: AnthropicCacheTtl = '5m',
 ): { messages: SystemModelMessage[]; tools: ToolSet } {
   let remainingBreakpoints = MAX_ANTHROPIC_CACHE_BREAKPOINTS
   const takeBreakpoint = () => {
@@ -271,14 +283,14 @@ export function applyAnthropicCacheControl(
   }
   const nextMessages = messages.map((message, index) => (
     index === 0 && takeBreakpoint()
-      ? { ...message, providerOptions: withAnthropicCacheControl(message.providerOptions) }
+      ? { ...message, providerOptions: withAnthropicCacheControl(message.providerOptions, ttl) }
       : message
   ))
 
   const nextTools: ToolSet = {}
   for (const [name, item] of Object.entries(tools)) {
     nextTools[name] = CACHEABLE_BUILTIN_TOOL_NAMES.has(name) && takeBreakpoint()
-      ? { ...item, providerOptions: withAnthropicCacheControl(item.providerOptions) } as typeof item
+      ? { ...item, providerOptions: withAnthropicCacheControl(item.providerOptions, ttl) } as typeof item
       : item
   }
 

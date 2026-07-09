@@ -213,6 +213,8 @@ interface ConfigSchema {
   }
   // 主进程探测到的系统代理 URL（写入后供 AI 子进程/嵌入跨进程读取；子进程无 session API 探测不了）
   aiResolvedProxyUrl: string
+  // Anthropic prompt cache 断点 TTL：1h 档写入计价 2×（5m 档 1.25×），稀疏流量才划算
+  anthropicCacheTtl: '5m' | '1h'
   // AI 宠物（petdex 宠物包格式，用户宠物包存放在 cachePath/pets/<slug>/）
   petCurrent: string         // 当前宠物 slug，空 = 不展示
   petDesktopEnabled: boolean  // 桌面悬浮桌宠开关
@@ -423,6 +425,7 @@ const defaults: ConfigSchema = {
     timeoutMs: IMAGE_GEN_DEFAULT_TIMEOUT_MS,
   },
   aiResolvedProxyUrl: '',
+  anthropicCacheTtl: '5m',
   petCurrent: '',
   petDesktopEnabled: true,
   petDefaultInitialized: false,
