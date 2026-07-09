@@ -3187,10 +3187,20 @@ export class ImageDecryptService {
         windowsHide: true      // Windows 下隐藏窗口
       })
 
+      // wxgf 内嵌的 still-image HEVC 裸流缺帧边界分隔符时，ffmpeg 会等下一个 access unit
+      // 才输出当前帧，导致进程永久阻塞、不退出 → 聊天里划过大量 wxgf 图会攒成成千上万个
+      // 卡死的 ffmpeg.exe（各带一个 conhost 窗口）。补超时 kill，与语音转换路径保持一致。
+      const killTimer = setTimeout(() => {
+        console.error('[ImageDecrypt] ffmpeg 转换超时，强制结束进程')
+        try { proc.kill() } catch { /* 已退出 */ }
+        resolve(null)
+      }, 15000)
+
       proc.stdout.on('data', (chunk: Buffer) => chunks.push(chunk))
       proc.stderr.on('data', (chunk: Buffer) => errChunks.push(chunk))
 
       proc.on('close', (code: number) => {
+        clearTimeout(killTimer)
         if (code === 0 && chunks.length > 0) {
           const result = Buffer.concat(chunks)
           resolve(result)
@@ -3202,6 +3212,7 @@ export class ImageDecryptService {
       })
 
       proc.on('error', (err: any) => {
+        clearTimeout(killTimer)
         console.error(`[ImageDecrypt] ffmpeg 启动失败: ${ffmpeg}`, err)
         resolve(null)
       })
