@@ -1381,7 +1381,7 @@ export default function AgentPage() {
           const nextTitle = result.title.trim().slice(0, 24)
           setConversationTitle(nextTitle)
           if (targetConversationId) {
-            void window.electronAPI.agent.renameConversation(targetConversationId, nextTitle).then(() => refreshConversationRecords())
+            void window.electronAPI.agent.renameConversation(targetConversationId, nextTitle, clientIdRef.current).then(() => refreshConversationRecords())
           }
         }
       })
@@ -1718,7 +1718,7 @@ export default function AgentPage() {
 
     setTitleSaving(true)
     try {
-      const result = await window.electronAPI.agent.renameConversation(targetId, nextTitle)
+      const result = await window.electronAPI.agent.renameConversation(targetId, nextTitle, clientIdRef.current)
       if (result.success) {
         const record = normalizeConversationRecord(result.conversation)
         if (record) {

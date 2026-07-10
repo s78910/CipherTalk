@@ -981,10 +981,11 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
     }
   })
 
-  ipcMain.handle('agent:renameConversation', async (_event, id: number, title: string) => {
+  ipcMain.handle('agent:renameConversation', async (_event, id: number, title: string, originClientId?: string | null) => {
     try {
       const { agentConversationStore } = await import('../../services/agent/conversationStore')
-      return { success: true, conversation: agentConversationStore.rename(Number(id), title) }
+      // 带上来源 clientId：否则自动起标题的广播会被发起窗口误判为外部修改，流结束后触发重载盖掉刚生成的正文
+      return { success: true, conversation: agentConversationStore.rename(Number(id), title, { originClientId: originClientId ?? null }) }
     } catch (e) {
       return { success: false, error: e instanceof Error ? e.message : String(e) }
     }
