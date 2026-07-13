@@ -8,7 +8,7 @@ import {
 } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import type { IconComponent } from "@/types/icon";
-import { Bulb, ChevronDown, CircleFill } from "@gravity-ui/icons";
+import { ChevronDown, CircleFill } from "@gravity-ui/icons";
 import type { ComponentProps, ReactNode } from "react";
 import {
   createContext,
@@ -116,7 +116,6 @@ export const ChainOfThoughtHeader = memo(
           )}
           {...props}
         >
-          <Bulb className="size-4" />
           <span className="truncate text-left">
             {children ?? "Chain of Thought"}
           </span>

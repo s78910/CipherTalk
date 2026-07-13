@@ -183,13 +183,35 @@ export function ToolIODetails({ input, output }: { input?: unknown; output?: unk
 // 进行中默认展开（让用户看到 AI 正在干啥），结束后自动收起；用户手动点过则尊重用户的选择。
 export function MessageChainOfThought({ active, children }: { active: boolean; children: ReactNode }) {
   const [open, setOpen] = useState(active)
+  const [elapsedSeconds, setElapsedSeconds] = useState(0)
+  const startedAtRef = useRef<number | null>(active ? Date.now() : null)
   const userToggledRef = useRef(false)
   useEffect(() => {
     if (!userToggledRef.current) setOpen(active)
   }, [active])
+  useEffect(() => {
+    if (!active) {
+      if (startedAtRef.current !== null) {
+        setElapsedSeconds(Math.floor((Date.now() - startedAtRef.current) / 1000))
+      }
+      return
+    }
+    if (startedAtRef.current === null) startedAtRef.current = Date.now()
+    const updateElapsed = () => {
+      if (startedAtRef.current !== null) {
+        setElapsedSeconds(Math.floor((Date.now() - startedAtRef.current) / 1000))
+      }
+    }
+    updateElapsed()
+    const timer = window.setInterval(updateElapsed, 1000)
+    return () => window.clearInterval(timer)
+  }, [active])
+  const elapsedText = elapsedSeconds >= 60
+    ? `${Math.floor(elapsedSeconds / 60)}分${elapsedSeconds % 60}秒`
+    : `${elapsedSeconds}秒`
   return (
     <ChainOfThought onOpenChange={(value) => { userToggledRef.current = true; setOpen(value) }} open={open}>
-      <ChainOfThoughtHeader>执行过程</ChainOfThoughtHeader>
+      <ChainOfThoughtHeader>{active ? '处理中' : '已处理'} {elapsedText}</ChainOfThoughtHeader>
       <ChainOfThoughtContent>{children}</ChainOfThoughtContent>
     </ChainOfThought>
   )
