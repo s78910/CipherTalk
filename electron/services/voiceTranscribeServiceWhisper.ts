@@ -2,12 +2,12 @@
  * 基于 whisper.cpp 的语音转文字服务（支持 GPU 加速）
  * 使用 node-whisper 包装 whisper.cpp
  */
-import { app } from 'electron'
 import { join } from 'path'
 import { existsSync, mkdirSync, createWriteStream, statSync, unlinkSync, writeFileSync, renameSync, type WriteStream } from 'fs'
 import { spawn, ChildProcess } from 'child_process'
 import * as https from 'https'
 import * as http from 'http'
+import { getAppDataPath, getAppPath, getTempPath, isElectronPackaged } from './runtimePaths'
 
 interface ModelConfig {
     name: string
@@ -106,15 +106,15 @@ export class VoiceTranscribeServiceWhisper {
     private downloadCancels = new Map<string, DownloadCancelState>()
 
     constructor() {
-        this.modelsDir = join(app.getPath('appData'), 'ciphertalk', 'whisper-models')
+        this.modelsDir = join(getAppDataPath(), 'ciphertalk', 'whisper-models')
         
         // whisper.cpp 的可执行文件路径
         let resourcesPath: string
         
-        if (app.isPackaged) {
-            resourcesPath = join(process.resourcesPath, 'resources', 'whisper')
+        if (isElectronPackaged()) {
+            resourcesPath = join(process.resourcesPath || getAppPath(), 'resources', 'whisper')
         } else {
-            resourcesPath = join(app.getAppPath(), 'resources', 'whisper')
+            resourcesPath = join(getAppPath(), 'resources', 'whisper')
         }
         
         const cliExe = join(resourcesPath, 'whisper-cli.exe')
@@ -292,7 +292,7 @@ export class VoiceTranscribeServiceWhisper {
 
         try {
             // 保存临时 WAV 文件
-            tempWavPath = join(app.getPath('temp'), `whisper_${Date.now()}.wav`)
+            tempWavPath = join(getTempPath(), `whisper_${Date.now()}.wav`)
             writeFileSync(tempWavPath, normalizeWavBuffer(wavData))
             txtPath = tempWavPath + '.txt'
 

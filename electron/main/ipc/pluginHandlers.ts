@@ -426,8 +426,8 @@ const apiRegistry: Record<string, { permission: PluginPermission | null; handler
         throw new Error('sessionId、localId、createTime 必填')
       }
       // 命中缓存直接返回，不重复转写（空结果也算命中，避免重复扣额度）
-      if (args.force !== true && voiceTranscribeService.hasCachedTranscript(sessionId, createTime)) {
-        return { text: voiceTranscribeService.getCachedTranscript(sessionId, createTime) ?? '', fromCache: true }
+      if (args.force !== true && voiceTranscribeService.hasCachedTranscript(sessionId, createTime, localId)) {
+        return { text: voiceTranscribeService.getCachedTranscript(sessionId, createTime, localId) ?? '', fromCache: true }
       }
 
       const voice = await chatService.getVoiceData(
@@ -438,10 +438,10 @@ const apiRegistry: Record<string, { permission: PluginPermission | null; handler
       )
       if (!voice.success || !voice.data) throw new Error(voice.error || '语音读取失败')
       const result = await sttRuntimeService.transcribeWavBuffer(Buffer.from(voice.data, 'base64'), {
-        cache: { sessionId, createTime, force: args.force === true },
-      }) as { success?: boolean; text?: string; error?: string }
+        cache: { sessionId, createTime, localId, force: args.force === true },
+      })
       if (result?.success === false) throw new Error(result.error || '转写失败')
-      return { text: result?.text ?? '', fromCache: false }
+      return { text: result?.transcript ?? '', fromCache: false }
     },
   },
   'stt.getCachedTranscript': {
@@ -449,8 +449,13 @@ const apiRegistry: Record<string, { permission: PluginPermission | null; handler
     handler: (_p, args) => {
       const sessionId = String(args.sessionId || '')
       const createTime = Number(args.createTime)
+      const localId = Number(args.localId)
       if (!sessionId || !Number.isFinite(createTime)) throw new Error('sessionId、createTime 必填')
-      return voiceTranscribeService.getCachedTranscript(sessionId, createTime) ?? null
+      return voiceTranscribeService.getCachedTranscript(
+        sessionId,
+        createTime,
+        Number.isFinite(localId) ? localId : undefined,
+      ) ?? null
     },
   },
 

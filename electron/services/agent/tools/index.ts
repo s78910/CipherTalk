@@ -13,6 +13,7 @@ import { searchMessages } from './searchMessages'
 import { semanticSearch } from './semanticSearch'
 import { getContext } from './getContext'
 import { getTimeline } from './getTimeline'
+import { transcribeVoiceMessage } from './transcribeVoiceMessage'
 import { chatStats } from './chatStats'
 import { listGroups } from './listGroups'
 import { groupMembers } from './groupMembers'
@@ -43,6 +44,7 @@ export function buildBaseTools(_scope: AgentScope): ToolSet {
     semantic_search: semanticSearch,
     get_context: getContext,
     get_timeline: getTimeline,
+    transcribe_voice_message: transcribeVoiceMessage,
     chat_stats: chatStats,
     list_groups: listGroups,
     group_members: groupMembers,
@@ -66,6 +68,7 @@ export function buildSubAgentTools(_scope: AgentScope): ToolSet {
     semantic_search: semanticSearch,
     get_context: getContext,
     get_timeline: getTimeline,
+    transcribe_voice_message: transcribeVoiceMessage,
     chat_stats: chatStats,
     list_groups: listGroups,
     group_members: groupMembers,

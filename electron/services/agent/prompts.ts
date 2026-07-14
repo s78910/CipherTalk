@@ -44,6 +44,7 @@ const TOOL_PROMPT = `
 - semantic_search：找"某主题/相关内容"。带 sessionId 且已配置嵌入模型时走语义向量 + 关键词混合检索；否则回退关键词检索。命中带 anchor，主题类问题优先用它。
 - get_context：用命中里的 anchor 展开该消息前后的原文，用来核对事实、拿到可引用的出处。
 - get_timeline：读某个会话在某段时间内的连续消息，适合"某天/某段时间聊了什么""把这段讲清楚"。
+- transcribe_voice_message：转写 get_context / get_timeline 返回的语音消息。只转写会影响当前结论的相关语音，参数使用消息里的 sessionId、localId、createTime；默认用缓存，只有用户明确要求重新识别时才传 force=true。
 - chat_stats：纯 SQL 统计，回答"数量/排名/频率"——总数与各类型(overview)、互动最多的人(ranking)、消息量按小时/星期/月分布与高峰(time_distribution)。数数/排名一律用它，别拿检索去数。
 - list_groups：列出群聊（含成员数，按活跃排序）。
 - group_members：列某个群的成员名单（chatroomId = 群 username，@chatroom 结尾）。
@@ -85,6 +86,7 @@ const ROUTING_PROMPT = `
 - "某主题 / 相关内容" → semantic_search
 - 要核对事实、拿可引用的原文出处 → 先 search_messages / semantic_search 拿 anchor，再 get_context
 - "某人某天 / 某段时间聊了啥" → list_contacts 拿 username，再 get_timeline
+- get_context / get_timeline 返回 [语音消息]，且该语音会影响结论 → 用返回的 sessionId、localId、createTime 调 transcribe_voice_message
 - 人名/群名解析 → list_contacts；列群 / 群成员 / 群内发言排行 → list_groups / group_members / group_member_ranking
 - 朋友圈内容查询 → search_moments；朋友圈数量/趋势/占比/点赞评论排行 → moments_stats
 - 朋友圈/聊天记录图片内容识别 → 先 list_contacts（如涉及某人）→ search_moment_media 或 search_media 拿 mediaId → inspect_media_image 看图后回答；不要在未调用 inspect_media_image 时猜图片内容。
@@ -103,6 +105,7 @@ const ROUTING_PROMPT = `
 # 典型链路
 解析人名(list_contacts) → 缩小范围检索(search_messages / semantic_search) → 命中后用 anchor 扩上下文(get_context) → 带时间+发送者作答。
 "某人某天聊了啥"则：list_contacts 拿 username → get_timeline 读那段时间。
+上下文里有影响结论的 [语音消息]：get_context / get_timeline → transcribe_voice_message → 结合转写文本回答。
 `
 
 const EVIDENCE_PROMPT = `
@@ -111,6 +114,7 @@ const EVIDENCE_PROMPT = `
 - 每条结论标注出处（时间 + 发送者），让用户能核对；出处来自 get_context / get_timeline 返回的消息。
 - 正常回答直接使用 Markdown 排版（标题、列表、表格等），不要把整段回答包在 \`\`\`md、\`\`\`markdown 或任何三反引号代码块里；只有用户明确要求代码/原文代码片段时才使用代码块。
 - 检索只给线索，别拿 excerpt 当定论；凡是事实判断、承诺、态度、事件经过，都必须先用 get_context 展开原文或用 get_timeline 读取连续消息后再下结论。
+- get_context / get_timeline 返回 [语音消息] 时，不得猜测语音内容；若该语音影响结论，必须用消息返回的 sessionId、localId、createTime 调 transcribe_voice_message。不要无差别转写所有语音，只处理与问题相关的语音；默认使用缓存，除非用户明确要求重新识别，否则不得传 force=true。
 - 不确定某人/某群是谁时，先用 list_contacts，别猜 username。
 - 检索尽量先确定 sessionId 再搜（全局扫描慢且只覆盖最近会话）；结果里的 scope/sessionsScanned 说明了覆盖范围，若不够要如实告知。
 - 精确词用 search_messages，主题/相关用 semantic_search；如果用户已 @ 单个会话，主题类问题优先用 semantic_search；选错就换另一个再试。

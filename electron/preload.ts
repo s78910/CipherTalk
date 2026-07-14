@@ -847,7 +847,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getModelStatus: () => ipcRenderer.invoke('stt:getModelStatus'),
     downloadModel: () => ipcRenderer.invoke('stt:downloadModel'),
     cancelDownloadModel: () => ipcRenderer.invoke('stt:cancelDownloadModel'),
-    transcribe: (wavBase64: string, sessionId: string, createTime: number, force?: boolean) => ipcRenderer.invoke('stt:transcribe', wavBase64, sessionId, createTime, force),
+    transcribe: (wavBase64: string, sessionId: string, createTime: number, force?: boolean, localId?: number) => ipcRenderer.invoke('stt:transcribe', wavBase64, sessionId, createTime, force, localId),
     testOnlineConfig: (overrides?: { provider?: 'openai-compatible' | 'aliyun-qwen-asr' | 'qianwen-cloud' | 'volcano-doubao' | 'custom'; apiKey?: string; baseURL?: string; model?: string; language?: string; timeoutMs?: number }) =>
       ipcRenderer.invoke('stt-online:test-config', overrides),
     onDownloadProgress: (callback: (progress: { modelName: string; downloadedBytes: number; totalBytes?: number; percent?: number }) => void) => {
@@ -858,8 +858,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.on('stt:partialResult', (_, text) => callback(text))
       return () => ipcRenderer.removeAllListeners('stt:partialResult')
     },
-    getCachedTranscript: (sessionId: string, createTime: number) => ipcRenderer.invoke('stt:getCachedTranscript', sessionId, createTime),
-    updateTranscript: (sessionId: string, createTime: number, transcript: string) => ipcRenderer.invoke('stt:updateTranscript', sessionId, createTime, transcript),
+    getCachedTranscript: (sessionId: string, createTime: number, localId?: number) => ipcRenderer.invoke('stt:getCachedTranscript', sessionId, createTime, localId),
+    updateTranscript: (sessionId: string, createTime: number, transcript: string, localId?: number) => ipcRenderer.invoke('stt:updateTranscript', sessionId, createTime, transcript, localId),
     clearModel: () => ipcRenderer.invoke('stt:clearModel')
   },
 

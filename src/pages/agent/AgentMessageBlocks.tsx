@@ -209,7 +209,7 @@ export function MessageChainOfThought({
     const timer = window.setInterval(updateElapsed, 1000)
     return () => window.clearInterval(timer)
   }, [active])
-  const displayedSeconds = active
+  const displayedSeconds = startedAtRef.current !== null
     ? elapsedSeconds
     : typeof persistedElapsedMs === 'number' && Number.isFinite(persistedElapsedMs)
       ? Math.max(0, Math.floor(persistedElapsedMs / 1000))

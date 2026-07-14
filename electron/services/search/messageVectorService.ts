@@ -939,7 +939,7 @@ class MessageVectorService {
     }
     const messages: SessionMessage[] = rawMessages.map((m) => {
       const transcript = Number(m.localType) === 34
-        ? voiceTranscribeService.getCachedTranscript(sessionId, m.createTime) || undefined
+        ? voiceTranscribeService.getCachedTranscript(sessionId, m.createTime, m.localId) || undefined
         : undefined
       return {
         localId: m.localId,

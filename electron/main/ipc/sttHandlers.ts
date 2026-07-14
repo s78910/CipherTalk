@@ -50,12 +50,12 @@ export function registerSttHandlers(ctx: MainProcessContext): void {
   })
 
   // 转写音频
-  ipcMain.handle('stt:transcribe', async (event, wavBase64: string, sessionId: string, createTime: number, force?: boolean) => {
+  ipcMain.handle('stt:transcribe', async (event, wavBase64: string, sessionId: string, createTime: number, force?: boolean, localId?: number) => {
     try {
       const wavData = Buffer.from(wavBase64, 'base64')
       const win = BrowserWindow.fromWebContents(event.sender)
       const result = await sttRuntimeService.transcribeWavBuffer(wavData, {
-        cache: { sessionId, createTime, force },
+        cache: { sessionId, createTime, localId, force },
         onPartial: (text) => {
           win?.webContents.send('stt:partialResult', text)
         }
@@ -69,9 +69,9 @@ export function registerSttHandlers(ctx: MainProcessContext): void {
   })
 
   // 获取缓存的转写结果
-  ipcMain.handle('stt:getCachedTranscript', async (_, sessionId: string, createTime: number) => {
+  ipcMain.handle('stt:getCachedTranscript', async (_, sessionId: string, createTime: number, localId?: number) => {
     try {
-      const transcript = voiceTranscribeService.getCachedTranscript(sessionId, createTime)
+      const transcript = voiceTranscribeService.getCachedTranscript(sessionId, createTime, localId)
       return { success: true, transcript }
     } catch (e) {
       return { success: false, error: String(e) }
@@ -79,9 +79,9 @@ export function registerSttHandlers(ctx: MainProcessContext): void {
   })
 
   // 更新转写缓存
-  ipcMain.handle('stt:updateTranscript', async (_, sessionId: string, createTime: number, transcript: string) => {
+  ipcMain.handle('stt:updateTranscript', async (_, sessionId: string, createTime: number, transcript: string, localId?: number) => {
     try {
-      voiceTranscribeService.saveTranscriptCache(sessionId, createTime, transcript)
+      voiceTranscribeService.saveTranscriptCache(sessionId, createTime, transcript, false, localId)
       return { success: true }
     } catch (e) {
       return { success: false, error: String(e) }

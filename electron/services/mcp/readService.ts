@@ -1328,7 +1328,7 @@ async function normalizeMessage(
       normalized.media = {
         type: 'voice',
         durationSeconds: Number(message.voiceDuration || 0) || null,
-        transcript: sttRuntimeService.getCachedTranscript(sessionId, Number(message.createTime || 0))
+        transcript: sttRuntimeService.getCachedTranscript(sessionId, Number(message.createTime || 0), Number(message.localId || 0))
       }
       if (options.includeMediaPaths) {
         normalized.media.localPath = await getVoiceLocalPath(sessionId, message)
@@ -1732,13 +1732,13 @@ export class McpReadService {
       sessionsScanned: 1
     })
 
-    if (!force && sttRuntimeService.hasCachedTranscript(sessionId, createTime)) {
+    if (!force && sttRuntimeService.hasCachedTranscript(sessionId, createTime, localId)) {
       return {
         source: 'voice_message',
         sessionId,
         localId,
         createTime,
-        transcript: sttRuntimeService.getCachedTranscript(sessionId, createTime) ?? '',
+        transcript: sttRuntimeService.getCachedTranscript(sessionId, createTime, localId) ?? '',
         cached: true,
         sttMode: sttRuntimeService.getCurrentSttMode()
       }
@@ -1761,7 +1761,7 @@ export class McpReadService {
     })
 
     const result = await sttRuntimeService.transcribeWavBuffer(Buffer.from(voiceResult.data, 'base64'), {
-      cache: { sessionId, createTime, force }
+      cache: { sessionId, createTime, localId, force }
     })
     if (!result.success || !result.transcript) {
       this.mapSttError(result.error, result.errorCode)

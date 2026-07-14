@@ -525,7 +525,7 @@ class ExportService {
       }
       case 34: {
         // 语音消息：优先用 localId 在 voicePathMap 查找（避免同时间戳冲突）
-        const transcript = (sessionId && createTime) ? voiceTranscribeService.getCachedTranscript(sessionId, createTime) : null
+        const transcript = (sessionId && createTime) ? voiceTranscribeService.getCachedTranscript(sessionId, createTime, localId) : null
         if (voicePathMap && localId && voicePathMap.has(localId)) {
           return `[语音消息] ${voicePathMap.get(localId)}${transcript ? ' ' + transcript : ''}`
         }

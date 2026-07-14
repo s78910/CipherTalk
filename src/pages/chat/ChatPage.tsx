@@ -1239,7 +1239,7 @@ function ChatPage(_props: ChatPageProps) {
     const transcribeOne = async (msg: any) => {
       try {
         // 检查是否已有缓存
-        const cached = await window.electronAPI.stt.getCachedTranscript(session.username, msg.createTime)
+        const cached = await window.electronAPI.stt.getCachedTranscript(session.username, msg.createTime, msg.localId)
         
         if (cached && cached.success && cached.transcript) {
           return { success: true, cached: true }
@@ -1262,7 +1262,8 @@ function ChatPage(_props: ChatPageProps) {
           result.data,
           session.username,
           msg.createTime,
-          false
+          false,
+          msg.localId,
         )
 
         return { success: transcribeResult.success }

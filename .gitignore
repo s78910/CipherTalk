@@ -83,7 +83,7 @@ skills-lock.json
 # heroui-agents-md
 .heroui-docs/
 release-verify/
-tools/
+/tools/
 
 # 插件打包产物
 *.ctp

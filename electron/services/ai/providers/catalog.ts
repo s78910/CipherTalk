@@ -1,7 +1,8 @@
 import fs from 'fs'
 import path from 'path'
-import { BaseAIProvider, type ProviderKind } from './base'
+import { BaseAIProvider, joinEndpoint, type ProviderKind } from './base'
 import { getAppPath, getUserDataPath, isElectronPackaged } from '../../runtimePaths'
+import { createProxyFetch, getResolvedProxyUrl } from '../proxyFetch'
 
 export type AIProviderProtocol = ProviderKind
 
@@ -562,6 +563,45 @@ export class CatalogAIProvider extends BaseAIProvider {
     if (!secretId || !secretKey) return undefined
     return { Authorization: `Bearer ${secretId};${secretKey}` }
   }
+
+  private isOpenRouterEndpoint(): boolean {
+    try {
+      const hostname = new URL(this.baseURL).hostname.toLowerCase()
+      return hostname === 'openrouter.ai' || hostname.endsWith('.openrouter.ai')
+    } catch {
+      return false
+    }
+  }
+
+  async testConnection(): Promise<{ success: boolean; error?: string; needsProxy?: boolean }> {
+    const result = await super.testConnection()
+    // OpenRouter 的 /models 不鉴权，模型列表拉取成功不代表 key 有效；再打需要鉴权的 /key 端点真实校验
+    if (!result.success || !this.isOpenRouterEndpoint()) return result
+
+    try {
+      const fetchImpl = createProxyFetch(getResolvedProxyUrl()) || fetch
+      const response = await fetchImpl(joinEndpoint(this.baseURL, '/key'), {
+        headers: { Authorization: `Bearer ${this.apiKey}` },
+        signal: AbortSignal.timeout(10000)
+      })
+      if (response.ok) return result
+      const body = await response.text().catch(() => '')
+      return { success: false, error: `API Key 无效（${response.status}）${body ? `: ${truncateKeyCheckBody(body)}` : ''}` }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      const needsProxy = /ECONNREFUSED|ETIMEDOUT|ENOTFOUND|fetch failed|getaddrinfo|timeout/i.test(message)
+      return {
+        success: false,
+        error: `模型列表可达，但 OpenRouter API Key 校验请求失败: ${message}`,
+        ...(needsProxy ? { needsProxy: true } : {}),
+      }
+    }
+  }
+}
+
+function truncateKeyCheckBody(body: string): string {
+  const trimmed = body.trim()
+  return trimmed.length > 200 ? `${trimmed.slice(0, 200)}…` : trimmed
 }
 
 export async function getModelsDevModels(providerId: string): Promise<string[]> {

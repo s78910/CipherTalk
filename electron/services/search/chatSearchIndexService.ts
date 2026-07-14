@@ -673,7 +673,7 @@ export class ChatSearchIndexService {
       const indexedAt = Date.now()
       for (const message of items) {
         const transcript = Number(message.localType) === 34
-          ? voiceTranscribeService.getCachedTranscript(sessionId, message.createTime) || undefined
+          ? voiceTranscribeService.getCachedTranscript(sessionId, message.createTime, message.localId) || undefined
           : undefined
         const searchText = compactSearchText(extractMessageSearchText(message, transcript))
         const tokenText = buildSearchTokens(searchText)

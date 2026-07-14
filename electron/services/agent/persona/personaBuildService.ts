@@ -51,9 +51,15 @@ async function pretranscribeSessionVoices(
     return
   }
 
-  // hasCachedTranscript：空结果也算已缓存，避免重新克隆时重复扣 STT 额度
+  const voiceCountByTime = new Map<number, number>()
+  for (const message of voiceMessages) {
+    voiceCountByTime.set(message.createTime, (voiceCountByTime.get(message.createTime) || 0) + 1)
+  }
+  const canUseLegacyCache = (message: { createTime: number }) => voiceCountByTime.get(message.createTime) === 1
+
+  // 只有时间戳唯一时才迁移旧缓存；同一秒多条语音必须按 localId 重新识别，避免串用文本。
   const pending = voiceMessages.filter(
-    (m) => !sttRuntimeService.hasCachedTranscript(sessionId, m.createTime),
+    (m) => !sttRuntimeService.hasCachedTranscript(sessionId, m.createTime, m.localId, canUseLegacyCache(m)),
   )
   const cachedCount = voiceMessages.length - pending.length
 
@@ -95,13 +101,18 @@ async function pretranscribeSessionVoices(
     const m = pending[i]
     try {
       // 双保险：循环中再次查缓存（并发/边转边写时不重复打 STT）
-      if (sttRuntimeService.hasCachedTranscript(sessionId, m.createTime)) {
+      if (sttRuntimeService.hasCachedTranscript(sessionId, m.createTime, m.localId, canUseLegacyCache(m))) {
         cacheHitsDuringRun += 1
       } else {
         const voice = await chatService.getVoiceData(sessionId, String(m.localId), m.createTime)
         if (voice.success && voice.data) {
           const result = await sttRuntimeService.transcribeWavBuffer(Buffer.from(voice.data, 'base64'), {
-            cache: { sessionId, createTime: m.createTime },
+            cache: {
+              sessionId,
+              createTime: m.createTime,
+              localId: m.localId,
+              allowLegacyCache: canUseLegacyCache(m),
+            },
           })
           if (result.errorCode === 'STT_NOT_READY') {
             logger?.warn?.('Persona', '语音转写未就绪，跳过补转（不影响克隆）', { sessionId, error: result.error })

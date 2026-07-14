@@ -14,6 +14,8 @@ type SttErrorCode = 'STT_NOT_READY' | 'INTERNAL_ERROR'
 type TranscribeCacheOptions = {
   sessionId: string
   createTime: number
+  localId?: number
+  allowLegacyCache?: boolean
   force?: boolean
 }
 
@@ -72,16 +74,16 @@ function isReadinessError(message?: string): boolean {
 class SttRuntimeService {
   private configService = new ConfigService()
 
-  getCachedTranscript(sessionId: string, createTime: number): string | null {
-    return voiceTranscribeService.getCachedTranscript(sessionId, createTime)
+  getCachedTranscript(sessionId: string, createTime: number, localId?: number, allowLegacy = localId === undefined): string | null {
+    return voiceTranscribeService.getCachedTranscript(sessionId, createTime, localId, allowLegacy)
   }
 
-  hasCachedTranscript(sessionId: string, createTime: number): boolean {
-    return voiceTranscribeService.hasCachedTranscript(sessionId, createTime)
+  hasCachedTranscript(sessionId: string, createTime: number, localId?: number, allowLegacy = localId === undefined): boolean {
+    return voiceTranscribeService.hasCachedTranscript(sessionId, createTime, localId, allowLegacy)
   }
 
-  saveTranscriptCache(sessionId: string, createTime: number, transcript: string, allowEmpty = false): void {
-    voiceTranscribeService.saveTranscriptCache(sessionId, createTime, transcript, allowEmpty)
+  saveTranscriptCache(sessionId: string, createTime: number, transcript: string, allowEmpty = false, localId?: number): void {
+    voiceTranscribeService.saveTranscriptCache(sessionId, createTime, transcript, allowEmpty, localId)
   }
 
   getCurrentSttMode(): SttMode {
@@ -123,8 +125,8 @@ class SttRuntimeService {
 
     if (cache && !cache.force) {
       // 必须用 hasCached：空串也是有效缓存命中，避免重复扣在线 STT 额度
-      if (this.hasCachedTranscript(cache.sessionId, cache.createTime)) {
-        const cached = this.getCachedTranscript(cache.sessionId, cache.createTime) ?? ''
+      if (this.hasCachedTranscript(cache.sessionId, cache.createTime, cache.localId, cache.allowLegacyCache)) {
+        const cached = this.getCachedTranscript(cache.sessionId, cache.createTime, cache.localId, cache.allowLegacyCache) ?? ''
         return { success: true, transcript: cached, cached: true, sttMode }
       }
     }
@@ -166,7 +168,7 @@ class SttRuntimeService {
     const transcript = String(result.transcript || '').trim()
     if (cache) {
       // 空结果也落库，标记「已尝试」，重克隆时不再重复调用 STT
-      this.saveTranscriptCache(cache.sessionId, cache.createTime, transcript, true)
+      this.saveTranscriptCache(cache.sessionId, cache.createTime, transcript, true, cache.localId)
     }
 
     if (!transcript) {

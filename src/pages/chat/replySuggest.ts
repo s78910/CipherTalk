@@ -90,7 +90,7 @@ export async function buildSuggestContext(
     let text = m.parsedContent.trim()
     if (m.localType === 34) {
       try {
-        const cached = await window.electronAPI.stt.getCachedTranscript(sessionId, m.createTime)
+        const cached = await window.electronAPI.stt.getCachedTranscript(sessionId, m.createTime, m.localId)
         if (cached.success && cached.transcript) text = `[语音] ${cached.transcript}`
       } catch {
         // 查缓存失败保持占位

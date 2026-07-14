@@ -1326,7 +1326,7 @@ export interface ElectronAPI {
       cancelled: boolean
       error?: string
     }>
-    transcribe: (wavBase64: string, sessionId: string, createTime: number, force?: boolean) => Promise<{
+    transcribe: (wavBase64: string, sessionId: string, createTime: number, force?: boolean, localId?: number) => Promise<{
       success: boolean
       transcript?: string
       cached?: boolean
@@ -1352,11 +1352,11 @@ export interface ElectronAPI {
       percent?: number
     }) => void) => () => void
     onPartialResult: (callback: (text: string) => void) => () => void
-    getCachedTranscript: (sessionId: string, createTime: number) => Promise<{
+    getCachedTranscript: (sessionId: string, createTime: number, localId?: number) => Promise<{
       success: boolean
       transcript?: string
     }>
-    updateTranscript: (sessionId: string, createTime: number, transcript: string) => Promise<{
+    updateTranscript: (sessionId: string, createTime: number, transcript: string, localId?: number) => Promise<{
       success: boolean
       error?: string
     }>

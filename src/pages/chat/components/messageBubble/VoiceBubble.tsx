@@ -105,7 +105,7 @@ function VoiceBubble({ message, session, isSent, onContextMenu }: VoiceBubblePro
       // 防重复：先查转写结果缓存，命中则直接复用，避免重复检查模型状态与初始化引擎
       if (!force) {
         try {
-          const cached = await window.electronAPI.stt.getCachedTranscript(session.username, message.createTime)
+          const cached = await window.electronAPI.stt.getCachedTranscript(session.username, message.createTime, message.localId)
           if (cached.success && cached.transcript) {
             setSttTranscript(cached.transcript)
             setSttLoading(false)
@@ -258,7 +258,7 @@ function VoiceBubble({ message, session, isSent, onContextMenu }: VoiceBubblePro
         })
       }
 
-      const result = await window.electronAPI.stt.transcribe(wavBase64, session.username, message.createTime, force)
+      const result = await window.electronAPI.stt.transcribe(wavBase64, session.username, message.createTime, force, message.localId)
       removeListener?.()
 
       if (result.success && result.transcript) {
@@ -280,7 +280,7 @@ function VoiceBubble({ message, session, isSent, onContextMenu }: VoiceBubblePro
   useEffect(() => {
     if (sttTranscript || sttLoading) return
 
-    window.electronAPI.stt.getCachedTranscript(session.username, message.createTime).then((result) => {
+    window.electronAPI.stt.getCachedTranscript(session.username, message.createTime, message.localId).then((result) => {
       if (result.success && result.transcript) {
         setSttTranscript(result.transcript)
       }
@@ -387,7 +387,7 @@ function VoiceBubble({ message, session, isSent, onContextMenu }: VoiceBubblePro
                   if (editContent.trim() !== sttTranscript) {
                     setSttTranscript(editContent)
                     try {
-                      await window.electronAPI.stt.updateTranscript(session.username, message.createTime, editContent)
+                      await window.electronAPI.stt.updateTranscript(session.username, message.createTime, editContent, message.localId)
                     } catch (err) {
                       console.error('更新转写缓存失败:', err)
                     }

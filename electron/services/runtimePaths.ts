@@ -28,6 +28,15 @@ export function getUserDataPath(): string {
   return path.join(appData, 'ciphertalk')
 }
 
+export function getAppDataPath(): string {
+  const app = getElectronAppSafe()
+  if (app?.getPath) {
+    return app.getPath('appData')
+  }
+
+  return process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming')
+}
+
 export function getDocumentsPath(): string {
   const app = getElectronAppSafe()
   if (app?.getPath) {
@@ -44,6 +53,15 @@ export function getExePath(): string {
   }
 
   return process.execPath
+}
+
+export function getTempPath(): string {
+  const app = getElectronAppSafe()
+  if (app?.getPath) {
+    return app.getPath('temp')
+  }
+
+  return os.tmpdir()
 }
 
 export function getAppPath(): string {

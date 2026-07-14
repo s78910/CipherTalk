@@ -46,7 +46,7 @@ export interface PersonaCorpus {
 export function messageText(m: ChatSearchMemoryMessage): string {
   if (m.localType === 1) return m.parsedContent.trim()
   if (m.localType === 34) {
-    return (voiceTranscribeService.getCachedTranscript(m.sessionId, m.createTime) || '').trim()
+    return (voiceTranscribeService.getCachedTranscript(m.sessionId, m.createTime, m.localId) || '').trim()
   }
   return ''
 }

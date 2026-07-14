@@ -64,7 +64,7 @@ function buildContext(sessionId: string, messages: Message[], deep: boolean): Ar
     let text = m.parsedContent.trim()
     if (m.localType === 34) {
       try {
-        const t = voiceTranscribeService.getCachedTranscript(sessionId, m.createTime)
+        const t = voiceTranscribeService.getCachedTranscript(sessionId, m.createTime, m.localId)
         if (t) text = `[语音] ${t}`
       } catch { /* 无转写保持占位 */ }
     }

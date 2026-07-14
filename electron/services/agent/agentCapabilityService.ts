@@ -310,6 +310,8 @@ export class AgentCapabilityService {
         return this.auditMemories(args)
       case 'apply_memory_fix':
         return this.applyMemoryFix(args)
+      case 'transcribe_voice_message':
+        return this.transcribeVoiceMessage(args)
       default:
         return { success: false, error: `unknown agent capability method: ${method}` }
     }
@@ -953,6 +955,72 @@ export class AgentCapabilityService {
       return { success: true, result }
     }
     return { success: false, error: 'action 只支持 delete/consolidate' }
+  }
+
+  private async transcribeVoiceMessage(args: Record<string, unknown>): Promise<unknown> {
+    const sessionId = normalizeText(args.sessionId)
+    const localId = Number(args.localId)
+    const createTime = Number(args.createTime)
+    const force = args.force === true
+    if (!sessionId || !Number.isInteger(localId) || localId <= 0 || !Number.isInteger(createTime) || createTime <= 0) {
+      return { success: false, error: 'sessionId、localId、createTime 必填且必须有效', errorCode: 'BAD_REQUEST' }
+    }
+
+    const [{ chatService }, { sttRuntimeService }] = await Promise.all([
+      import('../chatService'),
+      import('../sttRuntimeService'),
+    ])
+
+    if (!force && sttRuntimeService.hasCachedTranscript(sessionId, createTime, localId)) {
+      const transcript = sttRuntimeService.getCachedTranscript(sessionId, createTime, localId) ?? ''
+      if (!transcript) {
+        return {
+          success: false,
+          error: '语音转写结果为空（已缓存；如需重新识别，请明确要求强制转写）',
+          errorCode: 'EMPTY_TRANSCRIPT_CACHED',
+        }
+      }
+      return {
+        success: true,
+        transcript,
+        cached: true,
+        sttMode: sttRuntimeService.getCurrentSttMode(),
+        sessionId,
+        localId,
+        createTime,
+      }
+    }
+
+    const voice = await chatService.getVoiceData(sessionId, String(localId), createTime)
+    if (!voice.success || !voice.data) {
+      const error = voice.error || '未找到语音数据'
+      return {
+        success: false,
+        error,
+        errorCode: error.includes('未找到媒体数据库') ? 'DB_NOT_READY' : 'VOICE_DATA_UNAVAILABLE',
+      }
+    }
+
+    const result = await sttRuntimeService.transcribeWavBuffer(Buffer.from(voice.data, 'base64'), {
+      cache: { sessionId, createTime, localId, force },
+    })
+    if (!result.success || !result.transcript) {
+      return {
+        success: false,
+        error: result.error || '语音转写失败',
+        ...(result.errorCode ? { errorCode: result.errorCode } : {}),
+      }
+    }
+
+    return {
+      success: true,
+      transcript: result.transcript,
+      cached: Boolean(result.cached),
+      sttMode: result.sttMode,
+      sessionId,
+      localId,
+      createTime,
+    }
   }
 }
 
