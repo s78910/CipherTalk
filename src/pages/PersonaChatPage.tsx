@@ -439,6 +439,9 @@ export default function PersonaChatPage({ sessionId: sessionIdProp, embedded = f
   // 语音输入（按住说话）：idle 空闲 / recording 录音中 / transcribing 转写中
   const [voiceInput, setVoiceInput] = useState<'idle' | 'recording' | 'transcribing'>('idle')
   const recorderRef = useRef<ActiveRecorder | null>(null)
+  // 语音发问后自动朗读这一轮回复（打字发的消息不自动播）
+  const autoPlayReplyRef = useRef(false)
+  const wasBusyRef = useRef(false)
   const [speakingStyleOpen, setSpeakingStyleOpen] = useState(false)
   const [speakingStyleSaving, setSpeakingStyleSaving] = useState(false)
   const [speakingStyleDraft, setSpeakingStyleDraft] = useState<SpeakingStyleDraft>(EMPTY_SPEAKING_STYLE_DRAFT)
@@ -664,6 +667,19 @@ export default function PersonaChatPage({ sessionId: sessionIdProp, embedded = f
       }
     }
   }
+  // 语音发问：本轮回复流结束后，自动朗读最新一条分身回复的第一段语音
+  useEffect(() => {
+    const wasBusy = wasBusyRef.current
+    wasBusyRef.current = busy
+    if (!(wasBusy && !busy && autoPlayReplyRef.current)) return
+    autoPlayReplyRef.current = false
+    const last = messages[messages.length - 1]
+    if (last?.role !== 'assistant') return
+    const bubbles = messageTextParts(last).map((part) => part.trim()).filter(Boolean).map(parseBubble)
+    const firstVoice = bubbles.findIndex((bubble) => bubble.isVoice)
+    if (firstVoice >= 0) void handlePlayVoice(last.id, bubbles, firstVoice)
+  }, [busy, messages])
+
   // AI 已经开始逐条吐气泡后就不再显示"正在输入"指示器，否则像凭空多了一条带头像的消息
   const lastMessage = messages[messages.length - 1]
   const showTypingIndicator = busy && !(lastMessage?.role === 'assistant' && messageText(lastMessage).trim().length > 0)
@@ -1196,6 +1212,7 @@ export default function PersonaChatPage({ sessionId: sessionIdProp, embedded = f
         return
       }
       await handleSendText(res.transcript.trim())
+      autoPlayReplyRef.current = true // 这一轮回复自动用复刻音色念出来
     } catch (e) {
       setVoiceCloneStatus({ ok: false, text: e instanceof Error ? e.message : String(e) })
     } finally {
