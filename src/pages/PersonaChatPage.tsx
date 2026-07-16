@@ -21,7 +21,6 @@ import {
   PromptInputBody,
   PromptInputFooter,
   PromptInputHeader,
-  PromptInputSubmit,
   PromptInputTextarea,
   PromptInputTools,
   type PromptInputMessage,
@@ -30,8 +29,8 @@ import { ImagePreview, type ImagePreviewOriginRect } from '@/components/ImagePre
 import { PersonaChatTransport } from '../features/aiagent/transport/personaChatTransport'
 import { cn } from '../lib/utils'
 import { useTtsSpeaker } from '../lib/ttsPlayer'
-import { startVoiceRecording, type ActiveRecorder } from '../lib/voiceRecorder'
 import { startVoiceCall, type VoiceCallSession } from '../lib/voiceCallSession'
+import { HoldToTalkSubmit } from '@/components/ai-elements/hold-to-talk-submit'
 import { parseWechatEmoji } from '../utils/wechatEmoji'
 import { getAIProviders, type AIModelInfo, type AIProviderInfo } from '../types/ai'
 import type { AgentConversationUpdatedEvent, PersonaBuildProgressInfo, PersonaRecordInfo } from '../types/electron'
@@ -437,9 +436,6 @@ export default function PersonaChatPage({ sessionId: sessionIdProp, embedded = f
   const [clearingConversations, setClearingConversations] = useState(false)
   const [voiceCloning, setVoiceCloning] = useState(false)
   const [voiceCloneStatus, setVoiceCloneStatus] = useState<{ ok: boolean; text: string } | null>(null)
-  // 语音输入（按住说话）：idle 空闲 / recording 录音中 / transcribing 转写中
-  const [voiceInput, setVoiceInput] = useState<'idle' | 'recording' | 'transcribing'>('idle')
-  const recorderRef = useRef<ActiveRecorder | null>(null)
   // 语音发问后自动朗读这一轮回复（打字发的消息不自动播）
   const autoPlayReplyRef = useRef(false)
   const wasBusyRef = useRef(false)
@@ -1210,46 +1206,6 @@ export default function PersonaChatPage({ sessionId: sessionIdProp, embedded = f
     armFlushTimer()
   }
 
-  // 按住说话：按下开始录音
-  const startVoiceInput = async () => {
-    if (busy || voiceInput !== 'idle') return
-    stopVoice() // 开口即打断分身正在播的语音
-    try {
-      recorderRef.current = await startVoiceRecording()
-      setVoiceInput('recording')
-    } catch (e) {
-      setVoiceCloneStatus({ ok: false, text: `无法打开麦克风：${e instanceof Error ? e.message : String(e)}` })
-    }
-  }
-
-  // 松开：停止录音 → 转写 → 当作文本消息发出去（走现有待发缓冲/回复流）
-  const finishVoiceInput = async (send: boolean) => {
-    const recorder = recorderRef.current
-    recorderRef.current = null
-    if (!recorder) return
-    if (!send) {
-      recorder.cancel()
-      setVoiceInput('idle')
-      return
-    }
-    setVoiceInput('transcribing')
-    try {
-      const { wavBase64, durationSec } = await recorder.stop()
-      if (durationSec < 0.4) { setVoiceInput('idle'); return } // 太短当误触，忽略
-      const res = await window.electronAPI.stt.transcribeBuffer(wavBase64)
-      if (!res.success || !res.transcript?.trim()) {
-        setVoiceCloneStatus({ ok: false, text: res.error || '没听清，请再说一次' })
-        return
-      }
-      await handleSendText(res.transcript.trim())
-      autoPlayReplyRef.current = true // 这一轮回复自动用复刻音色念出来
-    } catch (e) {
-      setVoiceCloneStatus({ ok: false, text: e instanceof Error ? e.message : String(e) })
-    } finally {
-      setVoiceInput('idle')
-    }
-  }
-
   // 通话模式：立即发送（绕过打字用的 2-4s 待发缓冲，避免通话时发闷）
   const sendNow = async (rawText: string) => {
     const text = rawText.trim()
@@ -1808,37 +1764,25 @@ export default function PersonaChatPage({ sessionId: sessionIdProp, embedded = f
                     <PromptInputActionAddAttachments label="添加图片" />
                   </PromptInputActionMenuContent>
                 </PromptInputActionMenu>
-                {/* 按住说话：按下录音、松开转写并发送；用复刻音色回复 */}
-                <button
-                  type="button"
-                  aria-label={voiceInput === 'recording' ? '松开发送' : '按住说话'}
-                  disabled={busy || voiceInput === 'transcribing'}
-                  onPointerDown={(event) => { event.preventDefault(); void startVoiceInput() }}
-                  onPointerUp={() => void finishVoiceInput(true)}
-                  onPointerLeave={() => { if (voiceInput === 'recording') void finishVoiceInput(true) }}
-                  onPointerCancel={() => void finishVoiceInput(false)}
-                  className={cn(
-                    'grid size-9 shrink-0 place-items-center rounded-full text-muted transition-colors hover:bg-surface/60 disabled:opacity-40',
-                    voiceInput === 'recording' && 'bg-danger/15 text-danger',
-                    voiceInput === 'transcribing' && 'text-primary',
-                  )}
-                >
-                  {voiceInput === 'transcribing'
-                    ? <CircleDashed width={18} height={18} className="animate-spin" />
-                    : <Microphone width={18} height={18} />}
-                </button>
-                {/* 语音通话：打电话式，常开麦自动断句 */}
+                {/* 语音通话：打电话式，常开麦自动断句（语音输入合并到发送按钮长按） */}
                 <button
                   type="button"
                   aria-label="语音通话"
-                  disabled={busy || voiceInput !== 'idle'}
+                  disabled={busy}
                   onClick={() => void startCall()}
                   className="grid size-9 shrink-0 place-items-center rounded-full text-muted transition-colors hover:bg-surface/60 disabled:opacity-40"
                 >
                   <Smartphone width={18} height={18} />
                 </button>
               </PromptInputTools>
-              <PromptInputSubmit status={busy ? 'streaming' : undefined} />
+              <HoldToTalkSubmit
+                holdDisabled={busy}
+                status={busy ? 'streaming' : undefined}
+                onTranscript={(text) => {
+                  void handleSendText(text).then(() => { autoPlayReplyRef.current = true })
+                }}
+                onVoiceError={(msg) => setVoiceCloneStatus({ ok: false, text: msg })}
+              />
             </PromptInputFooter>
           </PromptInput>
         </div>

@@ -3,16 +3,15 @@
  * 从 AgentPage.tsx 拆出。
  */
 import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
-import { Button as HeroButton, ButtonGroup, Dropdown, Header, Label } from '@heroui/react'
+import { Button as HeroButton, ButtonGroup, Dropdown, Header, Label, toast } from '@heroui/react'
 import { ChevronDown, Sparkles } from '@gravity-ui/icons'
 import type { IconComponent } from '@/types/icon'
 import type { ChatStatus } from 'ai'
 import {
-  PromptInputSpeechButton,
-  PromptInputSubmit,
   usePromptInputController,
   type PromptInputControllerProps,
 } from '@/components/ai-elements/prompt-input'
+import { HoldToTalkSubmit } from '@/components/ai-elements/hold-to-talk-submit'
 import type { AgentToolApprovalPolicy } from '@/types/electron'
 import {
   AGENT_TOOL_APPROVAL_POLICY_OPTIONS,
@@ -220,28 +219,22 @@ export function SlashCommandButton({
   )
 }
 
-export function AgentPromptSubmit({ busy, status, workspaceReferenceCount }: { busy: boolean; status: ChatStatus; workspaceReferenceCount: number }) {
-  const { textInput, attachments } = usePromptInputController()
-  const disabled = !busy && !textInput.value.trim() && attachments.files.length === 0 && workspaceReferenceCount === 0
-  return <PromptInputSubmit disabled={disabled} status={status} />
-}
+/** 发送按钮：短按提交/停止，长按语音输入（转写结果追加进输入框），与克隆聊天页一致 */
+export function AgentPromptPrimaryAction({ busy, status }: { busy: boolean; status: ChatStatus; workspaceReferenceCount: number }) {
+  const { textInput } = usePromptInputController()
 
-export function AgentPromptPrimaryAction({ busy, status, workspaceReferenceCount }: { busy: boolean; status: ChatStatus; workspaceReferenceCount: number }) {
-  const { textInput, attachments } = usePromptInputController()
-  const hasSubmitContent = textInput.value.trim().length > 0 || attachments.files.length > 0 || workspaceReferenceCount > 0
-
-  if (!busy && !hasSubmitContent) {
-    return (
-      <PromptInputSpeechButton
-        aria-label="语音输入"
-        language="zh-CN"
-        size="icon-sm"
-        variant="primary"
-      />
-    )
-  }
-
-  return <AgentPromptSubmit busy={busy} status={status} workspaceReferenceCount={workspaceReferenceCount} />
+  // 空输入不禁用按钮：长按录音需要它可按；空的短按由表单 onSubmit 判空忽略
+  return (
+    <HoldToTalkSubmit
+      holdDisabled={busy}
+      status={status}
+      onTranscript={(text) => {
+        const current = textInput.value
+        textInput.setInput(current + (current ? ' ' : '') + text)
+      }}
+      onVoiceError={(message) => toast.danger(message, { timeout: 3000 })}
+    />
+  )
 }
 
 export function PromptInputControllerBridge({
