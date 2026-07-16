@@ -1184,6 +1184,7 @@ export default function PersonaChatPage({ sessionId: sessionIdProp, embedded = f
   // 按住说话：按下开始录音
   const startVoiceInput = async () => {
     if (busy || voiceInput !== 'idle') return
+    stopVoice() // 开口即打断分身正在播的语音
     try {
       recorderRef.current = await startVoiceRecording()
       setVoiceInput('recording')
