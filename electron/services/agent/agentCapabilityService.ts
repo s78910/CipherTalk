@@ -312,8 +312,145 @@ export class AgentCapabilityService {
         return this.applyMemoryFix(args)
       case 'transcribe_voice_message':
         return this.transcribeVoiceMessage(args)
+      case 'canvas_create':
+      case 'canvas_read':
+      case 'canvas_edit':
+      case 'canvas_replace':
+      case 'canvas_rename':
+        return this.handleCanvasCall(method, args)
       default:
         return { success: false, error: `unknown agent capability method: ${method}` }
+    }
+  }
+
+  /**
+   * Agent Canvas 工具（见 Docs/Agent-Canvas画布对接开发文档.md §8）。
+   * conversationId 由主进程校验过的 canvasContext 注入（不来自模型输入）；
+   * 这里再次校验 Canvas 归属，防止工具拿其它会话的 canvasId 读写。
+   * 日志只记 canvasId/revision/长度，不落正文。
+   */
+  private async handleCanvasCall(method: string, args: Record<string, unknown>): Promise<unknown> {
+    const { agentCanvasStore } = await import('./agentCanvasStore')
+    const { AgentCanvasConflictError, CANVAS_MAX_CONTENT_CHARS, CANVAS_MAX_EDITS } = await import('./canvasTypes')
+    const conversationId = Number(args.conversationId)
+    if (!Number.isInteger(conversationId) || conversationId <= 0) {
+      return { success: false, error: '当前会话没有 Canvas 上下文，无法使用画布工具。', errorCode: 'NO_CANVAS_CONTEXT' }
+    }
+
+    const requireOwnCanvas = (canvasId: unknown) => {
+      const canvas = agentCanvasStore.get(String(canvasId || ''))
+      if (!canvas) throw new Error(`Canvas 不存在: ${String(canvasId || '')}`)
+      if (canvas.conversationId !== conversationId) {
+        const err = new Error('该 Canvas 不属于当前会话') as Error & { errorCode?: string }
+        err.errorCode = 'CANVAS_NOT_IN_CONVERSATION'
+        throw err
+      }
+      return canvas
+    }
+    const refOf = (canvas: import('./canvasTypes').AgentCanvasRecord) => ({
+      canvasId: canvas.id,
+      conversationId: canvas.conversationId,
+      kind: canvas.kind,
+      title: canvas.title,
+      revision: canvas.revision,
+    })
+
+    try {
+      switch (method) {
+        case 'canvas_create': {
+          const canvas = agentCanvasStore.create({
+            conversationId,
+            kind: args.kind === 'code' ? 'code' : 'document',
+            title: normalizeText(args.title).slice(0, 120) || '未命名画布',
+            language: normalizeText(args.language).slice(0, 40) || undefined,
+            content: String(args.content ?? ''),
+            createdBy: 'agent',
+          })
+          return { success: true, ...refOf(canvas) }
+        }
+        case 'canvas_read': {
+          const canvas = requireOwnCanvas(args.canvasId)
+          return {
+            success: true,
+            ...refOf(canvas),
+            language: canvas.language,
+            content: canvas.content,
+            contentLength: canvas.content.length,
+          }
+        }
+        case 'canvas_edit': {
+          const canvas = requireOwnCanvas(args.canvasId)
+          const edits = Array.isArray(args.edits) ? args.edits : []
+          if (edits.length === 0) return { success: false, error: 'edits 不能为空' }
+          if (edits.length > CANVAS_MAX_EDITS) {
+            return { success: false, error: `单次最多允许 ${CANVAS_MAX_EDITS} 个 edits` }
+          }
+          // 全部替换先在内存副本验证：零命中/非唯一命中直接失败，任一失败整次不落库
+          let next = canvas.content
+          for (let i = 0; i < edits.length; i += 1) {
+            const edit = edits[i] as { search?: unknown; replace?: unknown; replaceAll?: unknown }
+            const search = String(edit?.search ?? '')
+            const replace = String(edit?.replace ?? '')
+            if (!search) return { success: false, error: `第 ${i + 1} 个 edit 的 search 为空` }
+            const first = next.indexOf(search)
+            if (first < 0) {
+              return { success: false, error: `第 ${i + 1} 个 edit 零命中：请先 canvas_read 获取最新正文，不要猜测位置。`, errorCode: 'EDIT_NO_MATCH' }
+            }
+            if (edit?.replaceAll === true) {
+              next = next.split(search).join(replace)
+            } else {
+              if (next.indexOf(search, first + 1) >= 0) {
+                return { success: false, error: `第 ${i + 1} 个 edit 命中多处：请提供更长的唯一上下文，或明确 replaceAll=true。`, errorCode: 'EDIT_AMBIGUOUS' }
+              }
+              next = next.slice(0, first) + replace + next.slice(first + search.length)
+            }
+          }
+          if (next.length > CANVAS_MAX_CONTENT_CHARS) {
+            return { success: false, error: `编辑后正文超过上限（${CANVAS_MAX_CONTENT_CHARS} 字符）` }
+          }
+          const updated = agentCanvasStore.update({
+            canvasId: canvas.id,
+            baseRevision: Number(args.baseRevision),
+            content: next,
+            source: 'agent',
+          })
+          return { success: true, ...refOf(updated), appliedEdits: edits.length, contentLength: updated.content.length }
+        }
+        case 'canvas_replace': {
+          const canvas = requireOwnCanvas(args.canvasId)
+          const updated = agentCanvasStore.update({
+            canvasId: canvas.id,
+            baseRevision: Number(args.baseRevision),
+            content: String(args.content ?? ''),
+            source: 'agent',
+          })
+          return { success: true, ...refOf(updated), contentLength: updated.content.length }
+        }
+        case 'canvas_rename': {
+          const canvas = requireOwnCanvas(args.canvasId)
+          const updated = agentCanvasStore.rename({
+            canvasId: canvas.id,
+            baseRevision: Number(args.baseRevision),
+            title: normalizeText(args.title).slice(0, 120),
+            source: 'agent',
+          })
+          return { success: true, ...refOf(updated) }
+        }
+        default:
+          return { success: false, error: `unknown canvas method: ${method}` }
+      }
+    } catch (error) {
+      if (error instanceof AgentCanvasConflictError) {
+        return {
+          success: false,
+          error: `REVISION_CONFLICT：画布已被更新到 v${error.conflict.actualRevision}。请先 canvas_read 读取最新内容再重试，不得覆盖用户的新编辑。`,
+          errorCode: 'REVISION_CONFLICT',
+          actualRevision: error.conflict.actualRevision,
+          expectedRevision: error.conflict.expectedRevision,
+        }
+      }
+      const err = error as Error & { errorCode?: string }
+      return { success: false, error: err?.message || String(error), ...(err?.errorCode ? { errorCode: err.errorCode } : {}) }
     }
   }
 

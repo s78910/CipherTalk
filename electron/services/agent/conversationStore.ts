@@ -414,10 +414,24 @@ export class AgentConversationStore {
     return this.mapConversation(row)
   }
 
+  /** Canvas 表由 agentCanvasStore 建；老库可能还没有，删除时按存在与否级联清理。 */
+  private deleteCanvasesOf(db: Database.Database, conversationId: number): void {
+    try {
+      db.prepare(`
+        DELETE FROM agent_canvas_revisions
+        WHERE canvas_id IN (SELECT id FROM agent_canvases WHERE conversation_id = ?)
+      `).run(conversationId)
+      db.prepare('DELETE FROM agent_canvases WHERE conversation_id = ?').run(conversationId)
+    } catch {
+      // 表尚未创建（从未用过 Canvas）时忽略
+    }
+  }
+
   remove(id: number, options: ConversationChangeOptions = {}): { success: boolean } {
     const record = this.loadMeta(id, false)
     const db = this.getDb()
     const tx = db.transaction((conversationId: number) => {
+      this.deleteCanvasesOf(db, conversationId)
       db.prepare('DELETE FROM agent_messages WHERE conversation_id = ?').run(conversationId)
       db.prepare('DELETE FROM agent_conversations WHERE id = ?').run(conversationId)
     })
@@ -454,6 +468,7 @@ export class AgentConversationStore {
       const deleteMessages = db.prepare('DELETE FROM agent_messages WHERE conversation_id = ?')
       const deleteConversation = db.prepare('DELETE FROM agent_conversations WHERE id = ?')
       for (const conversationId of conversationIds) {
+        this.deleteCanvasesOf(db, conversationId)
         deleteMessages.run(conversationId)
         deleteConversation.run(conversationId)
       }

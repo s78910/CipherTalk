@@ -7,7 +7,7 @@ import { randomBytes } from 'crypto'
 import { z } from 'zod'
 import type { SystemModelMessage } from '@ai-sdk/provider-utils'
 import { createLanguageModel, createNativeWebSearchTools, getNativeWebSearchProvider } from './provider'
-import { buildAgentPromptParts, CODE_WORKSPACE_PROMPT, IMAGE_GEN_PROMPT, PLAN_MODE_PROMPT, WEB_SEARCH_PROMPT } from './prompts'
+import { buildAgentPromptParts, buildCanvasPrompt, CODE_WORKSPACE_PROMPT, IMAGE_GEN_PROMPT, PLAN_MODE_PROMPT, WEB_SEARCH_PROMPT } from './prompts'
 import { isImageGenAvailable } from '../ai/imageGenService'
 import { applyAnthropicCacheControl, buildPromptCacheKey, buildProviderCacheStatus, buildProviderOptions, buildReasoningOption } from './cache'
 import { buildCodeOnlyTools, buildPlanModeTools, buildTools } from './tools'
@@ -58,6 +58,7 @@ export function buildAgentInstructions(
     historyManagedTurnContext ? '' : promptParts.dynamicSystem,
     historyManagedTurnContext ? '' : (input.planMode ? PLAN_MODE_PROMPT : ''),
     historyManagedTurnContext ? '' : (input.codeWorkspace ? CODE_WORKSPACE_PROMPT : ''),
+    historyManagedTurnContext ? '' : (input.canvasContext && !input.planMode && input.toolMode !== 'disabled' ? buildCanvasPrompt(input.canvasContext) : ''),
     historyManagedTurnContext ? '' : (webSearchOn ? WEB_SEARCH_PROMPT : ''),
     historyManagedTurnContext ? '' : (imageGenOn ? IMAGE_GEN_PROMPT : ''),
     historyManagedTurnContext ? '' : memoryContext,
@@ -399,6 +400,8 @@ export async function runAgent(
           : buildTools(input.scope, input.providerConfig, input.mcpTools, imageGenOn, codeWorkspace, {
             allowWechatReplyMedia: input.allowWechatReplyMedia === true,
             uploadedMediaContext: input.uploadedMediaContext,
+            canvasContext: input.canvasContext,
+            emitChunk: onChunk,
           })
     const baseTools = toolsDisabled
       ? {}

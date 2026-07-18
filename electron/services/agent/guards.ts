@@ -48,6 +48,11 @@ const TOOL_TIMEOUT_OVERRIDES: Record<string, number> = {
   desktop_ocr: 120_000,
   audit_memories: 120_000,
   apply_memory_fix: 300_000,
+  canvas_create: 120_000,
+  canvas_read: 120_000,
+  canvas_edit: 120_000,
+  canvas_replace: 600_000, // 可能等待用户审批
+  canvas_rename: 120_000,
   code_read_file: 120_000,
   code_list_files: 120_000,
   code_workspace_status: 120_000,

@@ -14,6 +14,10 @@ export type CodeWorkspaceRef = {
   root: string
   approvalPolicy: CodeWorkspaceApprovalPolicy
 }
+export type AgentCanvasRunContextInput = {
+  activeCanvasId?: string
+  activeRevision?: number
+}
 export type AgentModelConfig = {
   provider?: string
   apiKey?: string
@@ -53,7 +57,8 @@ interface AgentBridge {
     conversationId?: number | null,
     planMode?: boolean,
     toolProfile?: AgentToolProfile,
-    codeWorkspace?: CodeWorkspaceRef | null
+    codeWorkspace?: CodeWorkspaceRef | null,
+    canvasContext?: AgentCanvasRunContextInput | null
   ) => Promise<{ success: boolean; error?: string }>
   abort: (runId: string) => Promise<{ success: boolean }>
   onChunk: (runId: string, callback: (chunk: unknown) => void) => () => void
@@ -220,7 +225,8 @@ export class IpcChatTransport<UI_MESSAGE extends UIMessage = UIMessage> implemen
     private readonly onProgress?: (progress: AgentProgressEvent) => void,
     private readonly getPlanMode?: () => boolean,
     private readonly getToolProfile?: () => AgentToolProfile,
-    private readonly getCodeWorkspace?: () => CodeWorkspaceRef | null
+    private readonly getCodeWorkspace?: () => CodeWorkspaceRef | null,
+    private readonly getCanvasContext?: () => AgentCanvasRunContextInput | null
   ) {}
 
   async sendMessages(options: {
@@ -236,6 +242,7 @@ export class IpcChatTransport<UI_MESSAGE extends UIMessage = UIMessage> implemen
     const planMode = this.getPlanMode?.() ?? false
     const toolProfile = this.getToolProfile?.() ?? 'chat'
     const codeWorkspace = this.getCodeWorkspace?.() ?? null
+    const canvasContext = this.getCanvasContext?.() ?? null
     const progressHandler = this.onProgress
     const smokeRun = startSmokeRun({ runId, scope, planMode, toolProfile })
 
@@ -263,7 +270,7 @@ export class IpcChatTransport<UI_MESSAGE extends UIMessage = UIMessage> implemen
           }
         })
         // 触发主进程运行；run resolve 即代表本次结束（chunk 已通过 onChunk 推完，[DONE] 关流）
-        void bridge.run(runId, messages, scope, modelConfig, conversationId, planMode, toolProfile, codeWorkspace).catch((error: unknown) => {
+        void bridge.run(runId, messages, scope, modelConfig, conversationId, planMode, toolProfile, codeWorkspace, canvasContext).catch((error: unknown) => {
           try {
             const errorChunk = { type: 'error', errorText: error instanceof Error ? error.message : String(error) } as UIMessageChunk
             observeSmokeChunk(smokeRun, errorChunk)

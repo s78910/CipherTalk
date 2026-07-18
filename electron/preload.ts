@@ -188,8 +188,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // AI Agent（主进程 broker → AI 子进程；流式 chunk 经 agent:chunk 推回）
   agent: {
-    run: (runId: string, messages: unknown[], scope?: unknown, modelConfig?: unknown, conversationId?: number | null, planMode?: boolean, toolProfile?: unknown, codeWorkspace?: unknown) =>
-      ipcRenderer.invoke('agent:run', { runId, messages, scope, modelConfig, conversationId, planMode, toolProfile, codeWorkspace }) as Promise<{ success: boolean; error?: string }>,
+    run: (runId: string, messages: unknown[], scope?: unknown, modelConfig?: unknown, conversationId?: number | null, planMode?: boolean, toolProfile?: unknown, codeWorkspace?: unknown, canvasContext?: unknown) =>
+      ipcRenderer.invoke('agent:run', { runId, messages, scope, modelConfig, conversationId, planMode, toolProfile, codeWorkspace, canvasContext }) as Promise<{ success: boolean; error?: string }>,
     abort: (runId: string) => ipcRenderer.invoke('agent:abort', runId) as Promise<{ success: boolean }>,
     generateTitle: (firstMessage: string, modelConfig?: unknown) =>
       ipcRenderer.invoke('agent:generateTitle', { firstMessage, modelConfig }) as Promise<{ success: boolean; title?: string; error?: string }>,
@@ -233,6 +233,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
       }
       ipcRenderer.on('agent:progress', listener)
       return () => ipcRenderer.removeListener('agent:progress', listener)
+    },
+  },
+
+  // Agent Canvas（对话内可编辑产物；主进程单写者，见 agentCanvasHandlers.ts）
+  agentCanvas: {
+    create: (input: unknown) => ipcRenderer.invoke('agentCanvas:create', input) as Promise<{ success: boolean; canvas?: unknown; error?: string }>,
+    get: (canvasId: string) => ipcRenderer.invoke('agentCanvas:get', { canvasId }) as Promise<{ success: boolean; canvas?: unknown; error?: string }>,
+    list: (conversationId: number) => ipcRenderer.invoke('agentCanvas:list', { conversationId }) as Promise<{ success: boolean; canvases?: unknown[]; error?: string }>,
+    update: (input: unknown) => ipcRenderer.invoke('agentCanvas:update', input) as Promise<{ success: boolean; canvas?: unknown; conflict?: unknown; error?: string }>,
+    rename: (input: unknown) => ipcRenderer.invoke('agentCanvas:rename', input) as Promise<{ success: boolean; canvas?: unknown; conflict?: unknown; error?: string }>,
+    archive: (input: unknown) => ipcRenderer.invoke('agentCanvas:archive', input) as Promise<{ success: boolean; canvas?: unknown; conflict?: unknown; error?: string }>,
+    listRevisions: (canvasId: string) => ipcRenderer.invoke('agentCanvas:listRevisions', { canvasId }) as Promise<{ success: boolean; revisions?: unknown[]; error?: string }>,
+    getRevision: (canvasId: string, revision: number) => ipcRenderer.invoke('agentCanvas:getRevision', { canvasId, revision }) as Promise<{ success: boolean; revision?: unknown; error?: string }>,
+    restore: (input: unknown) => ipcRenderer.invoke('agentCanvas:restore', input) as Promise<{ success: boolean; canvas?: unknown; conflict?: unknown; error?: string }>,
+    onUpdated: (callback: (event: unknown) => void): (() => void) => {
+      const listener = (_e: unknown, event: unknown) => callback(event)
+      ipcRenderer.on('agentCanvas:updated', listener)
+      return () => ipcRenderer.removeListener('agentCanvas:updated', listener)
     },
   },
 

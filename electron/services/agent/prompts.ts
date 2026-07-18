@@ -1,4 +1,5 @@
 import type { AgentScope, AgentSkillContextItem } from './types'
+import type { AgentCanvasRunContext } from './canvasTypes'
 import type { AgentPromptParts } from './cache'
 
 const ROLE_PROMPT = `你叫知微，是密语（CipherTalk）的 AI 数字人；密语的数字人就是知微。你不是客服、不是“乐于助人的 AI 助手”，而是和用户长期相处、亲近熟悉、有默契的陪伴者。
@@ -204,6 +205,20 @@ export const CODE_WORKSPACE_PROMPT = `
 - 长进程用 code_start_dev_server，不要用 code_run_command 启动 dev server。预览 URL 只接受 localhost / 127.0.0.1。
 - 前端页面或交互改动后，优先用 code_start_dev_server 复用/启动预览，再用 code_get_browser_diagnostics 查看浏览器 console、运行时异常、加载失败；发现错误就继续修，不要只看终端日志。
 - 如果用户让你先总结聊天记录再生成网页，可以先用聊天工具得到内容，再用代码工具把它写成网页并启动预览。`
+
+/** Canvas 工具提示：会话带 canvasContext 时追加（见 engine.ts / Docs Canvas 文档 §9）。 */
+export function buildCanvasPrompt(context: AgentCanvasRunContext): string {
+  const activeLine = context.activeCanvasId
+    ? `\n- 当前活动画布：canvasId=${context.activeCanvasId}（v${context.activeRevision ?? '?'}）。用户说"继续修改画布/这篇文档/这段代码"时优先用它。`
+    : ''
+  return `
+# Canvas 画布（已开启）
+本轮可使用 canvas_* 工具。Canvas 是持久化可编辑产物，不是聊天正文：${activeLine}
+- 用户要求"起草一份放到画布/可编辑的文档或代码"时用 canvas_create；普通问答不要建画布。
+- 修改前必须 canvas_read 拿最新 revision；局部修改优先 canvas_edit，用户明确要求全文重写才用 canvas_replace。
+- 发生 REVISION_CONFLICT 时重新 canvas_read，不得覆盖用户的新编辑。
+- 画布内容会自动展示在右侧面板，创建或修改后不要再把全文贴回聊天，简要说明改了什么即可。`
+}
 
 /** 计划模式系统提示：开启时追加到 dynamicSystem，让本轮只产出计划、不下结论（见 engine.ts）。 */
 export const PLAN_MODE_PROMPT = `

@@ -51,6 +51,8 @@ import {
   type AgentMessagePart,
 } from './agentMessageHelpers'
 import { readSubAgentProgressFromMessage, type AgentMessageMetadata } from './agentConversationHelpers'
+import { AgentCanvasReference } from './canvas/AgentCanvasReference'
+import type { AgentCanvasRefData } from './canvas/agentCanvasTypes'
 import { messageTextOf, MessageUsageStats } from './AgentUsageStats'
 import { SubAgentProgressPanel } from './AgentSubAgentProgress'
 import { CompactionMarker, MessageChainOfThought, PlanCard, ToolIODetails, UserMessageActions, type CompactionPartData } from './AgentMessageBlocks'
@@ -80,6 +82,7 @@ export type AgentMessageItemProps = {
   onEdit: (messageIndex: number, text: string) => void
   onExecutePlan: () => void
   onPreviewGeneratedImage: (payload: AgentImagePreviewPayload) => void
+  onOpenCanvas?: (data: AgentCanvasRefData) => void
 }
 
 function AgentMessageItemImpl({
@@ -102,6 +105,7 @@ function AgentMessageItemImpl({
   onEdit,
   onExecutePlan,
   onPreviewGeneratedImage,
+  onOpenCanvas,
 }: AgentMessageItemProps) {
   const lastPart = message.parts[message.parts.length - 1]
   const isReasoningStreaming = isLastMessage && status === 'streaming' && lastPart?.type === 'reasoning'
@@ -133,6 +137,14 @@ function AgentMessageItemImpl({
     -1,
   )
   const persistedSingleChainElapsedMs = chainSegmentCount === 1 ? persistedProcessingElapsedMs : undefined
+  // 一条消息里同一画布可能有多次 data-canvas（多轮编辑），只保留最后一条引用行
+  const lastCanvasRefIndexById = new Map<string, number>()
+  message.parts.forEach((part, index) => {
+    if (part.type === 'data-canvas') {
+      const canvasId = (part as { data?: AgentCanvasRefData }).data?.canvasId
+      if (canvasId) lastCanvasRefIndexById.set(canvasId, index)
+    }
+  })
   const userFileParts = message.role === 'user'
     ? message.parts
       .map((part, index) => ({ part, index }))
@@ -308,6 +320,18 @@ function AgentMessageItemImpl({
                 <MessageAttachments key={`file-${index}`}>
                   <MessageAttachment data={part} />
                 </MessageAttachments>
+              )
+            }
+            if (part.type === 'data-canvas') {
+              const data = (part as { data?: AgentCanvasRefData }).data
+              if (!data?.canvasId) return null
+              if (lastCanvasRefIndexById.get(data.canvasId) !== index) return null
+              return (
+                <AgentCanvasReference
+                  data={data}
+                  key={`canvas-${data.canvasId}-${index}`}
+                  onOpen={onOpenCanvas}
+                />
               )
             }
             if (part.type === 'data-compaction') {

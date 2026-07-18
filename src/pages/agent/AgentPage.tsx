@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import { useChat } from '@ai-sdk/react'
 import { isToolUIPart, lastAssistantMessageIsCompleteWithApprovalResponses, type ChatStatus, type UIMessage } from 'ai'
 import { AlertDialog, Button as HeroButton, ButtonGroup, Dropdown, Header, Label, Modal, SearchField, Separator, Spinner, Surface, Switch, Toolbar, Tooltip, toast } from '@heroui/react'
-import { ArrowDownToLine, ArrowsRotateLeft, ArrowUpRightFromSquare, Bulb, Check, ChevronDown, CircleInfo, Clock, Display, LayoutSideContentLeft, ListCheck, MagicWand, PencilToLine, PencilToSquare, Terminal, TrashBin, Xmark } from '@gravity-ui/icons'
+import { ArrowDownToLine, ArrowsRotateLeft, ArrowUpRightFromSquare, Bulb, Check, ChevronDown, CircleInfo, Clock, Code, Display, FileText, LayoutSideContentLeft, ListCheck, MagicWand, PencilToLine, PencilToSquare, Terminal, TrashBin, Xmark } from '@gravity-ui/icons'
 import { toPng } from 'dom-to-image-more'
 import {
   Conversation,
@@ -102,6 +102,9 @@ import { AgentShareCard, buildAgentSharePreviewData, formatAgentShareFileDate, s
 import { AGENT_PENDING_TITLE, ModelWaitingLine, SubAgentProgressPanel, mergeSubAgentProgress, shouldDisplayAgentProgress } from './AgentSubAgentProgress'
 import { ModelCapabilityIcons, ModelItem, type AgentModelItem } from './AgentMessageBlocks'
 import { AgentMessageItem } from './AgentMessageItem'
+import { AgentCanvasPanel } from './canvas/AgentCanvasPanel'
+import { useAgentCanvas } from './canvas/useAgentCanvas'
+import type { AgentCanvasKind, AgentCanvasListItem, AgentCanvasRefData } from './canvas/agentCanvasTypes'
 import { AgentRecordsMenu } from './AgentRecordsMenu'
 import { buildPromptOptimizeContext, type PromptOptimizeContextMessage } from './promptOptimizeContext'
 import {
@@ -685,6 +688,63 @@ export default function AgentPage() {
     conversationIdRef.current = normalized
     storeActiveAgentConversation(normalized)
   }, [])
+  const clientIdRef = useRef(`agent-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+  // Agent Canvas：面板/自动保存/冲突状态都在 useAgentCanvas；transport 经 ref 取活动画布上下文
+  const canvas = useAgentCanvas({
+    conversationId,
+    clientId: clientIdRef.current,
+    onError: (message) => toast.danger(message, { timeout: 3000 }),
+  })
+  const canvasRef = useRef(canvas)
+  canvasRef.current = canvas
+  const [canvasMenuOpen, setCanvasMenuOpen] = useState(false)
+  const [canvasMenuLoading, setCanvasMenuLoading] = useState(false)
+  const [canvasItems, setCanvasItems] = useState<AgentCanvasListItem[]>([])
+  useEffect(() => {
+    setCanvasMenuOpen(false)
+    setCanvasMenuLoading(false)
+    setCanvasItems([])
+  }, [conversationId])
+  const handleCanvasMenuOpenChange = useCallback((nextOpen: boolean) => {
+    setCanvasMenuOpen(nextOpen)
+    if (!nextOpen) return
+    const targetConversationId = conversationIdRef.current
+    if (!targetConversationId) {
+      setCanvasItems([])
+      return
+    }
+    setCanvasItems([])
+    setCanvasMenuLoading(true)
+    void window.electronAPI.agentCanvas.list(targetConversationId)
+      .then((result) => {
+        if (conversationIdRef.current !== targetConversationId) return
+        if (result.success && result.canvases) setCanvasItems(result.canvases)
+        else toast.danger(result.error || '画布列表加载失败', { timeout: 3000 })
+      })
+      .catch((error) => {
+        if (conversationIdRef.current !== targetConversationId) return
+        toast.danger(error instanceof Error ? error.message : '画布列表加载失败', { timeout: 3000 })
+      })
+      .finally(() => {
+        if (conversationIdRef.current === targetConversationId) setCanvasMenuLoading(false)
+      })
+  }, [])
+  // 消息引用点开旧版本时在版本历史里标记该 revision（正文始终展示当前版本）
+  const [canvasMarkedRevision, setCanvasMarkedRevision] = useState<number | null>(null)
+  const handleOpenCanvasReference = useCallback((data: AgentCanvasRefData) => {
+    setCanvasMarkedRevision(data.revision)
+    void canvasRef.current.openCanvas(data.canvasId)
+  }, [])
+  const handleCreateCanvas = useCallback((kind: AgentCanvasKind) => {
+    setCanvasMenuOpen(false)
+    setCanvasMarkedRevision(null)
+    void canvasRef.current.createCanvas(kind)
+  }, [])
+  const handleOpenCanvasItem = useCallback((canvasId: string) => {
+    setCanvasMenuOpen(false)
+    setCanvasMarkedRevision(null)
+    void canvasRef.current.openCanvas(canvasId)
+  }, [])
   const transport = useMemo(
     () => new IpcChatTransport(
       () => submitScopeRef.current ?? activeScopeRef.current,
@@ -694,6 +754,7 @@ export default function AgentPage() {
       () => planModeRef.current,
       () => (codeWorkspaceRef.current ? 'hybrid' : 'chat') as AgentToolProfile,
       () => codeWorkspaceRef.current,
+      () => canvasRef.current.getRunContext(),
     ),
     [handleAgentProgress]
   )
@@ -757,7 +818,6 @@ export default function AgentPage() {
       } : null,
     }
   }, [effectiveBusy, localAgentRunning, messages, selectedLocalAgentId, status])
-  const clientIdRef = useRef(`agent-${Date.now()}-${Math.random().toString(36).slice(2)}`)
   const conversationUpdatedAtRef = useRef(0)
   const pendingConversationReloadRef = useRef<number | null>(null)
   const loadConversationByIdRef = useRef<((id: number, options?: { closeRecords?: boolean }) => Promise<boolean>) | null>(null)
@@ -1300,6 +1360,7 @@ export default function AgentPage() {
     id: number,
     options: { closeRecords?: boolean } = {},
   ): Promise<boolean> => {
+    if (id !== conversationIdRef.current && !await canvasRef.current.flushSave()) return false
     const result = await window.electronAPI.agent.loadConversation(id)
     const loaded = result.success ? normalizeLoadedConversation(result.conversation) : null
     if (!loaded) return false
@@ -1559,9 +1620,10 @@ export default function AgentPage() {
     setMessages,
   ])
 
-  const handleNewConversation = useCallback(() => {
-    if (busy) void stop()
-    if (localAgentRunning) void cancelLocalAgentRun()
+  const handleNewConversation = useCallback(async (): Promise<boolean> => {
+    if (busy) await stop()
+    if (localAgentRunning) await cancelLocalAgentRun()
+    if (!await canvasRef.current.flushSave()) return false
     setMessages([])
     messagesRef.current = []
     setMentions([])
@@ -1581,6 +1643,7 @@ export default function AgentPage() {
     titleRequestSeqRef.current += 1
     applyConversationId(null)
     setRecordsOpen(false)
+    return true
   }, [applyConversationId, busy, cancelLocalAgentRun, localAgentRunning, setMessages, stop])
 
   // 跨窗口自动运行（聊天窗口「AI 摘要」）：经 localStorage 递入 {text, mention}，
@@ -1595,9 +1658,11 @@ export default function AgentPage() {
       try {
         const payload = JSON.parse(raw) as { text?: string; mention?: { username?: string; displayName?: string; avatarUrl?: string } }
         if (!payload.text || !payload.mention?.username) return
-        handleNewConversation()
-        setMentions([toMentionTarget(payload.mention.username, payload.mention.displayName, payload.mention.avatarUrl)])
-        setPendingAutoRun(payload.text)
+        void handleNewConversation().then((created) => {
+          if (!created) return
+          setMentions([toMentionTarget(payload.mention!.username!, payload.mention!.displayName, payload.mention!.avatarUrl)])
+          setPendingAutoRun(payload.text!)
+        })
       } catch {
         // 载荷损坏时静默丢弃
       }
@@ -1951,6 +2016,12 @@ export default function AgentPage() {
     setSubAgentProgress([])
 
     try {
+      // 发送前先落盘用户对画布的未保存编辑，Agent 本轮读到的才是最新 revision
+      if (!await canvasRef.current.flushSave()) {
+        submitScopeRef.current = null
+        setAgentRunPending(false)
+        return
+      }
       const titleText = firstMessageForTitle || currentWorkspaceFileReferences.map((ref) => ref.name || displayBasename(ref.path)).join(' ')
       if (!conversationIdRef.current) {
         const fallback = buildFallbackConversationTitle(titleText || text)
@@ -2009,10 +2080,14 @@ export default function AgentPage() {
     setAgentRunPending(true)
     setSubAgentProgress([])
     submitScopeRef.current = activeScopeRef.current
-    const sendPromise = Promise.resolve(sendMessage({ text: '请按上面的计划开始执行，按需调用工具或委托子助手，直接给出最终结果，不要再重复计划。', files: [] })).finally(() => {
-      submitScopeRef.current = null
-      setAgentRunPending(false)
-    })
+    const sendPromise = Promise.resolve(canvasRef.current.flushSave())
+      .then((saved) => saved
+        ? sendMessage({ text: '请按上面的计划开始执行，按需调用工具或委托子助手，直接给出最终结果，不要再重复计划。', files: [] })
+        : undefined)
+      .finally(() => {
+        submitScopeRef.current = null
+        setAgentRunPending(false)
+      })
     void sendPromise
   }, [effectiveBusy, selectedModelSupportsTools, sendMessage])
 
@@ -2344,6 +2419,77 @@ export default function AgentPage() {
               state={codeWorkspaceState}
             />
             <div className="flex items-center gap-1.5">
+              <Tooltip delay={0}>
+                <Tooltip.Trigger>
+                  <Dropdown isOpen={canvasMenuOpen} onOpenChange={handleCanvasMenuOpenChange}>
+                    <HeroButton
+                      aria-label="画布"
+                      className="size-9 p-0"
+                      isDisabled={!conversationId}
+                      isIconOnly
+                      size="md"
+                      variant={canvas.open ? 'secondary' : 'tertiary'}
+                    >
+                      <FileText className="size-4.5" />
+                    </HeroButton>
+                    <Dropdown.Popover className="min-w-72" placement="bottom end">
+                      <Dropdown.Menu
+                        className="ct-agent-scrollbar max-h-[min(26rem,65vh)] overflow-y-auto"
+                        disabledKeys={new Set(['canvas-status'])}
+                        onAction={(key) => {
+                          const action = String(key)
+                          if (action === 'canvas-new-document') handleCreateCanvas('document')
+                          else if (action === 'canvas-new-code') handleCreateCanvas('code')
+                          else if (action.startsWith('canvas-open:')) handleOpenCanvasItem(action.slice('canvas-open:'.length))
+                        }}
+                      >
+                        <Dropdown.Section>
+                          <Header>新建</Header>
+                          <Dropdown.Item id="canvas-new-document" textValue="新建文档画布">
+                            <FileText className="size-4 shrink-0 text-muted" />
+                            <Label>文档画布</Label>
+                          </Dropdown.Item>
+                          <Dropdown.Item id="canvas-new-code" textValue="新建代码画布">
+                            <Code className="size-4 shrink-0 text-muted" />
+                            <Label>代码画布</Label>
+                          </Dropdown.Item>
+                        </Dropdown.Section>
+                        <Separator />
+                        <Dropdown.Section>
+                          <Header>当前会话</Header>
+                          {canvasMenuLoading ? (
+                            <Dropdown.Item id="canvas-status" textValue="正在加载画布">
+                              <Spinner size="sm" />
+                              <Label>正在加载...</Label>
+                            </Dropdown.Item>
+                          ) : canvasItems.length > 0 ? (
+                            canvasItems.map((item) => (
+                              <Dropdown.Item
+                                id={`canvas-open:${item.id}`}
+                                key={item.id}
+                                textValue={item.title}
+                              >
+                                {item.kind === 'code'
+                                  ? <Code className="size-4 shrink-0 text-muted" />
+                                  : <FileText className="size-4 shrink-0 text-muted" />}
+                                <Label className="min-w-0 flex-1 truncate">{item.title}</Label>
+                                <span className="ml-auto shrink-0 text-muted-foreground text-xs">
+                                  {item.status === 'archived' ? '已归档' : `v${item.revision}`}
+                                </span>
+                              </Dropdown.Item>
+                            ))
+                          ) : (
+                            <Dropdown.Item id="canvas-status" textValue="暂无画布">
+                              <Label className="text-muted-foreground">暂无画布</Label>
+                            </Dropdown.Item>
+                          )}
+                        </Dropdown.Section>
+                      </Dropdown.Menu>
+                    </Dropdown.Popover>
+                  </Dropdown>
+                </Tooltip.Trigger>
+                <Tooltip.Content placement="bottom">{conversationId ? '画布' : '发送消息后可使用画布'}</Tooltip.Content>
+              </Tooltip>
               <AgentRecordsMenu
                 isOpen={recordsOpen}
                 onOpenChange={handleRecordsOpenChange}
@@ -2418,6 +2564,7 @@ export default function AgentPage() {
                 onCopyUser={handleCopyUserMessage}
                 onEdit={handleEditUserMessage}
                 onExecutePlan={handleExecutePlan}
+                onOpenCanvas={handleOpenCanvasReference}
                 onPreviewGeneratedImage={setGeneratedImagePreview}
                 onSpeak={handleSpeakAssistantMessage}
                 runIsPlan={runIsPlanRef.current}
@@ -2746,6 +2893,9 @@ export default function AgentPage() {
         </div>
       </div>
           </div>
+          {canvas.open && (
+            <AgentCanvasPanel canvas={canvas} markedRevision={canvasMarkedRevision} />
+          )}
         </div>
       )}
       <AlertDialog.Backdrop

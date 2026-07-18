@@ -1,6 +1,7 @@
 import type { MainProcessContext } from '../context'
 import { registerAccountHandlers } from './accountHandlers'
 import { registerActivationHandlers } from './activationHandlers'
+import { registerAgentCanvasHandlers } from './agentCanvasHandlers'
 import { registerAgentWorkspaceHandlers } from './agentWorkspaceHandlers'
 import { registerAiHandlers } from './aiHandlers'
 import { registerAppHandlers } from './appHandlers'
@@ -57,6 +58,7 @@ export function registerModularIpcHandlers(ctx: MainProcessContext): void {
   registerVoiceRealtimeHandlers()
   registerAiHandlers(ctx)
   registerAgentWorkspaceHandlers(ctx)
+  registerAgentCanvasHandlers(ctx)
   registerPetHandlers(ctx)
   registerPluginHandlers(ctx)
   registerNotifyHandlers(ctx)

@@ -17,6 +17,8 @@ const HIGH_RISK_TOOL_NAMES = new Set([
   'run_task_now',
   'rollback_operation',
   'apply_memory_fix',
+  // Canvas 全文替换：中风险（只影响会话本地数据，但可能覆盖用户编辑），on-request 需审批
+  'canvas_replace',
 ])
 
 // "替我审批"（risk-based）策略下自动放行的低风险工具：影响面小且可逆（发表情包、任务的增删改）。
@@ -26,6 +28,8 @@ const LOW_RISK_TOOL_NAMES = new Set([
   'create_task',
   'update_task',
   'cancel_task',
+  // 中风险：有 revision 快照可从版本历史恢复，risk-based 下放行
+  'canvas_replace',
 ])
 
 const APPROVAL_POLICY_CONFIG_KEY = 'agentToolApprovalPolicy'
@@ -34,6 +38,7 @@ function approvalReason(toolName: string): string {
   if (toolName.startsWith('mcp__') || toolName.startsWith('mcp_')) return '外部 MCP 工具需要用户确认'
   if (toolName.startsWith('send_')) return '发送微信消息、媒体或文件需要用户确认'
   if (toolName === 'export_chat' || toolName === 'create_artifact') return '导出或写入本机文件需要用户确认'
+  if (toolName === 'canvas_replace') return '全文替换画布内容需要用户确认'
   if (toolName.endsWith('_task') || toolName === 'run_task_now') return '主动/定时任务变更需要用户确认'
   if (toolName.includes('memory')) return '修改长期记忆需要用户确认'
   return '高风险工具调用需要用户确认'

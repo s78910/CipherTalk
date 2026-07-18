@@ -59,6 +59,68 @@ export interface AgentPromptOptimizeContextMessage {
   text: string
 }
 
+// ========= Agent Canvas（对话内可编辑产物） =========
+export type AgentCanvasKind = 'document' | 'code'
+export type AgentCanvasStatus = 'active' | 'archived'
+export type AgentCanvasSource = 'user' | 'agent' | 'restore'
+export type AgentCanvasAction = 'created' | 'updated' | 'renamed' | 'archived' | 'restored'
+
+export interface AgentCanvasRecord {
+  id: string
+  conversationId: number
+  kind: AgentCanvasKind
+  title: string
+  language?: string
+  content: string
+  revision: number
+  status: AgentCanvasStatus
+  createdBy: 'user' | 'agent'
+  createdAt: number
+  updatedAt: number
+}
+
+export interface AgentCanvasListItem extends Omit<AgentCanvasRecord, 'content'> {
+  contentLength: number
+}
+
+export interface AgentCanvasRevisionMeta {
+  canvasId: string
+  revision: number
+  source: AgentCanvasSource
+  contentLength: number
+  createdAt: number
+}
+
+export interface AgentCanvasRevisionInfo extends AgentCanvasRevisionMeta {
+  content: string
+}
+
+export interface AgentCanvasConflictInfo {
+  code: 'REVISION_CONFLICT'
+  canvasId: string
+  expectedRevision: number
+  actualRevision: number
+  current: AgentCanvasRecord
+}
+
+export interface AgentCanvasUpdatedEvent {
+  canvasId: string
+  conversationId: number
+  revision: number
+  action: AgentCanvasAction
+  originClientId?: string | null
+  updatedAt: number
+}
+
+export interface AgentCanvasRefData {
+  canvasId: string
+  conversationId: number
+  kind: AgentCanvasKind
+  title: string
+  revision: number
+  action: 'created' | 'updated' | 'renamed' | 'restored'
+}
+
 export type TtsProviderId = 'xiaomi' | 'volcengine' | 'aliyun-qwen'
 export type TtsProtocol = 'xiaomi-mimo-tts' | 'volcengine-bidirectional' | 'aliyun-qwen-realtime'
 
@@ -1457,7 +1519,8 @@ export interface ElectronAPI {
       conversationId?: number | null,
       planMode?: boolean,
       toolProfile?: AgentToolProfile,
-      codeWorkspace?: CodeWorkspaceRef | null
+      codeWorkspace?: CodeWorkspaceRef | null,
+      canvasContext?: { activeCanvasId?: string; activeRevision?: number } | null
     ) => Promise<{ success: boolean; error?: string }>
     abort: (runId: string) => Promise<{ success: boolean }>
     generateTitle: (firstMessage: string, modelConfig?: unknown) => Promise<{ success: boolean; title?: string; error?: string }>
@@ -1508,6 +1571,18 @@ export interface ElectronAPI {
     getLastConversation: (scope?: unknown) => Promise<{ success: boolean; conversation?: unknown; error?: string }>
     sendConversationReplyToWechat: (payload: { conversationId: number; messageId: string; bubbles: string[] }) => Promise<{ success: boolean; sent?: boolean; skipped?: boolean; error?: string }>
     onConversationUpdated: (callback: (event: AgentConversationUpdatedEvent) => void) => () => void
+  }
+  agentCanvas: {
+    create: (input: { conversationId: number; kind: AgentCanvasKind; title: string; language?: string; content: string; originClientId?: string | null }) => Promise<{ success: boolean; canvas?: AgentCanvasRecord; error?: string }>
+    get: (canvasId: string) => Promise<{ success: boolean; canvas?: AgentCanvasRecord; error?: string }>
+    list: (conversationId: number) => Promise<{ success: boolean; canvases?: AgentCanvasListItem[]; error?: string }>
+    update: (input: { canvasId: string; baseRevision: number; content: string; originClientId?: string | null }) => Promise<{ success: boolean; canvas?: AgentCanvasRecord; conflict?: AgentCanvasConflictInfo; error?: string }>
+    rename: (input: { canvasId: string; baseRevision: number; title: string; originClientId?: string | null }) => Promise<{ success: boolean; canvas?: AgentCanvasRecord; conflict?: AgentCanvasConflictInfo; error?: string }>
+    archive: (input: { canvasId: string; baseRevision: number; originClientId?: string | null }) => Promise<{ success: boolean; canvas?: AgentCanvasRecord; conflict?: AgentCanvasConflictInfo; error?: string }>
+    listRevisions: (canvasId: string) => Promise<{ success: boolean; revisions?: AgentCanvasRevisionMeta[]; error?: string }>
+    getRevision: (canvasId: string, revision: number) => Promise<{ success: boolean; revision?: AgentCanvasRevisionInfo; error?: string }>
+    restore: (input: { canvasId: string; baseRevision: number; revision: number; originClientId?: string | null }) => Promise<{ success: boolean; canvas?: AgentCanvasRecord; conflict?: AgentCanvasConflictInfo; error?: string }>
+    onUpdated: (callback: (event: AgentCanvasUpdatedEvent) => void) => () => void
   }
   agentWorkspace: {
     selectWorkspace: () => Promise<{ success: boolean; canceled?: boolean; state?: CodeWorkspaceState; error?: string }>

@@ -4,8 +4,9 @@
  * buildBaseTools 为主 Agent 的基础读/查工具；buildSubAgentTools 为子 Agent 收窄后的读/查工具。
  * buildTools 在基础工具上加记忆工具、MCP 工具与 delegate_analysis（子 Agent，需 providerConfig）。
  */
-import type { ToolSet } from 'ai'
+import type { ToolSet, UIMessageChunk } from 'ai'
 import type { AgentMcpToolDescriptor, AgentProviderConfig, AgentScope, AgentUploadedMediaContext } from '../types'
+import type { AgentCanvasRunContext } from '../canvasTypes'
 import type { CodeWorkspaceRef } from '../codeWorkspaceTypes'
 import { withToolTimeouts } from '../guards'
 import { listContacts } from './listContacts'
@@ -31,6 +32,7 @@ import { createInspectMediaImage, createSearchSimilarMedia, searchMedia, searchM
 import { sendWechatFile } from './sendWechatFile'
 import { personaControl } from './personaControl'
 import { sendWechatMedia } from './wechatMedia'
+import { createCanvasTools } from './canvas'
 import { createCodeWorkspaceTools } from './codeWorkspace'
 import { exportChat } from './exportChat'
 import { createAgentCapabilityTools } from './capabilities'
@@ -91,6 +93,10 @@ export function buildPlanModeTools(_scope: AgentScope, codeWorkspace?: CodeWorks
 export interface BuildChatToolsOptions {
   allowWechatReplyMedia?: boolean
   uploadedMediaContext?: AgentUploadedMediaContext
+  /** 会话 Canvas 上下文；存在时挂载 canvas_* 工具（chat/hybrid profile）。 */
+  canvasContext?: AgentCanvasRunContext
+  /** 工具直发 UIMessageChunk 的出口（canvas 工具用它发 data-canvas 引用）。 */
+  emitChunk?: (chunk: UIMessageChunk) => void
 }
 
 function createWechatReplyMediaTools(): ToolSet {
@@ -115,6 +121,7 @@ export function buildChatTools(
     inspect_media_image: createInspectMediaImage(providerConfig),
     search_similar_media: createSearchSimilarMedia(options.uploadedMediaContext),
     ...createAgentCapabilityTools(),
+    ...createCanvasTools(options.canvasContext, options.emitChunk),
     ...buildMcpTools(mcpTools),
     ...(enableImageGen ? { generate_image: generateImage } : {}),
     ...(options.allowWechatReplyMedia ? createWechatReplyMediaTools() : {}),

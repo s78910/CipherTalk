@@ -668,6 +668,7 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
     planMode?: boolean
     toolProfile?: AgentToolProfile
     codeWorkspace?: CodeWorkspaceRef | null
+    canvasContext?: { activeCanvasId?: string; activeRevision?: number } | null
   }) => {
     const sender = event.sender
     const { runId } = payload
@@ -766,6 +767,20 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
       sendPrepProgress()
       const { agentConversationStore } = await import('../../services/agent/conversationStore')
       const storedConversation = payload.conversationId ? agentConversationStore.load(Number(payload.conversationId)) : null
+      // Canvas 上下文：conversationId 有效才注入；activeCanvasId 必须归属该会话，否则丢弃（防跨会话访问）
+      let canvasContext: import('../../services/agent/canvasTypes').AgentCanvasRunContext | undefined
+      if (storedConversation) {
+        canvasContext = { conversationId: storedConversation.id }
+        const activeCanvasId = typeof payload.canvasContext?.activeCanvasId === 'string' ? payload.canvasContext.activeCanvasId.trim() : ''
+        if (activeCanvasId) {
+          const { agentCanvasStore } = await import('../../services/agent/agentCanvasStore')
+          const activeCanvas = agentCanvasStore.get(activeCanvasId)
+          if (activeCanvas && activeCanvas.conversationId === storedConversation.id) {
+            canvasContext.activeCanvasId = activeCanvas.id
+            canvasContext.activeRevision = activeCanvas.revision
+          }
+        }
+      }
       const payloadMessages = Array.isArray(payload.messages) ? payload.messages : []
       const historyMergedMessages = storedConversation?.messages
         ? mergeUiMessagesById(storedConversation.messages, payloadMessages)
@@ -862,6 +877,7 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
           codeWorkspace: profile.codeWorkspace,
           turnContextMode: historyTurnContext.mode,
           allowWechatReplyMedia: false,
+          canvasContext,
         },
         (chunk) => {
           chunkCount += 1

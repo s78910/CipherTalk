@@ -695,6 +695,62 @@ function StreamingChartPlaceholder({ language }: { language?: string }) {
   );
 }
 
+// mermaid 渲染流水号：mermaid.render 需要全局唯一的容器 id
+let mermaidRenderSeq = 0;
+
+/**
+ * ```mermaid 代码块 → SVG 流程图。
+ * mermaid 库较大，动态 import 按需加载（Vite 自动分包）；渲染失败回退为源码展示。
+ * mermaid 默认 securityLevel=strict，输出 SVG 内部已做 sanitize。
+ */
+function MermaidBlock({ code }: { code: string }) {
+  const [svg, setSvg] = useState("");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    setSvg("");
+    setError("");
+    void (async () => {
+      try {
+        const { mermaid } = await import("@streamdown/mermaid");
+        const isDark = document.documentElement.classList.contains("dark");
+        const instance = mermaid.getMermaid({ theme: isDark ? "dark" : "default" });
+        const rendered = await instance.render(`ct-mermaid-${++mermaidRenderSeq}`, code);
+        if (!cancelled) setSvg(rendered.svg);
+      } catch (renderError) {
+        if (!cancelled) setError(renderError instanceof Error ? renderError.message : String(renderError));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [code]);
+
+  if (error) {
+    return (
+      <div className="my-2 w-full max-w-full overflow-hidden rounded-(--agent-radius,12px) border border-border/70 bg-card">
+        <div className="border-border/70 border-b px-3 py-1.5 text-destructive text-xs">流程图渲染失败：{error}</div>
+        <pre className="overflow-x-auto px-3 py-2 font-mono text-foreground text-xs leading-5">{code}</pre>
+      </div>
+    );
+  }
+  if (!svg) {
+    return (
+      <div aria-label="正在渲染流程图" className="my-2 flex min-h-40 w-full items-center justify-center gap-2 rounded-(--agent-radius,12px) border border-border/70 bg-card text-muted-foreground text-xs" role="img">
+        <CircleDashed className="size-4 animate-spin" />
+        渲染流程图…
+      </div>
+    );
+  }
+  return (
+    <div
+      className="my-2 w-full max-w-full overflow-x-auto rounded-(--agent-radius,12px) border border-border/70 bg-card p-3 [&_svg]:mx-auto [&_svg]:h-auto [&_svg]:max-w-full"
+      // biome-ignore lint/security/noDangerouslySetInnerHtml: mermaid strict 模式输出的已 sanitize SVG
+      dangerouslySetInnerHTML={{ __html: svg }}
+      role="img"
+    />
+  );
+}
+
 const MessageCode = ({ children, className, node: _node, ...props }: MessageCodeProps) => {
   const { isStreaming, markdown } = useContext(MessageRenderContext);
   const [isCopied, setIsCopied] = useState(false);
@@ -719,6 +775,11 @@ const MessageCode = ({ children, className, node: _node, ...props }: MessageCode
   );
   const language = normalizeCodeLanguage(canPreviewHtml && !rawLanguage ? "html" : rawLanguage);
   const chartRef = useRef<ChartBlockHandle | null>(null);
+
+  // mermaid：流式期间先按源码高亮展示，流结束后再渲染成图（半成品源码必然渲染失败）
+  if (rawLanguage === "mermaid" && !isStreaming) {
+    return <MermaidBlock code={code} />;
+  }
 
   if (isStreaming && isChartCode(rawLanguage) && !chartOption) {
     return <StreamingChartPlaceholder language={rawLanguage} />;
