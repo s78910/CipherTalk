@@ -1269,7 +1269,7 @@ export default function AgentPage() {
         setMessages([])
         messagesRef.current = []
         applyConversationId(null)
-        setConversationTitle('???')
+        setConversationTitle('新对话')
         setTitleEditing(false)
         setTitleDraft('')
         activeScopeRef.current = { kind: 'global' }
