@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import {
   Alert,
@@ -331,6 +331,11 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
     baseURL: '',
     protocol: 'openai-responses'
   })
+  const [presetRemoteModels, setPresetRemoteModels] = useState<string[]>([])
+  const [presetRemoteModelDetails, setPresetRemoteModelDetails] = useState<AIModelInfo[]>([])
+  const [isLoadingPresetModels, setIsLoadingPresetModels] = useState(false)
+  const [presetModelListError, setPresetModelListError] = useState('')
+  const presetModelRequestId = useRef(0)
   const [editingPresetId, setEditingPresetId] = useState<string | null>(null)
   const [showOllamaHelp, setShowOllamaHelp] = useState(false)
   const [showCustomHelp, setShowCustomHelp] = useState(false)
@@ -381,17 +386,23 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
       .map(item => ({ value: item.value, label: item.label }))
   ), [presetDraftProvider?.protocolOptions])
   const presetDraftModelDetailById = useMemo(() => {
-    return new Map((presetDraftProvider?.modelDetails || []).map(item => [item.id, item]))
-  }, [presetDraftProvider?.modelDetails])
+    const details = presetRemoteModelDetails.length > 0
+      ? presetRemoteModelDetails
+      : (presetDraftProvider?.modelDetails || [])
+    return new Map(details.map(item => [item.id, item]))
+  }, [presetDraftProvider?.modelDetails, presetRemoteModelDetails])
   const presetDraftModelOptions = useMemo<SelectOption[]>(() => {
-    return (presetDraftProvider?.models || [])
+    const models = presetRemoteModels.length > 0
+      ? presetRemoteModels
+      : (presetDraftProvider?.models || [])
+    return models
       .filter(item => !isDeprecatedModel(presetDraftModelDetailById.get(item)))
       .map(item => ({
         value: item,
         label: item,
         content: <ModelOptionContent modelId={item} modelDetail={presetDraftModelDetailById.get(item)} />
       }))
-  }, [presetDraftModelDetailById, presetDraftProvider?.models])
+  }, [presetDraftModelDetailById, presetDraftProvider?.models, presetRemoteModels])
   const presetDraftCurrentModelDetail = presetDraftModelDetailById.get(presetDraft.model)
   const currentBaseURLLabel = currentProvider?.allowCustomBaseURL
     ? (baseURL || '未填写')
@@ -464,15 +475,13 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
   const createPresetDraftFromProvider = (providerId: string): PresetDraft => {
     const nextProvider = normalizeProviderId(providerId || providers[0]?.id || '')
     const providerInfo = providers.find(item => item.id === nextProvider)
-    const config = providerConfigs[nextProvider]
-    const isCurrentProvider = nextProvider === provider
 
     return {
       provider: nextProvider,
-      apiKey: config?.apiKey || (isCurrentProvider ? apiKey : ''),
-      model: normalizeProviderModel(nextProvider, config?.model || (isCurrentProvider ? model : providerInfo?.models?.[0] || '')),
-      baseURL: config?.baseURL || (isCurrentProvider ? baseURL : (nextProvider === 'ollama' ? 'http://localhost:11434/v1' : '')),
-      protocol: config?.protocol || providerInfo?.protocol || 'openai-responses'
+      apiKey: '',
+      model: '',
+      baseURL: nextProvider === 'ollama' ? 'http://localhost:11434/v1' : '',
+      protocol: providerInfo?.protocol || 'openai-responses'
     }
   }
 
@@ -591,6 +600,80 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
     }
   }
 
+  const loadPresetDraftModels = async (notify = true) => {
+    const providerInfo = providers.find(item => item.id === presetDraft.provider)
+    if (!canFetchProviderModelList(presetDraft.provider, presetDraft.baseURL, providerInfo)) {
+      if (notify) showMessage('请先填写预设所需的 API 配置', false)
+      return
+    }
+
+    const requestId = ++presetModelRequestId.current
+    setIsLoadingPresetModels(true)
+    setPresetModelListError('')
+    try {
+      const result = await window.electronAPI.ai.listModels({
+        provider: presetDraft.provider,
+        apiKey: presetDraft.apiKey,
+        baseURL: presetDraft.baseURL,
+        protocol: providerInfo?.protocolOptions?.length ? presetDraft.protocol : undefined
+      })
+      if (requestId !== presetModelRequestId.current) return
+      if (!result.success || !result.models?.length) {
+        const error = result.error || '模型列表为空'
+        setPresetModelListError(error)
+        if (notify) showMessage(error, false)
+        return
+      }
+
+      setPresetRemoteModels(result.models)
+      setPresetRemoteModelDetails(result.modelDetails || [])
+      const nextModelDetailsById = new Map((result.modelDetails || []).map(item => [item.id, item]))
+      const availableModels = result.models.filter(item => !isDeprecatedModel(nextModelDetailsById.get(item)))
+      setPresetDraft(prev => prev.model
+        ? prev
+        : { ...prev, model: availableModels[0] || result.models?.[0] || '' })
+      if (notify) showMessage('预设模型列表已刷新', true)
+    } catch (error) {
+      if (requestId !== presetModelRequestId.current) return
+      const message = error instanceof Error ? error.message : String(error)
+      setPresetModelListError(message)
+      if (notify) showMessage(`刷新模型失败: ${message}`, false)
+    } finally {
+      if (requestId === presetModelRequestId.current) setIsLoadingPresetModels(false)
+    }
+  }
+
+  useEffect(() => {
+    presetModelRequestId.current += 1
+    setPresetRemoteModels([])
+    setPresetRemoteModelDetails([])
+    setPresetModelListError('')
+    setIsLoadingPresetModels(false)
+  }, [showSavePresetDialog, presetDraft.provider, presetDraft.apiKey, presetDraft.baseURL, presetDraft.protocol])
+
+  useEffect(() => {
+    if (
+      !showSavePresetDialog ||
+      presetTab !== 'config' ||
+      presetDraft.provider !== 'custom' ||
+      !presetDraft.baseURL.trim()
+    ) {
+      return
+    }
+
+    const timer = window.setTimeout(() => {
+      void loadPresetDraftModels(false)
+    }, 600)
+    return () => window.clearTimeout(timer)
+  }, [
+    showSavePresetDialog,
+    presetTab,
+    presetDraft.provider,
+    presetDraft.apiKey,
+    presetDraft.baseURL,
+    presetDraft.protocol
+  ])
+
   const handleTestConnection = async () => {
     if (provider !== 'ollama' && !apiKey.trim()) {
       showMessage('请先填写 API 密钥', false)
@@ -692,16 +775,16 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
     await loadPresets()
   }
 
-  const openPresetDialogFromCurrent = () => {
+  const openNewPresetDialog = () => {
     setEditingPresetId(null)
-    setPresetName(currentProvider?.displayName || provider)
+    setPresetName('')
     setPresetTab('name')
     setPresetDraft({
-      provider: normalizeProviderId(provider || providers[0]?.id || ''),
-      apiKey,
-      model,
-      baseURL,
-      protocol: currentProvider?.protocolOptions?.length ? customProtocol : (currentProvider?.protocol || 'openai-responses')
+      provider: '',
+      apiKey: '',
+      model: '',
+      baseURL: '',
+      protocol: 'openai-responses'
     })
     setShowSavePresetDialog(true)
   }
@@ -776,7 +859,7 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
 
         {configMode === 'llm' && (
           <div className="flex flex-wrap items-center gap-2">
-            <Button type="button" variant="primary" size="sm" onPress={openPresetDialogFromCurrent}>
+            <Button type="button" variant="primary" size="sm" onPress={openNewPresetDialog}>
               <Plus width={16} height={16} /> 添加预设
             </Button>
             <Button type="button" variant="outline" size="sm" onPress={() => setShowPresetDrawer(true)}>
@@ -1259,35 +1342,64 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
                             />
                           </TextField>
 
-                          <ComboBox
-                            allowsCustomValue
-                            selectedKey={presetModelSelectedKey}
-                            inputValue={presetDraft.model}
-                            onInputChange={(value) => updatePresetDraft({ model: normalizeProviderModel(presetDraft.provider, value) })}
-                            onSelectionChange={(key) => {
-                              if (key != null) updatePresetDraft({ model: normalizeProviderModel(presetDraft.provider, String(key)) })
-                            }}
-                            menuTrigger="focus"
-                            variant="secondary"
-                            fullWidth
-                          >
-                            <Label>模型</Label>
-                            <ComboBox.InputGroup>
-                              <Input placeholder="请选择或输入模型名称" variant="secondary" />
-                              <ComboBox.Trigger />
-                            </ComboBox.InputGroup>
-                            <ComboBox.Popover>
-                              <ListBox className={AI_DROPDOWN_LIST_CLASS}>
-                                {presetDraftModelOptions.map(option => (
-                                  <ListBox.Item key={option.value} id={option.value} textValue={option.label} isDisabled={option.disabled} className="shrink-0">
-                                    {option.content ?? option.label}
-                                    <ListBox.ItemIndicator />
-                                  </ListBox.Item>
-                                ))}
-                              </ListBox>
-                            </ComboBox.Popover>
+                          <div className="space-y-2">
+                            <div className="flex min-w-0 items-end gap-2">
+                              <ComboBox
+                                allowsCustomValue
+                                selectedKey={presetModelSelectedKey}
+                                inputValue={presetDraft.model}
+                                onInputChange={(value) => updatePresetDraft({ model: normalizeProviderModel(presetDraft.provider, value) })}
+                                onSelectionChange={(key) => {
+                                  if (key != null) updatePresetDraft({ model: normalizeProviderModel(presetDraft.provider, String(key)) })
+                                }}
+                                menuTrigger="focus"
+                                variant="secondary"
+                                fullWidth
+                                className="min-w-0 flex-1"
+                              >
+                                <Label>模型</Label>
+                                <ComboBox.InputGroup>
+                                  <Input placeholder="请选择或输入模型名称" variant="secondary" />
+                                  <ComboBox.Trigger />
+                                </ComboBox.InputGroup>
+                                <ComboBox.Popover>
+                                  <ListBox className={AI_DROPDOWN_LIST_CLASS}>
+                                    {presetDraftModelOptions.map(option => (
+                                      <ListBox.Item key={option.value} id={option.value} textValue={option.label} isDisabled={option.disabled} className="shrink-0">
+                                        {option.content ?? option.label}
+                                        <ListBox.ItemIndicator />
+                                      </ListBox.Item>
+                                    ))}
+                                  </ListBox>
+                                </ComboBox.Popover>
+                              </ComboBox>
+                              <Tooltip delay={0}>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  isIconOnly
+                                  onPress={() => void loadPresetDraftModels()}
+                                  isDisabled={isLoadingPresetModels || !canFetchProviderModelList(presetDraft.provider, presetDraft.baseURL, presetDraftProvider)}
+                                  aria-label="刷新预设模型列表"
+                                >
+                                  {isLoadingPresetModels ? <Spinner size="sm" /> : <ArrowsRotateLeft width={16} height={16} />}
+                                </Button>
+                                <Tooltip.Content>刷新模型列表</Tooltip.Content>
+                              </Tooltip>
+                            </div>
                             {presetDraftCurrentModelDetail && <Description><ModelCapabilityStrip modelDetail={presetDraftCurrentModelDetail} /></Description>}
-                          </ComboBox>
+                            {presetModelListError ? (
+                              <Alert status="danger">
+                                <Alert.Content>
+                                  <Alert.Title>模型列表刷新失败</Alert.Title>
+                                  <Alert.Description>{presetModelListError}</Alert.Description>
+                                </Alert.Content>
+                              </Alert>
+                            ) : (
+                              <Description>{presetRemoteModels.length > 0 ? '远程模型列表' : '在线模型列表'}</Description>
+                            )}
+                          </div>
                         </Fieldset.Group>
                       </Fieldset>
                     </Tabs.Panel>
