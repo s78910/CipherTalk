@@ -89,7 +89,7 @@ export function PromptPresetButton({ showGroupSeparator = false }: { showGroupSe
 
   return (
     <Dropdown isOpen={isOpen} onOpenChange={setIsOpen}>
-      <HeroButton aria-label="打开提示词列表" isIconOnly size="sm" variant="tertiary" onPress={() => setIsOpen(true)}>
+      <HeroButton aria-label="打开提示词列表" className="size-8 p-0" isIconOnly size="sm" variant="tertiary" onPress={() => setIsOpen(true)}>
         {showGroupSeparator && <ButtonGroup.Separator />}
         <Sparkles className="size-3.5" />
       </HeroButton>
@@ -183,7 +183,7 @@ export function SlashCommandButton({
 
   return (
     <Dropdown isOpen={isOpen} onOpenChange={handleOpenChange}>
-      <HeroButton aria-label="打开斜杠命令" isIconOnly size="sm" variant="tertiary" onPress={openSlashMenu}>
+      <HeroButton aria-label="打开斜杠命令" className="size-8 p-0" isIconOnly size="sm" variant="tertiary" onPress={openSlashMenu}>
         {showGroupSeparator && <ButtonGroup.Separator />}
         <span aria-hidden className="text-sm font-semibold leading-none">/</span>
       </HeroButton>

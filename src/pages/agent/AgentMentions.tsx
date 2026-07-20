@@ -556,6 +556,7 @@ export function MentionTriggerButton({ showGroupSeparator = false }: { showGroup
   return (
     <HeroButton
       aria-label="提及联系人或群"
+      className="size-8 p-0"
       isIconOnly
       onPress={() => {
         const v = textInput.value
