@@ -23,6 +23,21 @@ const PLAN_LABELS: Record<string, string> = {
   unknown: '未知套餐',
 }
 
+const PLAN_BADGE_CLASSES: Record<string, string> = {
+  free: '[--chip-bg:#e4e4e7] [--chip-fg:#52525b] dark:[--chip-bg:#3f3f46] dark:[--chip-fg:#e4e4e7]',
+  go: '[--chip-bg:#ffedd5] [--chip-fg:#9a3412] dark:[--chip-bg:#7c2d12] dark:[--chip-fg:#fed7aa]',
+  plus: '[--chip-bg:#fef3c7] [--chip-fg:#92400e] dark:[--chip-bg:#78350f] dark:[--chip-fg:#fde68a]',
+  pro: '[--chip-bg:#e0f2fe] [--chip-fg:#075985] dark:[--chip-bg:#0c4a6e] dark:[--chip-fg:#bae6fd]',
+  prolite: '[--chip-bg:#e0f2fe] [--chip-fg:#075985] dark:[--chip-bg:#0c4a6e] dark:[--chip-fg:#bae6fd]',
+  team: '[--chip-bg:#dbeafe] [--chip-fg:#1e40af] dark:[--chip-bg:#1e3a8a] dark:[--chip-fg:#bfdbfe]',
+  business: '[--chip-bg:#d1fae5] [--chip-fg:#065f46] dark:[--chip-bg:#064e3b] dark:[--chip-fg:#a7f3d0]',
+  self_serve_business_usage_based: '[--chip-bg:#d1fae5] [--chip-fg:#065f46] dark:[--chip-bg:#064e3b] dark:[--chip-fg:#a7f3d0]',
+  enterprise: '[--chip-bg:#ede9fe] [--chip-fg:#5b21b6] dark:[--chip-bg:#4c1d95] dark:[--chip-fg:#ddd6fe]',
+  enterprise_cbp_usage_based: '[--chip-bg:#ede9fe] [--chip-fg:#5b21b6] dark:[--chip-bg:#4c1d95] dark:[--chip-fg:#ddd6fe]',
+  edu: '[--chip-bg:#cffafe] [--chip-fg:#155e75] dark:[--chip-bg:#164e63] dark:[--chip-fg:#a5f3fc]',
+  unknown: '[--chip-bg:#e4e4e7] [--chip-fg:#52525b] dark:[--chip-bg:#3f3f46] dark:[--chip-fg:#e4e4e7]',
+}
+
 export default function ChatGPTSubscriptionAuth({ compact = false, onAuthenticationChange }: ChatGPTSubscriptionAuthProps) {
   const [status, setStatus] = useState<CodexSubscriptionStatus | null>(null)
   const [pending, setPending] = useState(false)
@@ -92,6 +107,10 @@ export default function ChatGPTSubscriptionAuth({ compact = false, onAuthenticat
     return <div className="flex min-h-16 items-center gap-2 text-muted-foreground text-sm"><Spinner size="sm" />正在读取 ChatGPT 登录状态...</div>
   }
 
+  const planType = String(status.planType || 'unknown').toLowerCase()
+  const planLabel = PLAN_LABELS[planType] || status.planType || PLAN_LABELS.unknown
+  const planBadgeClass = PLAN_BADGE_CLASSES[planType] || PLAN_BADGE_CLASSES.unknown
+
   return (
     <div className={compact ? 'space-y-3' : 'space-y-4 rounded-md border border-border p-4'}>
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -99,9 +118,9 @@ export default function ChatGPTSubscriptionAuth({ compact = false, onAuthenticat
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-medium text-foreground">ChatGPT 账号</span>
             {status.authenticated && (
-              <Chip size="sm" variant="soft" color="success">
+              <Chip size="sm" variant="soft" className={planBadgeClass}>
                 <CircleCheck className="size-3.5" />
-                <Chip.Label>{PLAN_LABELS[status.planType || 'unknown'] || status.planType}</Chip.Label>
+                <Chip.Label>{planLabel}</Chip.Label>
               </Chip>
             )}
           </div>
