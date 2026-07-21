@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'crypto'
-import { mkdir, readFile, rename, rm, writeFile } from 'fs/promises'
+import { readFileSync } from 'fs'
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'fs/promises'
 import os from 'os'
 import path from 'path'
 import { getCipherTalkCodexHome } from '../runtimePaths.ts'
@@ -55,13 +56,155 @@ export type CodexSubscriptionFetchOptions = {
   userAgent?: string
 }
 
-export function getCodexSubscriptionAuthPath(): string {
-  const authFilePath = path.resolve(getCipherTalkCodexHome(), 'auth.json')
-  const sharedCodexAuthPath = path.resolve(os.homedir(), '.codex', 'auth.json')
-  if (authFilePath.toLowerCase() === sharedCodexAuthPath.toLowerCase()) {
-    throw new Error('密语的 ChatGPT 登录目录不能指向电脑上的 ~/.codex/auth.json')
+/** 密语存放 ChatGPT 登录的根目录；禁止被 CIPHERTALK_CODEX_HOME 指向本机 Codex 的 ~/.codex。 */
+function getCodexHomeSafe(): string {
+  const home = path.resolve(getCipherTalkCodexHome())
+  const cliHome = path.resolve(path.dirname(getCodexCliAuthPath()))
+  if (home.toLowerCase() === cliHome.toLowerCase()) {
+    throw new Error('密语的 ChatGPT 登录目录不能设置为电脑上的 ~/.codex')
   }
-  return authFilePath
+  return home
+}
+
+function getCodexAccountsDir(): string {
+  return path.join(getCodexHomeSafe(), 'accounts')
+}
+
+function getCodexActivePointerPath(): string {
+  return path.join(getCodexHomeSafe(), 'active.json')
+}
+
+function getLegacyCodexAuthPath(): string {
+  return path.join(getCodexHomeSafe(), 'auth.json')
+}
+
+function sanitizeAccountId(id: string): string {
+  return id.replace(/[^a-zA-Z0-9_-]/g, '')
+}
+
+function accountFilePath(id: string): string {
+  return path.join(getCodexAccountsDir(), `${sanitizeAccountId(id)}.json`)
+}
+
+/** 读取「当前账号」指针（同步，供路径解析用）；无则返回 null。 */
+export function getActiveCodexAccountId(): string | null {
+  try {
+    const parsed = JSON.parse(readFileSync(getCodexActivePointerPath(), 'utf8')) as { activeId?: unknown }
+    const id = typeof parsed.activeId === 'string' ? sanitizeAccountId(parsed.activeId.trim()) : ''
+    return id || null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 「当前账号」凭据文件路径。Agent / 状态 / 额度全都读它，刷新令牌也写它——
+ * 指向哪个账号由 active.json 决定，切换账号即改指针，下游无需感知。
+ * 迁移前（旧单账号）回退到 <home>/auth.json，保持老用户零感知。
+ */
+export function getCodexSubscriptionAuthPath(): string {
+  const activeId = getActiveCodexAccountId()
+  return activeId ? accountFilePath(activeId) : getLegacyCodexAuthPath()
+}
+
+export type StoredCodexAccount = {
+  id: string
+  credentials: CodexSubscriptionCredentials
+  addedAt: number
+}
+
+/** 去重键：同一 OpenAI 账号（accountId 优先，退到 email）只保留一份，重复登录即覆盖。 */
+function accountDedupeKey(credentials: CodexSubscriptionCredentials): string | null {
+  const accountId = credentials.accountId?.trim()
+  if (accountId) return `account:${accountId}`
+  const email = credentials.email?.trim().toLowerCase()
+  return email ? `email:${email}` : null
+}
+
+let accountsMigrated = false
+
+/** 把旧的单账号 <home>/auth.json 迁移成 accounts/<id>.json + active 指针；只跑一次。 */
+export async function ensureCodexAccountsMigrated(): Promise<void> {
+  if (accountsMigrated) return
+  if (getActiveCodexAccountId()) {
+    accountsMigrated = true
+    return
+  }
+  const legacy = await readCodexSubscriptionCredentials(getLegacyCodexAuthPath())
+  if (legacy) {
+    const id = randomBytes(8).toString('hex')
+    await writeCodexSubscriptionCredentials(legacy, accountFilePath(id))
+    await writeActiveCodexPointer(id)
+    await rm(getLegacyCodexAuthPath(), { force: true })
+  }
+  accountsMigrated = true
+}
+
+async function writeActiveCodexPointer(id: string): Promise<void> {
+  const home = getCodexHomeSafe()
+  await mkdir(home, { recursive: true })
+  const temporaryPath = path.join(home, `.active-${process.pid}-${randomBytes(6).toString('hex')}.tmp`)
+  await writeFile(temporaryPath, `${JSON.stringify({ activeId: sanitizeAccountId(id) }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
+  await rename(temporaryPath, getCodexActivePointerPath())
+}
+
+/** 列出所有账号（按加入时间升序），凭据原样带回，映射成对外结构由上层做。 */
+export async function listCodexAccounts(): Promise<StoredCodexAccount[]> {
+  await ensureCodexAccountsMigrated()
+  let names: string[]
+  try {
+    names = await readdir(getCodexAccountsDir())
+  } catch {
+    return []
+  }
+  const accounts: StoredCodexAccount[] = []
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue
+    const filePath = path.join(getCodexAccountsDir(), name)
+    const credentials = await readCodexSubscriptionCredentials(filePath)
+    if (!credentials) continue
+    let addedAt = 0
+    try { addedAt = (await stat(filePath)).mtimeMs } catch { /* 取不到时间就置 0 */ }
+    accounts.push({ id: name.slice(0, -5), credentials, addedAt })
+  }
+  return accounts.sort((a, b) => a.addedAt - b.addedAt)
+}
+
+/** 新增/更新一个账号并设为当前；同一账号重复登录则覆盖旧记录。返回账号 id。 */
+export async function upsertCodexAccount(credentials: CodexSubscriptionCredentials): Promise<string> {
+  await ensureCodexAccountsMigrated()
+  const key = accountDedupeKey(credentials)
+  let id: string | undefined
+  if (key) {
+    const existing = await listCodexAccounts()
+    id = existing.find((account) => accountDedupeKey(account.credentials) === key)?.id
+  }
+  if (!id) id = randomBytes(8).toString('hex')
+  await writeCodexSubscriptionCredentials(credentials, accountFilePath(id))
+  await writeActiveCodexPointer(id)
+  return id
+}
+
+export async function setActiveCodexAccount(id: string): Promise<void> {
+  const credentials = await readCodexSubscriptionCredentials(accountFilePath(id))
+  if (!credentials) throw new Error('该账号不存在或登录已失效，请重新登录')
+  await writeActiveCodexPointer(id)
+}
+
+/** 删除一个账号；若删的是当前账号，自动切到剩下的第一个，没有则清空指针。 */
+export async function removeCodexAccount(id: string): Promise<void> {
+  await rm(accountFilePath(id), { force: true })
+  if (getActiveCodexAccountId() === sanitizeAccountId(id)) {
+    const rest = await listCodexAccounts()
+    if (rest.length > 0) await writeActiveCodexPointer(rest[0].id)
+    else await rm(getCodexActivePointerPath(), { force: true })
+  }
+}
+
+/** 本机 Codex CLI 的凭据文件路径（尊重 CODEX_HOME 覆盖），密语只读不写。 */
+export function getCodexCliAuthPath(): string {
+  const codexHome = String(process.env.CODEX_HOME || '').trim() || path.join(os.homedir(), '.codex')
+  return path.resolve(codexHome, 'auth.json')
 }
 
 export function base64Url(value: Buffer): string {
@@ -81,6 +224,19 @@ export function parseJwtClaims(token?: string): OpenAIJwtClaims | undefined {
   try {
     const parsed = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'))
     return parsed && typeof parsed === 'object' ? parsed as OpenAIJwtClaims : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** 从 JWT access_token 的 exp 声明解出毫秒级过期时间；解不出返回 undefined。 */
+export function parseJwtExpiry(token?: string): number | undefined {
+  const parts = (token || '').split('.')
+  if (parts.length !== 3) return undefined
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'))
+    const exp = Number(payload?.exp)
+    return Number.isFinite(exp) && exp > 0 ? exp * 1000 : undefined
   } catch {
     return undefined
   }
@@ -135,6 +291,59 @@ export async function readCodexSubscriptionCredentials(authFilePath = getCodexSu
   }
 }
 
+type CodexCliAuthFile = {
+  tokens?: {
+    id_token?: string
+    access_token?: string
+    refresh_token?: string
+    account_id?: string
+  }
+}
+
+/**
+ * 从本机 Codex CLI 的 ~/.codex/auth.json 解析出一份凭据（只读、不改 CLI 文件）。
+ * 保留 access_token 的真实过期时间，避免立刻触发刷新（刷新会轮换 refresh_token，
+ * 可能把本机 Codex 的登录挤掉）。落盘交给上层的 upsertCodexAccount。
+ */
+export async function readCodexCliCredentials(
+  cliAuthPath = getCodexCliAuthPath(),
+): Promise<CodexSubscriptionCredentials> {
+  let raw: string
+  try {
+    raw = await readFile(cliAuthPath, 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+      throw new Error(`未找到本机 Codex 登录文件（${cliAuthPath}），请先用 Codex CLI 登录 ChatGPT 账号`)
+    }
+    throw error
+  }
+
+  let parsed: CodexCliAuthFile
+  try {
+    parsed = JSON.parse(raw) as CodexCliAuthFile
+  } catch {
+    throw new Error('本机 Codex 登录文件格式无法解析')
+  }
+
+  const tokens = parsed.tokens
+  if (!tokens?.access_token || !tokens.refresh_token) {
+    throw new Error('本机 Codex 登录未包含可用的 OAuth 令牌（可能是 API Key 模式），请改用「登录 ChatGPT」')
+  }
+
+  const account = extractOpenAIAccountInfo({ id_token: tokens.id_token, access_token: tokens.access_token })
+  return {
+    version: 1,
+    accessToken: tokens.access_token,
+    refreshToken: tokens.refresh_token,
+    // 解不出 exp 时用 0（立即过期）→ 首次请求走 refresh_token 换新令牌
+    expiresAt: parseJwtExpiry(tokens.access_token) ?? 0,
+    ...(tokens.id_token ? { idToken: tokens.id_token } : {}),
+    ...(account.accountId || tokens.account_id ? { accountId: account.accountId || tokens.account_id } : {}),
+    ...(account.email ? { email: account.email } : {}),
+    ...(account.planType ? { planType: account.planType } : {}),
+  }
+}
+
 export async function writeCodexSubscriptionCredentials(
   credentials: CodexSubscriptionCredentials,
   authFilePath = getCodexSubscriptionAuthPath(),
@@ -144,10 +353,6 @@ export async function writeCodexSubscriptionCredentials(
   const temporaryPath = path.join(directory, `.auth-${process.pid}-${randomBytes(6).toString('hex')}.tmp`)
   await writeFile(temporaryPath, `${JSON.stringify(credentials, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
   await rename(temporaryPath, authFilePath)
-}
-
-export async function deleteCodexSubscriptionCredentials(authFilePath = getCodexSubscriptionAuthPath()): Promise<void> {
-  await rm(authFilePath, { force: true })
 }
 
 async function requestTokens(body: URLSearchParams, baseFetch?: typeof globalThis.fetch): Promise<OpenAITokenResponse> {

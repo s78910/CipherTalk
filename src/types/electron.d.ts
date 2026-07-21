@@ -77,6 +77,14 @@ export interface CodexSubscriptionModel {
   defaultReasoningEffort?: string
 }
 
+export interface CodexAccount {
+  id: string
+  email?: string
+  planType?: string
+  active: boolean
+  addedAt: number
+}
+
 export interface CodexSubscriptionUsageWindow {
   usedPercent: number
   remainingPercent: number
@@ -1770,6 +1778,10 @@ export interface ElectronAPI {
     getStatus: () => Promise<CodexSubscriptionStatus>
     getUsage: (forceRefresh?: boolean) => Promise<{ success: boolean; usage?: CodexSubscriptionUsage; error?: string }>
     login: () => Promise<{ success: boolean; loginId?: string; error?: string }>
+    importFromCodexCli: () => Promise<{ success: boolean; error?: string }>
+    listAccounts: () => Promise<{ success: boolean; accounts?: CodexAccount[]; error?: string }>
+    setActiveAccount: (id: string) => Promise<{ success: boolean; error?: string }>
+    removeAccount: (id: string) => Promise<{ success: boolean; error?: string }>
     logout: () => Promise<{ success: boolean; error?: string }>
     listModels: () => Promise<{ success: boolean; models?: CodexSubscriptionModel[]; error?: string }>
     onStatusChanged: (callback: (status: CodexSubscriptionStatus) => void) => () => void

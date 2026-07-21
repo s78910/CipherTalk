@@ -7,12 +7,17 @@ import {
   OPENAI_OAUTH_SCOPE,
   createPkceCodes,
   credentialsFromTokens,
-  deleteCodexSubscriptionCredentials,
+  ensureCodexAccountsMigrated,
   exchangeOpenAIAuthorizationCode,
+  getActiveCodexAccountId,
   getCodexSubscriptionAuthPath,
   getValidCodexSubscriptionCredentials,
+  listCodexAccounts,
+  readCodexCliCredentials,
   readCodexSubscriptionCredentials,
-  writeCodexSubscriptionCredentials,
+  removeCodexAccount,
+  setActiveCodexAccount,
+  upsertCodexAccount,
 } from './codexSubscriptionAuth'
 import { createProxyFetch, getResolvedProxyUrl } from './proxyFetch'
 
@@ -23,6 +28,14 @@ export type CodexSubscriptionStatus = {
   planType?: string
   requiresOpenaiAuth?: boolean
   error?: string
+}
+
+export type CodexAccount = {
+  id: string
+  email?: string
+  planType?: string
+  active: boolean
+  addedAt: number
 }
 
 export type CodexSubscriptionModel = {
@@ -224,6 +237,7 @@ class CodexSubscriptionService {
 
   async getStatus(refreshToken = false): Promise<CodexSubscriptionStatus> {
     try {
+      await ensureCodexAccountsMigrated()
       let credentials = await readCodexSubscriptionCredentials()
       if (credentials && refreshToken) {
         credentials = await getValidCodexSubscriptionCredentials({
@@ -281,10 +295,44 @@ class CodexSubscriptionService {
     }
   }
 
+  /** 退出「当前账号」：删除它并自动切到剩下的账号。 */
   async logout(): Promise<void> {
     this.cancelPendingLogin()
     this.closeServer()
-    await deleteCodexSubscriptionCredentials()
+    const activeId = getActiveCodexAccountId()
+    if (activeId) await removeCodexAccount(activeId)
+    this.usageCache = null
+    this.emitStatus(await this.getStatus())
+  }
+
+  /** 从本机 Codex CLI 的登录导入一份凭据并另存为一个账号，只读不改 CLI 文件。 */
+  async importFromCodexCli(): Promise<void> {
+    this.cancelPendingLogin()
+    await upsertCodexAccount(await readCodexCliCredentials())
+    this.usageCache = null
+    this.emitStatus(await this.getStatus())
+  }
+
+  async listAccounts(): Promise<CodexAccount[]> {
+    const accounts = await listCodexAccounts()
+    const activeId = getActiveCodexAccountId()
+    return accounts.map((account) => ({
+      id: account.id,
+      email: account.credentials.email,
+      planType: account.credentials.planType,
+      active: account.id === activeId,
+      addedAt: account.addedAt,
+    }))
+  }
+
+  async setActiveAccount(id: string): Promise<void> {
+    await setActiveCodexAccount(id)
+    this.usageCache = null
+    this.emitStatus(await this.getStatus())
+  }
+
+  async removeAccount(id: string): Promise<void> {
+    await removeCodexAccount(id)
     this.usageCache = null
     this.emitStatus(await this.getStatus())
   }
@@ -452,7 +500,7 @@ class CodexSubscriptionService {
       const tokens = await exchangeOpenAIAuthorizationCode(code, pending.verifier, createProxyFetch(getResolvedProxyUrl()))
       const credentials = credentialsFromTokens(tokens)
       if (!credentials.refreshToken) throw new Error('OpenAI OAuth 响应缺少 refresh_token')
-      await writeCodexSubscriptionCredentials(credentials)
+      await upsertCodexAccount(credentials)
       this.usageCache = null
       response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
       response.end(callbackHtml(true, '授权信息已保存到密语，可以关闭这个页面。'))

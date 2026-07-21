@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Alert, Button, Chip, ProgressBar, Spinner, Tooltip } from '@heroui/react'
-import { ArrowUpRight, ArrowsRotateLeft, CircleCheck, Eye, EyeSlash } from '@gravity-ui/icons'
-import type { CodexSubscriptionRateLimit, CodexSubscriptionStatus, CodexSubscriptionUsage, CodexSubscriptionUsageWindow } from '@/types/electron'
+import { ArrowDownToLine, ArrowUpRight, ArrowsRotateLeft, ChevronDown, CircleCheck, Eye, EyeSlash, TrashBin } from '@gravity-ui/icons'
+import type { CodexAccount, CodexSubscriptionRateLimit, CodexSubscriptionStatus, CodexSubscriptionUsage, CodexSubscriptionUsageWindow } from '@/types/electron'
 
 type ChatGPTSubscriptionAuthProps = {
   compact?: boolean
@@ -109,6 +109,8 @@ function usageWindows(rateLimits: CodexSubscriptionRateLimit[]): Array<{
 
 export default function ChatGPTSubscriptionAuth({ compact = false, onAuthenticationChange }: ChatGPTSubscriptionAuthProps) {
   const [status, setStatus] = useState<CodexSubscriptionStatus | null>(null)
+  const [accounts, setAccounts] = useState<CodexAccount[]>([])
+  const [expanded, setExpanded] = useState(false)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
   const [showEmail, setShowEmail] = useState(false)
@@ -129,6 +131,11 @@ export default function ChatGPTSubscriptionAuth({ compact = false, onAuthenticat
     onAuthenticationChangeRef.current?.(next.authenticated)
     return next
   }
+
+  const fetchAccounts = useCallback(async () => {
+    const result = await window.electronAPI.codexSubscription.listAccounts()
+    if (result.success && result.accounts) setAccounts(result.accounts)
+  }, [])
 
   const refreshUsage = useCallback(async (forceRefresh = false, showLoading = false) => {
     const requestSequence = ++usageRequestSequence.current
@@ -157,6 +164,7 @@ export default function ChatGPTSubscriptionAuth({ compact = false, onAuthenticat
       setStatus(next)
       onAuthenticationChangeRef.current?.(next.authenticated)
     })
+    void fetchAccounts()
     const off = window.electronAPI.codexSubscription.onStatusChanged((next) => {
       if (!active) return
       setStatus(next)
@@ -165,12 +173,13 @@ export default function ChatGPTSubscriptionAuth({ compact = false, onAuthenticat
         setError('')
       }
       onAuthenticationChangeRef.current?.(next.authenticated)
+      void fetchAccounts()
     })
     return () => {
       active = false
       off()
     }
-  }, [])
+  }, [fetchAccounts])
 
   useEffect(() => {
     if (!pending) return
@@ -205,16 +214,42 @@ export default function ChatGPTSubscriptionAuth({ compact = false, onAuthenticat
     }
   }
 
-  const logout = async () => {
+  const importFromCli = async () => {
+    setPending(true)
+    setError('')
+    const result = await window.electronAPI.codexSubscription.importFromCodexCli()
+    if (!result.success) {
+      setError(result.error || '导入本机 Codex 登录失败')
+      setPending(false)
+      return
+    }
+    await refresh()
+    await fetchAccounts()
+    setPending(false)
+  }
+
+  const setActiveAccount = async (id: string) => {
     setPending(true)
     setError('')
     usageRequestSequence.current += 1
     setUsage(null)
     setUsageError('')
-    const result = await window.electronAPI.codexSubscription.logout()
+    const result = await window.electronAPI.codexSubscription.setActiveAccount(id)
+    if (!result.success) setError(result.error || '切换账号失败')
+    else { await refresh(); await fetchAccounts() }
     setPending(false)
-    if (!result.success) setError(result.error || '退出登录失败')
-    else await refresh()
+  }
+
+  const removeAccount = async (id: string) => {
+    setPending(true)
+    setError('')
+    usageRequestSequence.current += 1
+    setUsage(null)
+    setUsageError('')
+    const result = await window.electronAPI.codexSubscription.removeAccount(id)
+    if (!result.success) setError(result.error || '移除账号失败')
+    else { await refresh(); await fetchAccounts() }
+    setPending(false)
   }
 
   if (!status) {
@@ -225,6 +260,7 @@ export default function ChatGPTSubscriptionAuth({ compact = false, onAuthenticat
   const planLabel = PLAN_LABELS[planType] || status.planType || PLAN_LABELS.unknown
   const planBadgeClass = PLAN_BADGE_CLASSES[planType] || PLAN_BADGE_CLASSES.unknown
   const quotaWindows = usageWindows(usage?.rateLimits || [])
+  const showAddButtons = expanded || accounts.length === 0
 
   return (
     <div className={compact ? 'space-y-3' : 'space-y-4 rounded-md border border-border p-4'}>
@@ -237,6 +273,9 @@ export default function ChatGPTSubscriptionAuth({ compact = false, onAuthenticat
                 <CircleCheck className="size-3.5" />
                 <Chip.Label>{planLabel}</Chip.Label>
               </Chip>
+            )}
+            {accounts.length > 1 && (
+              <span className="text-muted-foreground text-xs">共 {accounts.length} 个账号</span>
             )}
           </div>
           <div className="mt-1 flex min-w-0 items-center gap-1 text-muted-foreground text-sm">
@@ -261,18 +300,86 @@ export default function ChatGPTSubscriptionAuth({ compact = false, onAuthenticat
             )}
           </div>
         </div>
-        {status.authenticated ? (
-          <Button type="button" variant="outline" size="sm" onPress={() => void logout()} isDisabled={pending}>
-            {pending ? <Spinner size="sm" /> : <ArrowsRotateLeft width={16} height={16} />}
-            退出登录
-          </Button>
-        ) : (
-          <Button type="button" variant="primary" size="sm" onPress={() => void login()} isDisabled={pending || !status.available}>
-            {pending ? <Spinner size="sm" /> : <ArrowUpRight width={16} height={16} />}
-            {pending ? '等待授权...' : '登录 ChatGPT'}
+        {accounts.length > 0 && (
+          <Button
+            type="button"
+            variant="tertiary"
+            size="sm"
+            onPress={() => setExpanded((visible) => !visible)}
+            aria-label={expanded ? '收起账号列表' : '展开账号列表'}
+          >
+            {expanded ? '收起' : '管理账号'}
+            <ChevronDown width={16} height={16} className={`transition-transform ${expanded ? 'rotate-180' : ''}`} />
           </Button>
         )}
       </div>
+
+      {accounts.length > 0 && expanded && (
+        <div className="space-y-2 border-t border-border pt-3">
+          {accounts.map((account) => {
+            const accPlan = String(account.planType || 'unknown').toLowerCase()
+            const accPlanLabel = PLAN_LABELS[accPlan] || account.planType || PLAN_LABELS.unknown
+            const accPlanBadge = PLAN_BADGE_CLASSES[accPlan] || PLAN_BADGE_CLASSES.unknown
+            return (
+              <div key={account.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border px-3 py-2">
+                <div className="flex min-w-0 items-center gap-2">
+                  <Chip size="sm" variant="soft" className={accPlanBadge}>
+                    <Chip.Label>{accPlanLabel}</Chip.Label>
+                  </Chip>
+                  <span className="truncate text-sm text-foreground">{account.email ? maskEmail(account.email) : '已登录'}</span>
+                  {account.active && (
+                    <Chip size="sm" color="success" variant="soft">
+                      <CircleCheck className="size-3.5" />
+                      <Chip.Label>当前</Chip.Label>
+                    </Chip>
+                  )}
+                </div>
+                <div className="flex shrink-0 items-center gap-1">
+                  {!account.active && (
+                    <Button type="button" variant="outline" size="sm" onPress={() => void setActiveAccount(account.id)} isDisabled={pending}>
+                      设为当前
+                    </Button>
+                  )}
+                  <Tooltip delay={0}>
+                    <Button
+                      type="button"
+                      variant="tertiary"
+                      size="sm"
+                      isIconOnly
+                      className="size-7 min-h-7 min-w-7"
+                      onPress={() => void removeAccount(account.id)}
+                      isDisabled={pending}
+                      aria-label="移除账号"
+                    >
+                      <TrashBin width={15} height={15} />
+                    </Button>
+                    <Tooltip.Content>移除账号</Tooltip.Content>
+                  </Tooltip>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {showAddButtons && (
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="button" variant="outline" size="sm" onPress={() => void importFromCli()} isDisabled={pending || !status.available}>
+              {pending ? <Spinner size="sm" /> : <ArrowDownToLine width={16} height={16} />}
+              导入本机 Codex 登录
+            </Button>
+            <Button type="button" variant="primary" size="sm" onPress={() => void login()} isDisabled={pending || !status.available}>
+              {pending ? <Spinner size="sm" /> : <ArrowUpRight width={16} height={16} />}
+              {pending ? '等待授权...' : accounts.length > 0 ? '添加其他账号' : '登录 ChatGPT'}
+            </Button>
+          </div>
+          <p className="text-muted-foreground text-xs leading-relaxed">
+            「导入本机 Codex 登录」会读取电脑上 Codex CLI 的登录并在密语里另存一份，不会修改 CLI 文件。
+            但两者共用同一个 ChatGPT 授权，密语刷新令牌后本机 Codex 可能需要重新登录。
+          </p>
+        </div>
+      )}
       {status.authenticated && (
         <div className="border-t border-border pt-3">
           <div className="mb-2 flex items-center justify-between gap-2">

@@ -933,6 +933,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getStatus: () => ipcRenderer.invoke('codexSubscription:getStatus'),
     getUsage: (forceRefresh?: boolean) => ipcRenderer.invoke('codexSubscription:getUsage', forceRefresh),
     login: () => ipcRenderer.invoke('codexSubscription:login'),
+    importFromCodexCli: () => ipcRenderer.invoke('codexSubscription:importFromCodexCli'),
+    listAccounts: () => ipcRenderer.invoke('codexSubscription:listAccounts'),
+    setActiveAccount: (id: string) => ipcRenderer.invoke('codexSubscription:setActiveAccount', id),
+    removeAccount: (id: string) => ipcRenderer.invoke('codexSubscription:removeAccount', id),
     logout: () => ipcRenderer.invoke('codexSubscription:logout'),
     listModels: () => ipcRenderer.invoke('codexSubscription:listModels'),
     onStatusChanged: (callback: (status: unknown) => void): (() => void) => {

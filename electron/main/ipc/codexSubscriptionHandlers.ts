@@ -45,6 +45,44 @@ export function registerCodexSubscriptionHandlers(ctx: MainProcessContext): void
     }
   })
 
+  ipcMain.handle('codexSubscription:importFromCodexCli', async () => {
+    try {
+      loginPending = false
+      await codexSubscriptionService.importFromCodexCli()
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  ipcMain.handle('codexSubscription:listAccounts', async () => {
+    try {
+      const accounts = await codexSubscriptionService.listAccounts()
+      return { success: true, accounts }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  ipcMain.handle('codexSubscription:setActiveAccount', async (_event, id: string) => {
+    try {
+      await codexSubscriptionService.setActiveAccount(id)
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  ipcMain.handle('codexSubscription:removeAccount', async (_event, id: string) => {
+    try {
+      loginPending = false
+      await codexSubscriptionService.removeAccount(id)
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
   ipcMain.handle('codexSubscription:logout', async () => {
     try {
       loginPending = false
