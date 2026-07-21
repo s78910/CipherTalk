@@ -5,7 +5,7 @@
  * 只存稳定的「用户画像 profile」与「长期事实 fact」，带 importance；高重要度的会在下次开场注入系统提示。
  * 故意只挂在主 Agent（buildTools），子 Agent（delegate）不带，避免子任务乱写记忆。
  */
-import { asSchema, tool, generateObject, generateText } from 'ai'
+import { tool, generateObject, generateText } from 'ai'
 import { z } from 'zod'
 import type { AgentScope, AgentProviderConfig } from '../types'
 import type { MemoryItem, MemorySourceType } from '../../memory/memorySchema'
@@ -29,14 +29,6 @@ async function generateMemoryText(opts: {
   prompt: string
   signal?: AbortSignal
 }): Promise<string> {
-  if (opts.providerConfig.providerKind === 'codex-subscription') {
-    const { runCodexSubscriptionText } = await import('../codexSubscriptionRunner')
-    return runCodexSubscriptionText({
-      providerConfig: opts.providerConfig,
-      instructions: opts.instructions,
-      messages: [{ role: 'user', content: opts.prompt }],
-    }, opts.signal)
-  }
   const result = await generateText({
     model: createLanguageModel(opts.providerConfig),
     abortSignal: opts.signal,
@@ -54,17 +46,6 @@ async function generateMemoryObject<T>(opts: {
   prompt: string
   signal?: AbortSignal
 }): Promise<T> {
-  if (opts.providerConfig.providerKind === 'codex-subscription') {
-    const { runCodexSubscriptionText } = await import('../codexSubscriptionRunner')
-    const outputSchema = await asSchema(opts.schema).jsonSchema
-    const text = await runCodexSubscriptionText({
-      providerConfig: opts.providerConfig,
-      instructions: opts.instructions,
-      messages: [{ role: 'user', content: opts.prompt }],
-      outputSchema,
-    }, opts.signal)
-    return opts.schema.parse(JSON.parse(text))
-  }
   const { object } = await generateObject({
     model: createLanguageModel(opts.providerConfig),
     abortSignal: opts.signal,

@@ -1541,7 +1541,6 @@ export interface ElectronAPI {
       canvasContext?: { activeCanvasId?: string; activeRevision?: number } | null
     ) => Promise<{ success: boolean; error?: string }>
     abort: (runId: string) => Promise<{ success: boolean }>
-    resolveCodexToolApproval: (approvalId: string, approved: boolean) => Promise<{ success: boolean; handled: boolean; error?: string }>
     generateTitle: (firstMessage: string, modelConfig?: unknown) => Promise<{ success: boolean; title?: string; error?: string }>
     optimizePrompt: (
       prompt: string,

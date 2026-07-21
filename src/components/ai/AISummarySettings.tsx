@@ -94,7 +94,7 @@ const PROTOCOL_LABELS: Record<AiProviderProtocol, string> = {
   'openai-compatible': 'OpenAI Compatible',
   anthropic: 'Anthropic',
   google: 'Google Gemini',
-  'codex-subscription': 'Codex App Server'
+  'codex-subscription': 'ChatGPT 订阅'
 }
 
 const CODEX_SUBSCRIPTION_PROVIDER_ID = 'openai-codex'
@@ -1132,7 +1132,7 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
             <Alert status="default">
               <Alert.Content>
                 <Alert.Title>本地保存</Alert.Title>
-                <Alert.Description>{isCodexSubscription ? '登录凭据由 Codex 运行时管理，密语不会读取账号令牌。' : 'API 密钥仅保存在本地。连接测试与模型刷新会向当前服务商发起请求。'}</Alert.Description>
+                <Alert.Description>{isCodexSubscription ? 'ChatGPT 登录凭据仅保存在密语的数据目录中，不会读取或修改电脑上的 Codex 登录。' : 'API 密钥仅保存在本地。连接测试与模型刷新会向当前服务商发起请求。'}</Alert.Description>
               </Alert.Content>
             </Alert>
           </aside>

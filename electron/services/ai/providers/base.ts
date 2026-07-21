@@ -6,6 +6,7 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { createProxyFetch, getResolvedProxyUrl } from '../proxyFetch'
 import { withOpenAICompatibleStreamSanitizer } from '../openaiCompatibleStreamSanitizer'
 import { withOpenAIResponsesSanitizer } from '../openaiResponsesSanitizer'
+import { CODEX_SUBSCRIPTION_DUMMY_API_KEY, createCodexSubscriptionFetch, getCodexSubscriptionAuthPath } from '../codexSubscriptionAuth'
 
 export namespace OpenAI {
   export namespace Chat {
@@ -370,8 +371,8 @@ export abstract class BaseAIProvider implements AIProvider {
   protected baseURL: string
   protected providerKind: ProviderKind
 
-  constructor(apiKey: string, baseURL: string, providerKind: ProviderKind = 'openai-compatible') {
-    this.apiKey = apiKey
+  constructor(apiKey: string, baseURL: string, providerKind: ProviderKind = 'openai-compatible', protected authFilePath?: string) {
+    this.apiKey = providerKind === 'codex-subscription' ? CODEX_SUBSCRIPTION_DUMMY_API_KEY : apiKey
     this.baseURL = baseURL
     this.providerKind = providerKind
   }
@@ -384,7 +385,16 @@ export abstract class BaseAIProvider implements AIProvider {
     const headers = this.getDefaultHeaders()
     const fetch = createProxyFetch(getResolvedProxyUrl()) // 无代理时为 undefined → 默认直连，国内零影响
     if (this.providerKind === 'codex-subscription') {
-      throw new Error('ChatGPT 订阅模型仅通过 Codex App Server Agent 运行')
+      const subscriptionFetch = createCodexSubscriptionFetch({
+        authFilePath: this.authFilePath || getCodexSubscriptionAuthPath(),
+        baseFetch: fetch,
+      })
+      return createOpenAI({
+        apiKey: CODEX_SUBSCRIPTION_DUMMY_API_KEY,
+        baseURL: 'https://api.openai.com/v1',
+        name: this.name,
+        fetch: withOpenAIResponsesSanitizer(subscriptionFetch),
+      }).responses(model as any)
     }
     if (this.providerKind === 'anthropic') {
       return createAnthropic({

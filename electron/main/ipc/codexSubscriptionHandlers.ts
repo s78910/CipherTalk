@@ -7,7 +7,11 @@ export function registerCodexSubscriptionHandlers(ctx: MainProcessContext): void
 
   codexSubscriptionService.onStatusChanged((status) => {
     ctx.broadcastToWindows('codexSubscription:statusChanged', status)
-    if (!loginPending || !status.authenticated) return
+    if (!loginPending) return
+    if (!status.authenticated) {
+      if (status.error) loginPending = false
+      return
+    }
     loginPending = false
     const mainWindow = ctx.getMainWindow()
     if (!mainWindow || mainWindow.isDestroyed()) return

@@ -44,8 +44,7 @@ function readConfiguredApprovalPolicy(): 'on-request' | 'risk-based' | 'full-acc
 }
 
 /** 全局审批函数：返回 undefined 表示放行，返回 user-approval 表示需要用户确认。
- * 类型收窄为可直接调用的函数形式（AI SDK 的 ToolApprovalConfiguration 是"函数 | 按工具记录表"联合，
- * codexSubscriptionRunner 需要直接调用，联合类型不可调用）。 */
+ * 类型收窄为可直接调用的函数形式，供 AI SDK ToolLoopAgent 使用。 */
 export type AgentToolApprovalFunction = (options: {
   toolCall: { toolCallId: string; toolName: string; input: unknown }
 }) => { type: 'user-approval' } | undefined

@@ -10,6 +10,7 @@ import type { LanguageModel, ToolSet } from 'ai'
 import type { FilesV4 } from '@ai-sdk/provider'
 import { createProxyFetch } from '../ai/proxyFetch'
 import { withOpenAIResponsesSanitizer } from '../ai/openaiResponsesSanitizer'
+import { CODEX_SUBSCRIPTION_DUMMY_API_KEY, createCodexSubscriptionFetch, getCodexSubscriptionAuthPath } from '../ai/codexSubscriptionAuth'
 import { withOpenAICompatibleStreamSanitizer } from '../ai/openaiCompatibleStreamSanitizer'
 import { withGoogleExplicitCache } from './googleCacheFetch'
 import { isArkBaseURL, withArkContextCache } from './arkContextFetch'
@@ -23,7 +24,7 @@ export type NativeWebSearchProvider = 'openai' | 'google' | 'anthropic'
 
 /** 当前协议是否能通过对应 AI SDK provider 挂载厂商执行的原生联网搜索。 */
 export function getNativeWebSearchProvider(config: Pick<AgentProviderConfig, 'providerKind'>): NativeWebSearchProvider | null {
-  if (config.providerKind === 'openai-responses') return 'openai'
+  if (config.providerKind === 'openai-responses' || config.providerKind === 'codex-subscription') return 'openai'
   if (config.providerKind === 'google') return 'google'
   if (config.providerKind === 'anthropic') return 'anthropic'
   return null
@@ -109,7 +110,16 @@ export function createLanguageModel(config: AgentProviderConfig, options: AgentL
   const fetch = createProxyFetch(proxyUrl)
 
   if (providerKind === 'codex-subscription') {
-    throw new Error('ChatGPT 订阅模型仅通过 Codex App Server Agent 运行')
+    const subscriptionFetch = createCodexSubscriptionFetch({
+      authFilePath: config.authFilePath || getCodexSubscriptionAuthPath(),
+      baseFetch: fetch,
+    })
+    return createOpenAI({
+      apiKey: CODEX_SUBSCRIPTION_DUMMY_API_KEY,
+      baseURL: 'https://api.openai.com/v1',
+      name,
+      fetch: withOpenAIResponsesSanitizer(subscriptionFetch),
+    }).responses(model as any)
   }
   if (providerKind === 'anthropic') {
     return createAnthropic({ apiKey, baseURL, name, headers, fetch: withAnthropicSanitizer(fetch) })(model as any)

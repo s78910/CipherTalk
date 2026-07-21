@@ -16,6 +16,8 @@ export interface AgentProviderConfig {
   apiKey: string
   baseURL: string
   model: string
+  /** 密语自己的 ChatGPT OAuth 文件绝对路径；不读取 ~/.codex/auth.json。 */
+  authFilePath?: string
   headers?: Record<string, string>
   reasoningEffort?: AgentReasoningEffort
   /** 主进程注入的系统代理 URL（子进程无 session 探测不了）；空/无则直连。 */

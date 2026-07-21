@@ -2,6 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import { BaseAIProvider, type ProviderKind } from './base'
 import { getAppPath, getUserDataPath, isElectronPackaged } from '../../runtimePaths'
+import { getCodexSubscriptionAuthPath, CODEX_SUBSCRIPTION_DUMMY_API_KEY } from '../codexSubscriptionAuth'
 
 export type AIProviderProtocol = ProviderKind
 
@@ -96,15 +97,22 @@ const CUSTOM_PROVIDER_DEFINITION: AIProviderMetadata = {
 
 export const CODEX_SUBSCRIPTION_PROVIDER_ID = 'openai-codex'
 
+const CODEX_SUBSCRIPTION_MODEL_DETAILS: AIModelInfo[] = [
+  { id: 'gpt-5.5', name: 'GPT-5.5', providerId: CODEX_SUBSCRIPTION_PROVIDER_ID, family: 'gpt', modalities: { input: ['text', 'image', 'pdf'], output: ['text'] }, capabilities: { attachment: true, reasoning: true, toolCall: true, structuredOutput: true, temperature: false, openWeights: false }, limits: { context: 400_000, input: 272_000, output: 128_000 } },
+  { id: 'gpt-5.4', name: 'GPT-5.4', providerId: CODEX_SUBSCRIPTION_PROVIDER_ID, family: 'gpt', modalities: { input: ['text', 'image', 'pdf'], output: ['text'] }, capabilities: { attachment: true, reasoning: true, toolCall: true, structuredOutput: true, temperature: false, openWeights: false }, limits: { context: 1_050_000, input: 922_000, output: 128_000 } },
+  { id: 'gpt-5.4-mini', name: 'GPT-5.4 mini', providerId: CODEX_SUBSCRIPTION_PROVIDER_ID, family: 'gpt-mini', modalities: { input: ['text', 'image'], output: ['text'] }, capabilities: { attachment: true, reasoning: true, toolCall: true, structuredOutput: true, temperature: false, openWeights: false }, limits: { context: 400_000, input: 272_000, output: 128_000 } },
+  { id: 'gpt-5.3-codex-spark', name: 'GPT-5.3 Codex Spark', providerId: CODEX_SUBSCRIPTION_PROVIDER_ID, family: 'gpt-codex-spark', modalities: { input: ['text', 'image', 'pdf'], output: ['text'] }, capabilities: { attachment: true, reasoning: true, toolCall: true, structuredOutput: true, temperature: false, openWeights: false }, limits: { context: 128_000, input: 100_000, output: 32_000 } },
+]
+
 const CODEX_SUBSCRIPTION_PROVIDER_DEFINITION: AIProviderMetadata = {
   id: CODEX_SUBSCRIPTION_PROVIDER_ID,
   name: CODEX_SUBSCRIPTION_PROVIDER_ID,
   displayName: 'ChatGPT 订阅',
-  description: '使用 ChatGPT 账号登录，通过 Codex App Server 调用订阅内额度',
+  description: '使用 ChatGPT 账号登录，直连 ChatGPT Codex Responses 接口调用订阅内额度',
   protocol: 'codex-subscription',
   baseURL: '',
-  models: [],
-  modelDetails: [],
+  models: CODEX_SUBSCRIPTION_MODEL_DETAILS.map((model) => model.id),
+  modelDetails: CODEX_SUBSCRIPTION_MODEL_DETAILS,
   pricing: '订阅额度',
   pricingDetail: { input: 0, output: 0 },
   optionalApiKey: true,
@@ -571,7 +579,12 @@ export class CatalogAIProvider extends BaseAIProvider {
 
   constructor(definition: AIProviderMetadata, apiKey: string, baseURL?: string) {
     const effectiveBaseURL = baseURL || definition.baseURL
-    super(apiKey, effectiveBaseURL, definition.protocol)
+    super(
+      definition.protocol === 'codex-subscription' ? CODEX_SUBSCRIPTION_DUMMY_API_KEY : apiKey,
+      definition.protocol === 'codex-subscription' ? 'https://api.openai.com/v1' : effectiveBaseURL,
+      definition.protocol,
+      definition.protocol === 'codex-subscription' ? getCodexSubscriptionAuthPath() : undefined,
+    )
     this.definition = definition
     this.name = definition.name
     this.displayName = definition.displayName

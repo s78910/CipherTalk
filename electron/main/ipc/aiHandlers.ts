@@ -1076,16 +1076,6 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
     return { success: true }
   })
 
-  ipcMain.handle('agent:resolveCodexToolApproval', async (_event, payload: { approvalId?: string; approved?: boolean }) => {
-    try {
-      const { agentProcessService } = await import('../../services/agent/agentProcessService')
-      const handled = await agentProcessService.resolveCodexToolApproval(String(payload?.approvalId || ''), payload?.approved === true)
-      return { success: true, handled }
-    } catch (error) {
-      return { success: false, handled: false, error: error instanceof Error ? error.message : String(error) }
-    }
-  })
-
   // ========= 嵌入模型（语义/向量检索）=========
   ipcMain.handle('embedding:getConfig', async () => {
     try {
@@ -2144,18 +2134,13 @@ export function registerAiHandlers(ctx: MainProcessContext): void {
     try {
       if (options.provider === 'openai-codex') {
         const { codexSubscriptionService } = await import('../../services/ai/codexSubscriptionService')
+        const { getProviderDefinition } = await import('../../services/ai/providers/catalog')
         const items = await codexSubscriptionService.listModels()
+        const details = getProviderDefinition('openai-codex')?.modelDetails || []
         return {
           success: true,
           models: items.map((item) => item.id),
-          modelDetails: items.map((item) => ({
-            id: item.id,
-            name: item.displayName,
-            providerId: 'openai-codex',
-            modalities: { input: ['text', 'image'], output: ['text'] },
-            capabilities: { attachment: true, reasoning: true, toolCall: true, structuredOutput: true, temperature: false, openWeights: false },
-            limits: {},
-          })),
+          modelDetails: details,
         }
       }
       const { aiService } = await import('../../services/ai/aiService')

@@ -198,6 +198,31 @@ function verifyFfmpegStaticPacked(context) {
     );
 }
 
+// ChatGPT 订阅 Provider 由密语直接发起 OAuth/Responses 请求，不需要 Codex CLI 运行时。
+function verifyCodexRuntimeAbsent(context) {
+    const stack = [context.appOutDir];
+    while (stack.length > 0) {
+        const current = stack.pop();
+        for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+            const fullPath = path.join(current, entry.name);
+            if (entry.isDirectory()) {
+                if (entry.name === '@openai') {
+                    const codexPackages = fs.readdirSync(fullPath).filter((name) => /^codex(?:-|$)/i.test(name));
+                    if (codexPackages.length > 0) {
+                        throw new Error(`[afterPack] 发布包不应包含 Codex CLI 依赖: ${codexPackages.join(', ')}`);
+                    }
+                }
+                stack.push(fullPath);
+                continue;
+            }
+            if (/^codex(?:\.exe)?$/i.test(entry.name)) {
+                throw new Error(`[afterPack] 发布包不应包含 Codex CLI 可执行文件: ${fullPath}`);
+            }
+        }
+    }
+    console.log('[afterPack] 已确认发布包不包含 Codex CLI 运行时。');
+}
+
 function pruneWhisperResources(context) {
     if (context.electronPlatformName !== 'win32') return;
 
@@ -260,6 +285,8 @@ exports.default = async function (context) {
     verifySharpVipsPacked(context);
 
     verifyFfmpegStaticPacked(context);
+
+    verifyCodexRuntimeAbsent(context);
 
     if (context.electronPlatformName === 'darwin') {
         const productName = context.packager?.appInfo?.productFilename || 'CipherTalk';

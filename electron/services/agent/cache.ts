@@ -131,10 +131,10 @@ export function buildProviderOptions(input: AgentRunInput, promptCacheKey: strin
   const effort = input.providerConfig.reasoningEffort
   const options: Record<string, Record<string, unknown>> = {}
 
-  if (input.providerConfig.providerKind === 'openai-responses' || input.providerConfig.providerKind === 'openai-compatible') {
+  if (input.providerConfig.providerKind === 'openai-responses' || input.providerConfig.providerKind === 'codex-subscription' || input.providerConfig.providerKind === 'openai-compatible') {
     const option: Record<string, unknown> = {}
     if (isReasoningEffortSet(effort)) option.reasoningEffort = effort
-    if (input.providerConfig.providerKind === 'openai-responses') {
+    if (input.providerConfig.providerKind === 'openai-responses' || input.providerConfig.providerKind === 'codex-subscription') {
       // 让 OpenAI 返回思考摘要（推理模型才有内容，非推理模型会被忽略）；下游 engine 已透传 reasoning 块
       option.reasoningSummary = 'auto'
       option.store = isOfficialOpenAIResponsesEndpoint(input)
@@ -202,7 +202,7 @@ export function buildProviderCacheStatus(input: AgentRunInput, promptCacheKey: s
       requestBodyPromptCacheField: 'promptCacheKey',
     }
   }
-  if (input.providerConfig.providerKind === 'openai-responses') {
+  if (input.providerConfig.providerKind === 'openai-responses' || input.providerConfig.providerKind === 'codex-subscription') {
     return {
       ...base,
       promptCacheEnabled: true,

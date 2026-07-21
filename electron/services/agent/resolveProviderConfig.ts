@@ -9,6 +9,7 @@ import {
   normalizeProviderId,
 } from '../ai/providers/catalog'
 import { getResolvedProxyUrl } from '../ai/proxyFetch'
+import { getCodexSubscriptionAuthPath, CODEX_SUBSCRIPTION_DUMMY_API_KEY } from '../ai/codexSubscriptionAuth'
 import type { AgentProviderConfig, AgentProviderConfigOverride } from './types'
 
 export function resolveProviderConfig(override?: AgentProviderConfigOverride | null): AgentProviderConfig {
@@ -29,8 +30,8 @@ export function resolveProviderConfig(override?: AgentProviderConfigOverride | n
       : configuredProtocol === 'codex-subscription'
         ? def.protocol
         : configuredProtocol || def.protocol || 'openai-compatible'
-    const apiKey = isCodexSubscription ? '' : providerConfig?.apiKey || ''
-    const baseURL = isCodexSubscription ? '' : providerConfig?.baseURL || def.baseURL || ''
+    const apiKey = isCodexSubscription ? CODEX_SUBSCRIPTION_DUMMY_API_KEY : providerConfig?.apiKey || ''
+    const baseURL = isCodexSubscription ? 'https://api.openai.com/v1' : providerConfig?.baseURL || def.baseURL || ''
     const model = providerConfig?.model || def.models?.[0] || ''
     if (!apiKey && !isCodexSubscription) throw new Error('未配置 AI 服务商的 API Key，请先在设置中配置')
     if (!model) throw new Error('未选择模型，请先在设置中选择模型')
@@ -44,6 +45,7 @@ export function resolveProviderConfig(override?: AgentProviderConfigOverride | n
       apiKey,
       baseURL,
       model,
+      ...(isCodexSubscription ? { authFilePath: getCodexSubscriptionAuthPath() } : {}),
       reasoningEffort: providerConfig?.reasoningEffort,
       proxyUrl: getResolvedProxyUrl() || undefined,
       contextWindow: typeof contextWindow === 'number' && contextWindow > 0 ? contextWindow : undefined,

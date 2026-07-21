@@ -2094,11 +2094,6 @@ export default function AgentPage() {
   const handleToolApproval = useCallback((approvalId: string, approved: boolean) => {
     if (!approvalId || localAgentRunning) return
     void (async () => {
-      if (approvalId.startsWith('codex-')) {
-        const live = await window.electronAPI.agent.resolveCodexToolApproval(approvalId, approved).catch(() => ({ success: false, handled: false, error: '审批请求失败' }))
-        if (!live.handled) setAgentNotice(live.error || '这次工具审批已失效，请重新发送请求')
-        return
-      }
       if (busy) return
     setAgentNotice('')
     setAgentProgress([])
