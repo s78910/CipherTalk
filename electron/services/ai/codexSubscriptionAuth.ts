@@ -49,6 +49,7 @@ export type OpenAIJwtClaims = {
 export type CodexSubscriptionFetchOptions = {
   authFilePath: string
   baseFetch?: typeof globalThis.fetch
+  forceRefresh?: boolean
   now?: () => number
   refreshTokens?: (refreshToken: string) => Promise<OpenAITokenResponse>
   userAgent?: string
@@ -181,11 +182,11 @@ export function refreshOpenAIAccessToken(refreshToken: string, baseFetch?: typeo
   }), baseFetch)
 }
 
-async function getRequestCredentials(options: CodexSubscriptionFetchOptions): Promise<CodexSubscriptionCredentials> {
+export async function getValidCodexSubscriptionCredentials(options: CodexSubscriptionFetchOptions): Promise<CodexSubscriptionCredentials> {
   const current = await readCodexSubscriptionCredentials(options.authFilePath)
   if (!current) throw new Error('请先登录 ChatGPT 账号')
   const now = (options.now ?? Date.now)()
-  if (current.expiresAt > now + TOKEN_REFRESH_MARGIN_MS) return current
+  if (!options.forceRefresh && current.expiresAt > now + TOKEN_REFRESH_MARGIN_MS) return current
 
   let pending = refreshPromises.get(options.authFilePath)
   if (!pending) {
@@ -236,7 +237,7 @@ export function createCodexSubscriptionFetch(options: CodexSubscriptionFetchOpti
     const sourceUrl = responseRequestUrl(input)
     if (!sourceUrl.pathname.includes('/v1/responses')) return baseFetch(input, init)
 
-    const credentials = await getRequestCredentials(options)
+    const credentials = await getValidCodexSubscriptionCredentials(options)
     const headers = new Headers(input instanceof Request ? input.headers : undefined)
     new Headers(init?.headers).forEach((value, key) => headers.set(key, value))
     headers.delete('authorization')

@@ -9,8 +9,9 @@ import {
   credentialsFromTokens,
   deleteCodexSubscriptionCredentials,
   exchangeOpenAIAuthorizationCode,
+  getCodexSubscriptionAuthPath,
+  getValidCodexSubscriptionCredentials,
   readCodexSubscriptionCredentials,
-  refreshOpenAIAccessToken,
   writeCodexSubscriptionCredentials,
 } from './codexSubscriptionAuth'
 import { createProxyFetch, getResolvedProxyUrl } from './proxyFetch'
@@ -33,8 +34,36 @@ export type CodexSubscriptionModel = {
   defaultReasoningEffort?: string
 }
 
+export type CodexSubscriptionUsageWindow = {
+  usedPercent: number
+  remainingPercent: number
+  windowDurationMins?: number
+  resetsAt?: number
+}
+
+export type CodexSubscriptionRateLimit = {
+  limitId: string
+  limitName?: string
+  primary?: CodexSubscriptionUsageWindow
+  secondary?: CodexSubscriptionUsageWindow
+}
+
+export type CodexSubscriptionUsage = {
+  rateLimits: CodexSubscriptionRateLimit[]
+  planType?: string
+  credits?: {
+    hasCredits?: boolean
+    unlimited?: boolean
+    balance?: string
+  }
+  resetCreditsAvailable?: number
+  fetchedAt: number
+}
+
 const LOGIN_TIMEOUT_MS = 5 * 60_000
 const OAUTH_PORT = 1455
+const USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage'
+const USAGE_CACHE_MS = 30_000
 
 export const CODEX_SUBSCRIPTION_MODELS: CodexSubscriptionModel[] = [
   { id: 'gpt-5.5', displayName: 'GPT-5.5', description: '最新通用 Codex 模型', isDefault: true, hidden: false, defaultReasoningEffort: 'medium' },
@@ -56,10 +85,137 @@ function callbackHtml(success: boolean, message: string): string {
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${title}</title><style>body{font-family:system-ui,sans-serif;margin:0;display:grid;place-items:center;min-height:100vh;background:#f7f7f8;color:#202123}.box{max-width:520px;padding:32px}.title{font-size:22px;font-weight:650;margin-bottom:12px}.desc{line-height:1.6;color:#565869}</style></head><body><main class="box"><div class="title">${escapeHtml(title)}</div><div class="desc">${escapeHtml(message)}</div></main><script>setTimeout(()=>window.close(),1200)</script></body></html>`
 }
 
+type JsonRecord = Record<string, unknown>
+
+function asRecord(value: unknown): JsonRecord | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : undefined
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  const parsed = typeof value === 'number' ? value : (typeof value === 'string' && value.trim() ? Number(value) : NaN)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function recordKeys(value: unknown): string[] {
+  return Object.keys(asRecord(value) || {}).sort()
+}
+
+function usagePayloadShape(value: unknown): Record<string, unknown> {
+  const payload = asRecord(value)
+  if (!payload) return { payloadType: Array.isArray(value) ? 'array' : typeof value }
+  const rateLimit = asRecord(payload.rate_limit ?? payload.rateLimits)
+  const additional = payload.additional_rate_limits !== undefined ? payload.additional_rate_limits : payload.additionalRateLimits
+  const additionalRecord = asRecord(additional)
+  return {
+    rootKeys: Object.keys(payload).sort(),
+    rateLimitKeys: recordKeys(rateLimit),
+    primaryKeys: recordKeys(rateLimit?.primary ?? rateLimit?.primary_window),
+    secondaryKeys: recordKeys(rateLimit?.secondary ?? rateLimit?.secondary_window),
+    additionalType: additional === null ? 'null' : (Array.isArray(additional) ? 'array' : (additionalRecord ? 'object' : typeof additional)),
+    additionalCount: Array.isArray(additional) ? additional.length : Object.keys(additionalRecord || {}).length,
+    additionalKeys: Array.isArray(additional)
+      ? additional.slice(0, 5).map((item) => recordKeys(item))
+      : Object.keys(additionalRecord || {}).sort(),
+    creditsKeys: recordKeys(payload.credits),
+    resetCreditsKeys: recordKeys(payload.rate_limit_reset_credits ?? payload.rateLimitResetCredits),
+  }
+}
+
+function parseUsageWindow(value: unknown): CodexSubscriptionUsageWindow | undefined {
+  const record = asRecord(value)
+  if (!record) return undefined
+  const rawUsedPercent = finiteNumber(record.used_percent ?? record.usedPercent)
+  if (rawUsedPercent === undefined) return undefined
+  const usedPercent = Math.min(100, Math.max(0, rawUsedPercent))
+  const directWindowMins = finiteNumber(record.window_minutes ?? record.windowDurationMins)
+  const windowSeconds = finiteNumber(record.limit_window_seconds ?? record.limitWindowSeconds)
+  const windowDurationMins = directWindowMins ?? (windowSeconds !== undefined && windowSeconds > 0
+    ? Math.ceil(windowSeconds / 60)
+    : undefined)
+  const resetsAt = finiteNumber(record.reset_at ?? record.resetsAt)
+  return {
+    usedPercent,
+    remainingPercent: Math.max(0, 100 - usedPercent),
+    ...(windowDurationMins !== undefined ? { windowDurationMins } : {}),
+    ...(resetsAt !== undefined ? { resetsAt } : {}),
+  }
+}
+
+function parseRateLimit(value: unknown, fallbackId: string, fallbackName?: string): CodexSubscriptionRateLimit | undefined {
+  const outer = asRecord(value)
+  if (!outer) return undefined
+  const details = asRecord(outer.rate_limit ?? outer.rateLimit) ?? outer
+  const primary = parseUsageWindow(details.primary ?? details.primary_window)
+  const secondary = parseUsageWindow(details.secondary ?? details.secondary_window)
+  if (!primary && !secondary) return undefined
+  return {
+    limitId: nonEmptyString(outer.limit_id ?? outer.limitId ?? outer.metered_feature ?? outer.meteredFeature ?? outer.metered_limit_name ?? outer.meteredLimitName) || fallbackId,
+    ...(nonEmptyString(outer.limit_name ?? outer.limitName) || fallbackName
+      ? { limitName: nonEmptyString(outer.limit_name ?? outer.limitName) || fallbackName }
+      : {}),
+    ...(primary ? { primary } : {}),
+    ...(secondary ? { secondary } : {}),
+  }
+}
+
+function parseAdditionalRateLimits(value: unknown): CodexSubscriptionRateLimit[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((item, index) => {
+      const parsed = parseRateLimit(item, `codex_${index + 1}`)
+      return parsed ? [parsed] : []
+    })
+  }
+  const record = asRecord(value)
+  if (!record) return []
+  return Object.entries(record).flatMap(([limitId, item]) => {
+    const parsed = parseRateLimit(item, limitId, limitId)
+    return parsed ? [parsed] : []
+  })
+}
+
+function parseCredits(value: unknown): CodexSubscriptionUsage['credits'] {
+  const record = asRecord(value)
+  if (!record) return undefined
+  const hasCredits = typeof (record.has_credits ?? record.hasCredits) === 'boolean'
+    ? Boolean(record.has_credits ?? record.hasCredits)
+    : undefined
+  const unlimited = typeof record.unlimited === 'boolean' ? record.unlimited : undefined
+  const balance = nonEmptyString(record.balance)
+  if (hasCredits === undefined && unlimited === undefined && balance === undefined) return undefined
+  return {
+    ...(hasCredits !== undefined ? { hasCredits } : {}),
+    ...(unlimited !== undefined ? { unlimited } : {}),
+    ...(balance !== undefined ? { balance } : {}),
+  }
+}
+
+function parseUsagePayload(value: unknown): CodexSubscriptionUsage {
+  const payload = asRecord(value)
+  if (!payload) throw new Error('ChatGPT 返回了无法识别的额度数据')
+  const main = parseRateLimit(payload.rate_limit ?? payload.rateLimits, 'codex')
+  const additional = parseAdditionalRateLimits(payload.additional_rate_limits ?? payload.additionalRateLimits)
+  const rateLimits = main ? [main, ...additional.filter((item) => item.limitId !== main.limitId)] : additional
+  const resetCredits = asRecord(payload.rate_limit_reset_credits ?? payload.rateLimitResetCredits)
+  const resetCreditsAvailable = finiteNumber(resetCredits?.available_count ?? resetCredits?.availableCount)
+  const credits = parseCredits(payload.credits)
+  return {
+    rateLimits,
+    ...(nonEmptyString(payload.plan_type ?? payload.planType) ? { planType: nonEmptyString(payload.plan_type ?? payload.planType) } : {}),
+    ...(credits ? { credits } : {}),
+    ...(resetCreditsAvailable !== undefined ? { resetCreditsAvailable } : {}),
+    fetchedAt: Date.now(),
+  }
+}
+
 class CodexSubscriptionService {
   private server: Server | null = null
   private pendingLogin: PendingLogin | null = null
   private statusListeners = new Set<(status: CodexSubscriptionStatus) => void>()
+  private usageCache: CodexSubscriptionUsage | null = null
 
   onStatusChanged(listener: (status: CodexSubscriptionStatus) => void): () => void {
     this.statusListeners.add(listener)
@@ -69,10 +225,11 @@ class CodexSubscriptionService {
   async getStatus(refreshToken = false): Promise<CodexSubscriptionStatus> {
     try {
       let credentials = await readCodexSubscriptionCredentials()
-      if (credentials && refreshToken && credentials.expiresAt <= Date.now() + 60_000) {
-        const tokens = await refreshOpenAIAccessToken(credentials.refreshToken, createProxyFetch(getResolvedProxyUrl()))
-        credentials = credentialsFromTokens(tokens, credentials)
-        await writeCodexSubscriptionCredentials(credentials)
+      if (credentials && refreshToken) {
+        credentials = await getValidCodexSubscriptionCredentials({
+          authFilePath: getCodexSubscriptionAuthPath(),
+          baseFetch: createProxyFetch(getResolvedProxyUrl()),
+        })
       }
       return {
         available: true,
@@ -128,7 +285,102 @@ class CodexSubscriptionService {
     this.cancelPendingLogin()
     this.closeServer()
     await deleteCodexSubscriptionCredentials()
+    this.usageCache = null
     this.emitStatus(await this.getStatus())
+  }
+
+  async getUsage(forceRefresh = false): Promise<CodexSubscriptionUsage> {
+    if (!forceRefresh && this.usageCache && Date.now() - this.usageCache.fetchedAt < USAGE_CACHE_MS) {
+      console.info('[codex-subscription:usage] 使用缓存', {
+        ageMs: Date.now() - this.usageCache.fetchedAt,
+        rateLimitCount: this.usageCache.rateLimits.length,
+      })
+      return this.usageCache
+    }
+    const startedAt = Date.now()
+    const proxyFetch = createProxyFetch(getResolvedProxyUrl())
+    console.info('[codex-subscription:usage] 开始请求', {
+      forceRefresh,
+      proxyEnabled: Boolean(proxyFetch),
+    })
+    let credentials = await getValidCodexSubscriptionCredentials({
+      authFilePath: getCodexSubscriptionAuthPath(),
+      baseFetch: proxyFetch,
+    })
+    console.info('[codex-subscription:usage] 凭据就绪', {
+      hasAccountId: Boolean(credentials.accountId),
+      expiresInMs: credentials.expiresAt - Date.now(),
+    })
+    const usageFetch = proxyFetch ?? globalThis.fetch
+    const requestUsage = (accessToken: string, accountId?: string) => {
+      const headers = new Headers({
+        Authorization: `Bearer ${accessToken}`,
+        originator: 'ciphertalk',
+        'User-Agent': `CipherTalk/${process.platform}-${process.arch}`,
+      })
+      if (accountId) headers.set('ChatGPT-Account-Id', accountId)
+      return usageFetch(USAGE_URL, { method: 'GET', headers })
+    }
+    let response = await requestUsage(credentials.accessToken, credentials.accountId)
+    console.info('[codex-subscription:usage] 收到响应', {
+      status: response.status,
+      ok: response.ok,
+      contentType: response.headers.get('content-type'),
+      elapsedMs: Date.now() - startedAt,
+    })
+    if (response.status === 401) {
+      console.warn('[codex-subscription:usage] 首次请求返回 401，刷新令牌后重试')
+      credentials = await getValidCodexSubscriptionCredentials({
+        authFilePath: getCodexSubscriptionAuthPath(),
+        baseFetch: proxyFetch,
+        forceRefresh: true,
+      })
+      response = await requestUsage(credentials.accessToken, credentials.accountId)
+      console.info('[codex-subscription:usage] 刷新令牌后的响应', {
+        status: response.status,
+        ok: response.ok,
+        contentType: response.headers.get('content-type'),
+        elapsedMs: Date.now() - startedAt,
+      })
+    }
+    if (!response.ok) {
+      const detail = (await response.text().catch(() => '')).trim()
+      console.error('[codex-subscription:usage] 请求失败', {
+        status: response.status,
+        elapsedMs: Date.now() - startedAt,
+        errorCode: (() => {
+          try {
+            const parsed = JSON.parse(detail) as { code?: unknown }
+            return typeof parsed.code === 'string' ? parsed.code : undefined
+          } catch {
+            return undefined
+          }
+        })(),
+      })
+      if (response.status === 401) throw new Error('ChatGPT 登录已失效，请退出后重新登录')
+      throw new Error(`获取 ChatGPT 订阅额度失败 (${response.status})${detail ? `: ${detail.slice(0, 300)}` : ''}`)
+    }
+    const payload: unknown = await response.json()
+    console.info('[codex-subscription:usage] 响应结构', usagePayloadShape(payload))
+    const usage = parseUsagePayload(payload)
+    console.info('[codex-subscription:usage] 解析完成', {
+      elapsedMs: Date.now() - startedAt,
+      rateLimitCount: usage.rateLimits.length,
+      windows: usage.rateLimits.map((limit) => ({
+        limitId: limit.limitId,
+        hasPrimary: Boolean(limit.primary),
+        hasSecondary: Boolean(limit.secondary),
+        primaryWindowMins: limit.primary?.windowDurationMins,
+        secondaryWindowMins: limit.secondary?.windowDurationMins,
+      })),
+      hasCredits: Boolean(usage.credits),
+      resetCreditsAvailable: usage.resetCreditsAvailable,
+    })
+    if (usage.rateLimits.length === 0) {
+      console.warn('[codex-subscription:usage] 接口请求成功，但没有解析出额度窗口；请根据上方“响应结构”检查字段名')
+    }
+    this.usageCache = usage
+    return usage
   }
 
   async listModels(): Promise<CodexSubscriptionModel[]> {
@@ -201,6 +453,7 @@ class CodexSubscriptionService {
       const credentials = credentialsFromTokens(tokens)
       if (!credentials.refreshToken) throw new Error('OpenAI OAuth 响应缺少 refresh_token')
       await writeCodexSubscriptionCredentials(credentials)
+      this.usageCache = null
       response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
       response.end(callbackHtml(true, '授权信息已保存到密语，可以关闭这个页面。'))
       this.closeServer()

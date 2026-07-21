@@ -931,6 +931,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   codexSubscription: {
     getStatus: () => ipcRenderer.invoke('codexSubscription:getStatus'),
+    getUsage: (forceRefresh?: boolean) => ipcRenderer.invoke('codexSubscription:getUsage', forceRefresh),
     login: () => ipcRenderer.invoke('codexSubscription:login'),
     logout: () => ipcRenderer.invoke('codexSubscription:logout'),
     listModels: () => ipcRenderer.invoke('codexSubscription:listModels'),

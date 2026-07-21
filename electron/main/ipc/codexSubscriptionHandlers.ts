@@ -22,6 +22,17 @@ export function registerCodexSubscriptionHandlers(ctx: MainProcessContext): void
 
   ipcMain.handle('codexSubscription:getStatus', async () => codexSubscriptionService.getStatus())
 
+  ipcMain.handle('codexSubscription:getUsage', async (_event, forceRefresh?: boolean) => {
+    try {
+      const usage = await codexSubscriptionService.getUsage(Boolean(forceRefresh))
+      return { success: true, usage }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.error('[codex-subscription:usage] IPC 调用失败:', message)
+      return { success: false, error: message }
+    }
+  })
+
   ipcMain.handle('codexSubscription:login', async () => {
     try {
       const result = await codexSubscriptionService.startLogin()
