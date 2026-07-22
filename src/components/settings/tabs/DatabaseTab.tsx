@@ -3,6 +3,7 @@ import { Alert, Avatar, Button, Card, Chip, ComboBox, Description, Fieldset, Inp
 import { useRef, type ReactNode } from 'react'
 import { ArrowRotateLeft, ArrowsRotateLeft, Check, CircleCheck, Copy, Eye, EyeSlash, FolderOpen, Key, Magnifier, Picture, PlugConnection, ShieldCheck, Thunderbolt, Xmark } from '@gravity-ui/icons'
 import { useAppStore } from '../../../stores/appStore'
+import { useChatStore } from '../../../stores/chatStore'
 import type { AccountProfile } from '../../../types/account'
 import { dialog } from '../../../services/ipc'
 import * as configService from '../../../services/config'
@@ -36,7 +37,7 @@ interface SecretFieldOptions {
 }
 
 function DatabaseTab({ showMessage }: DatabaseTabProps) {
-  const { setDbConnected, setLoading, setMyWxid: setCurrentWxid, userInfo } = useAppStore()
+  const { setDbConnected, setLoading, setMyWxid: setCurrentWxid, userInfo, setUserInfo } = useAppStore()
   const isMac = window.navigator.platform.toLowerCase().includes('mac')
   const decryptKey = useSettingsStore(s => s.config.decryptKey)
   const dbPath = useSettingsStore(s => s.config.dbPath)
@@ -285,6 +286,25 @@ function DatabaseTab({ showMessage }: DatabaseTabProps) {
     }
   }
 
+  const reloadUserInfo = async () => {
+    try {
+      const result = await window.electronAPI.chat.getMyUserInfo()
+      if (result.success && result.userInfo) {
+        setUserInfo({
+          wxid: result.userInfo.wxid,
+          nickName: result.userInfo.nickName,
+          alias: result.userInfo.alias,
+          avatarUrl: result.userInfo.avatarUrl
+        })
+      } else {
+        setUserInfo(null)
+      }
+    } catch (e) {
+      console.error('重新加载用户信息失败:', e)
+      setUserInfo(null)
+    }
+  }
+
   const handleSwitchAccountAndReconnect = async (account: AccountProfile) => {
     if (account.id === activeAccountId) {
       showMessage('当前没有待切换账号', false)
@@ -315,11 +335,17 @@ function DatabaseTab({ showMessage }: DatabaseTabProps) {
         throw new Error(result.error || '账号重连失败')
       }
 
+      // 独立聊天窗口里显示的还是旧账号的会话，切换前直接关闭
+      await window.electronAPI.window.closeChatWindow()
       await window.electronAPI.chat.close()
       await window.electronAPI.chat.refreshCache()
       await window.electronAPI.chat.connect()
+      // 清空上一账号残留的前端缓存（会话/消息/联系人），聊天页下次挂载时会重新连接并加载新账号数据
+      useChatStore.getState().reset()
       setDbConnected(true, target.dbPath)
       setCurrentWxid(target.wxid)
+      // 重新加载当前账号的用户信息，避免昵称/头像仍显示上一账号
+      await reloadUserInfo()
       await refreshAccountsState(target.id)
       showMessage(`已切换到账号：${getAccountDisplayName(target)}`, true)
     } catch (e) {

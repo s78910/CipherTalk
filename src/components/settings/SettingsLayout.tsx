@@ -146,7 +146,7 @@ function SettingsTabSkeleton() {
 function SettingsLayout() {
   const [searchParams] = useSearchParams()
   const location = useLocation()
-  const { setDbConnected, setLoading, setMyWxid: setCurrentWxid, userInfo } = useAppStore()
+  const { setDbConnected, setLoading, userInfo } = useAppStore()
   const hydrateSettings = useSettingsStore(s => s.hydrate)
   const commitSettings = useSettingsStore(s => s.commit)
   const storeHasUnsavedChanges = useSettingsStore(s => s.hasUnsavedChanges)
@@ -926,70 +926,6 @@ function SettingsLayout() {
       await window.electronAPI.window.openWelcomeWindow('add-account')
     } catch (e) {
       showMessage('打开引导窗口失败', false)
-    }
-  }
-
-  const handleSelectAccountForEdit = (account: AccountProfile) => {
-    applyAccountToForm(account)
-    useSettingsStore.getState().setFields({
-      decryptKey: account.decryptKey || '',
-      dbPath: account.dbPath || '',
-      wxid: account.wxid || '',
-      cachePath: account.cachePath || '',
-      imageXorKey: account.imageXorKey || '',
-      imageAesKey: account.imageAesKey || '',
-      editingAccountId: account.id
-    })
-    useSettingsStore.getState().commit()
-  }
-
-  const handleSwitchAccountAndReconnect = async () => {
-    if (!editingAccountId || editingAccountId === activeAccountId) {
-      showMessage('当前没有待切换账号', false)
-      return
-    }
-
-    if (useSettingsStore.getState().hasUnsavedChanges) {
-      showMessage('请先保存当前账号表单，再执行切换', false)
-      return
-    }
-
-    const target = accountsList.find((item) => item.id === editingAccountId)
-    if (!target) {
-      showMessage('待切换账号不存在', false)
-      return
-    }
-
-    if (!target.dbPath || !target.decryptKey || !target.wxid) {
-      showMessage('待切换账号配置不完整，请先保存并补全账号信息', false)
-      return
-    }
-
-    setIsLoadingState(true)
-    setLoading(true, '正在切换账号...')
-    try {
-      const switched = await configService.setActiveAccount(target.id)
-      if (!switched) {
-        throw new Error('切换账号失败')
-      }
-
-      const result = await window.electronAPI.wcdb.testConnection(target.dbPath, target.decryptKey, target.wxid)
-      if (!result.success) {
-        throw new Error(result.error || '账号重连失败')
-      }
-
-      await window.electronAPI.chat.close()
-      await window.electronAPI.chat.refreshCache()
-      await window.electronAPI.chat.connect()
-      setDbConnected(true, target.dbPath)
-      setCurrentWxid(target.wxid)
-      await refreshAccountsState(target.id)
-      showMessage(`已切换到账号：${getAccountDisplayName(target)}`, true)
-    } catch (e) {
-      showMessage(`切换账号失败: ${e}`, false)
-    } finally {
-      setIsLoadingState(false)
-      setLoading(false)
     }
   }
 
