@@ -8,6 +8,7 @@ import { createLiquidGlassMap, type GlassFilterMap } from '../utils/liquidGlass'
 import TitleBar from '../components/TitleBar'
 import JumpToDateDialog from '../components/JumpToDateDialog'
 import DateRangePicker from '../components/DateRangePicker'
+import { fetchAllSessions } from '../services/chatSessions'
 import './MomentsWindow.css'
 
 export interface SnsShareInfo {
@@ -915,26 +916,24 @@ function MomentsWindow() {
   // 加载联系人
   const loadContacts = useCallback(async () => {
     try {
-      const result = await window.electronAPI.chat.getSessions()
-      if (result.success && result.sessions) {
-        const systemAccounts = ['filehelper', 'fmessage', 'newsapp', 'weixin', 'qqmail', 'tmessage', 'floatbottle', 'medianote', 'brandsessionholder'];
-        const initialContacts = result.sessions
-          .filter((s: any) => {
-            if (!s.username) return false;
-            const u = s.username.toLowerCase();
-            if (u.includes('@chatroom') || u.endsWith('@chatroom')) return false;
-            if (u.startsWith('gh_')) return false;
-            if (systemAccounts.includes(u) || u.includes('helper') || u.includes('sessionholder')) return false;
-            return true;
-          })
-          .map((s: any) => ({
-            username: s.username,
-            displayName: s.displayName || s.username,
-            avatarUrl: s.avatarUrl
-          }))
-        setContacts(initialContacts)
-        // Skip enrichSessionContactInfo as it is missing from preload
-      }
+      const allSessions = await fetchAllSessions()
+      const systemAccounts = ['filehelper', 'fmessage', 'newsapp', 'weixin', 'qqmail', 'tmessage', 'floatbottle', 'medianote', 'brandsessionholder'];
+      const initialContacts = allSessions
+        .filter((s: any) => {
+          if (!s.username) return false;
+          const u = s.username.toLowerCase();
+          if (u.includes('@chatroom') || u.endsWith('@chatroom')) return false;
+          if (u.startsWith('gh_')) return false;
+          if (systemAccounts.includes(u) || u.includes('helper') || u.includes('sessionholder')) return false;
+          return true;
+        })
+        .map((s: any) => ({
+          username: s.username,
+          displayName: s.displayName || s.username,
+          avatarUrl: s.avatarUrl
+        }))
+      setContacts(initialContacts)
+      // Skip enrichSessionContactInfo as it is missing from preload
     } catch (error) {
       console.error('Failed to load contacts:', error)
     }

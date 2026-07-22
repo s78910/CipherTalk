@@ -49,6 +49,14 @@ export function registerChatHandlers(ctx: MainProcessContext): void {
     return result
   })
 
+  ipcMain.handle('chat:searchSessions', async (_, keyword: string) => {
+    const result = await chatService.searchSessions(keyword)
+    if (!result.success) {
+      ctx.getLogService()?.warn('Chat', '搜索会话失败', { error: result.error })
+    }
+    return result
+  })
+
   ipcMain.handle('chat:getMentionTargets', async (_, offset?: number, limit?: number, keyword?: string) => {
     const startedAt = Date.now()
     const logData = {

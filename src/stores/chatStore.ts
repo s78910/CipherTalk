@@ -109,6 +109,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   setSessions: (sessions) => set((state) => {
     const newSessions = typeof sessions === 'function' ? sessions(state.sessions) : sessions
+    // 搜索进行中不覆盖 filteredSessions，避免后台刷新冲掉搜索结果
+    if (state.searchKeyword.trim()) {
+      return { sessions: newSessions }
+    }
     return { sessions: newSessions, filteredSessions: newSessions }
   }),
   setFilteredSessions: (sessions) => set({ filteredSessions: sessions }),

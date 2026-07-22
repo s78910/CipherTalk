@@ -379,6 +379,7 @@ interface SessionSidebarProps {
   filteredSessions: ChatSession[]
   currentSessionId: string | null
   onSelectSession: (session: ChatSession) => void
+  onLoadMore?: () => void
   formatTime: (timestamp: number) => string
 }
 
@@ -397,6 +398,7 @@ export function SessionSidebar({
   filteredSessions,
   currentSessionId,
   onSelectSession,
+  onLoadMore,
   formatTime
 }: SessionSidebarProps) {
   const [collapsedGroupExpanded, setCollapsedGroupExpanded] = useState(false)
@@ -565,6 +567,11 @@ export function SessionSidebar({
         setScrollbar({ thumbTop: 0, thumbHeight: 0, show: false, scrolling: false })
         return
       }
+      // 滚动到底部附近时加载下一页会话（搜索模式下不触发，搜索是对已加载列表的前端过滤）
+      if (fromScroll && !isSearching && onLoadMore && sh - st - ch < SESSION_ROW_HEIGHT * 6) {
+        onLoadMore()
+      }
+
       const thumbHeight = Math.max(28, (ch * ch) / sh)
       const maxThumbTop = ch - thumbHeight
       const thumbTop = (st / (sh - ch)) * maxThumbTop
@@ -591,7 +598,7 @@ export function SessionSidebar({
       ro.disconnect()
       if (scrollIdleTimerRef.current) window.clearTimeout(scrollIdleTimerRef.current)
     }
-  }, [pinned.length, pinnedFolded, isSearching, items.length])
+  }, [pinned.length, pinnedFolded, isSearching, items.length, onLoadMore])
 
   return (
     <div

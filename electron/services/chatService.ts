@@ -22,7 +22,7 @@ import {
 import { isOfficialAccountUsername, isOfficialFolderUsername } from './chat/accountUtils'
 import { isSystemContactUsername } from './chat/constants'
 import { getSessionDetail } from './chat/sessionDetail'
-import { getSessions } from './chat/sessionList'
+import { getSessions, searchSessions } from './chat/sessionList'
 import {
   getEmoticonDecryptionParams,
   decryptEmoticonCache,
@@ -188,6 +188,13 @@ class ChatService extends EventEmitter {
    */
   async getSessions(offset?: number, limit?: number): Promise<{ success: boolean; sessions?: ChatSession[]; hasMore?: boolean; error?: string }> {
     return getSessions(this.state, offset, limit)
+  }
+
+  /**
+   * 后端全量搜索会话（聊天页侧边栏搜索）
+   */
+  async searchSessions(keyword: string): Promise<{ success: boolean; sessions?: ChatSession[]; error?: string }> {
+    return searchSessions(this.state, keyword)
   }
 
   /**

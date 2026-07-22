@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useLocation } from 'react-router-dom'
 import * as configService from '../../../services/config'
+import { fetchAllSessions } from '../../../services/chatSessions'
 import type { ChatSession, ExportOptions, SessionTypeFilter } from '../types'
 import type { ExportShared } from './useExportShared'
 import { isExcludedSession } from '../utils'
@@ -64,16 +65,14 @@ export function useChatExport(shared: ExportShared) {
         setIsLoading(false)
         return
       }
-      const sessionsResult = await window.electronAPI.chat.getSessions()
-      if (sessionsResult.success && sessionsResult.sessions) {
-        setSessions(sessionsResult.sessions)
-        setFilteredSessions(sessionsResult.sessions)
-        if (!preSelectAppliedRef.current) {
-          const state = location.state as { preSelectedSessions?: string[] } | null
-          if (state?.preSelectedSessions?.length) {
-            preSelectAppliedRef.current = true
-            setSelectedSessions(new Set(state.preSelectedSessions))
-          }
+      const allSessions = await fetchAllSessions()
+      setSessions(allSessions)
+      setFilteredSessions(allSessions)
+      if (!preSelectAppliedRef.current) {
+        const state = location.state as { preSelectedSessions?: string[] } | null
+        if (state?.preSelectedSessions?.length) {
+          preSelectAppliedRef.current = true
+          setSelectedSessions(new Set(state.preSelectedSessions))
         }
       }
     } catch (e) {

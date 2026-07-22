@@ -1130,6 +1130,7 @@ export interface ElectronAPI {
   chat: {
     connect: () => Promise<{ success: boolean; error?: string }>
     getSessions: (offset?: number, limit?: number) => Promise<{ success: boolean; sessions?: ChatSession[]; hasMore?: boolean; error?: string }>
+    searchSessions: (keyword: string) => Promise<{ success: boolean; sessions?: ChatSession[]; error?: string }>
     getMentionTargets: (offset?: number, limit?: number, keyword?: string) => Promise<{ success: boolean; sessions?: ChatSession[]; hasMore?: boolean; error?: string }>
     getContacts: () => Promise<{ success: boolean; contacts?: ContactInfo[]; error?: string }>
     getMessages: (sessionId: string, offset?: number, limit?: number) => Promise<{

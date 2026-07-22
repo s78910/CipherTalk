@@ -40,6 +40,31 @@ function getMessageCacheKey(message: Message): string {
 const INITIAL_PAGE_SIZE = 50
 const HISTORY_PAGE_SIZE = 25
 const IMAGE_PREWARM_LIMIT = 40
+// 会话列表分页大小（后端按原始行分页，最多单次 1000）
+const SESSION_PAGE_SIZE = 300
+
+// 刷新会话列表的合并：新页按后端顺序作为头部（保留未变化对象引用避免闪烁），
+// 之前滚动分页加载出的更早会话保留在尾部，不因刷新只覆盖首个区间而丢失
+function mergeRefreshedSessions(prev: ChatSession[], page: ChatSession[]): ChatSession[] {
+  if (prev.length === 0) return page
+
+  const prevMap = new Map(prev.map(s => [s.username, s]))
+  const head = page.map(newSession => {
+    const oldSession = prevMap.get(newSession.username)
+    if (!oldSession) return newSession
+    const hasChanges =
+      oldSession.summary !== newSession.summary ||
+      oldSession.lastTimestamp !== newSession.lastTimestamp ||
+      oldSession.unreadCount !== newSession.unreadCount ||
+      oldSession.displayName !== newSession.displayName ||
+      oldSession.avatarUrl !== newSession.avatarUrl
+    return hasChanges ? newSession : oldSession
+  })
+
+  const inPage = new Set(page.map(s => s.username))
+  const tail = prev.filter(s => !inPage.has(s.username))
+  return tail.length > 0 ? [...head, ...tail] : head
+}
 
 type ImagePrewarmPayload = {
   sessionId?: string
@@ -173,6 +198,13 @@ function ChatPage(_props: ChatPageProps) {
   const [isDateJumpMode, setIsDateJumpMode] = useState(false)
   const currentOffsetRef = useRef(0)
   const hasMoreMessagesRef = useRef(true)
+  // 会话列表分页：offset 按后端原始行推进（后端返回前会过滤，前端条数 < 原始行数）
+  const sessionRawOffsetRef = useRef(0)
+  const hasMoreSessionsRef = useRef(true)
+  const loadingMoreSessionsRef = useRef(false)
+  // 会话搜索：防抖定时器 + 过期结果丢弃序号
+  const searchSeqRef = useRef(0)
+  const searchTimerRef = useRef<NodeJS.Timeout | null>(null)
   const isDateJumpModeRef = useRef(false)
   // 向上滑动游标（最早消息）
   const [dateJumpCursorSortSeq, setDateJumpCursorSortSeq] = useState<number | null>(null)
@@ -440,49 +472,13 @@ function ChatPage(_props: ChatPageProps) {
   const loadSessions = async () => {
     setLoadingSessions(true)
     try {
-      const sessionLimit = Math.max(300, useChatStore.getState().sessions.length || 0)
+      // 刷新时覆盖已加载的原始行区间（后端单次上限 1000）；超出部分由 mergeRefreshedSessions 的尾部保留
+      const sessionLimit = Math.min(1000, Math.max(SESSION_PAGE_SIZE, sessionRawOffsetRef.current))
       const result = await window.electronAPI.chat.getSessions(0, sessionLimit)
       if (result.success && result.sessions) {
-        // 智能合并更新，避免闪烁
-        setSessions((prevSessions: ChatSession[]) => {
-          // 如果是首次加载，直接设置
-          if (prevSessions.length === 0) {
-            return result.sessions!
-          }
-
-          // 创建新会话的 Map，用于快速查找
-          const newSessionsMap = new Map(
-            result.sessions!.map(s => [s.username, s])
-          )
-
-          // 创建旧会话的 Map
-          const oldSessionsMap = new Map(
-            prevSessions.map(s => [s.username, s])
-          )
-
-          // 合并：保留顺序，只更新变化的字段
-          const merged = result.sessions!.map(newSession => {
-            const oldSession = oldSessionsMap.get(newSession.username)
-
-            // 如果是新会话，直接返回
-            if (!oldSession) {
-              return newSession
-            }
-
-            // 检查是否有实质性变化
-            const hasChanges =
-              oldSession.summary !== newSession.summary ||
-              oldSession.lastTimestamp !== newSession.lastTimestamp ||
-              oldSession.unreadCount !== newSession.unreadCount ||
-              oldSession.displayName !== newSession.displayName ||
-              oldSession.avatarUrl !== newSession.avatarUrl
-
-            // 如果有变化，返回新数据；否则保留旧对象引用（避免重新渲染）
-            return hasChanges ? newSession : oldSession
-          })
-
-          return merged
-        })
+        sessionRawOffsetRef.current = Math.max(sessionRawOffsetRef.current, sessionLimit)
+        hasMoreSessionsRef.current = !!result.hasMore
+        setSessions((prevSessions: ChatSession[]) => mergeRefreshedSessions(prevSessions, result.sessions!))
       }
     } catch (e) {
       console.error('加载会话失败:', e)
@@ -490,6 +486,31 @@ function ChatPage(_props: ChatPageProps) {
       setLoadingSessions(false)
     }
   }
+
+  // 会话列表滚动到底部时加载下一页（搜索模式下由 SessionSidebar 不触发）
+  const loadMoreSessions = useCallback(async () => {
+    if (loadingMoreSessionsRef.current || !hasMoreSessionsRef.current) return
+    loadingMoreSessionsRef.current = true
+    try {
+      const result = await window.electronAPI.chat.getSessions(sessionRawOffsetRef.current, SESSION_PAGE_SIZE)
+      if (result.success && result.sessions) {
+        sessionRawOffsetRef.current += SESSION_PAGE_SIZE
+        hasMoreSessionsRef.current = !!result.hasMore
+        const incoming = result.sessions
+        if (incoming.length > 0) {
+          setSessions((prevSessions: ChatSession[]) => {
+            const seen = new Set(prevSessions.map(s => s.username))
+            const fresh = incoming.filter(s => !seen.has(s.username))
+            return fresh.length > 0 ? [...prevSessions, ...fresh] : prevSessions
+          })
+        }
+      }
+    } catch (e) {
+      console.error('加载更多会话失败:', e)
+    } finally {
+      loadingMoreSessionsRef.current = false
+    }
+  }, [setSessions])
 
   // 刷新会话列表
   const handleRefresh = async () => {
@@ -785,9 +806,14 @@ function ChatPage(_props: ChatPageProps) {
     loadMessages(session.username, 0)
   }
 
-  // 搜索过滤
+  // 搜索：先对已加载列表就地过滤给即时反馈，防抖后走后端全量搜索覆盖结果
   const handleSearch = (keyword: string) => {
     setSearchKeyword(keyword)
+    const seq = ++searchSeqRef.current
+    if (searchTimerRef.current) {
+      clearTimeout(searchTimerRef.current)
+      searchTimerRef.current = null
+    }
     if (!keyword.trim()) {
       setFilteredSessions(sessions)
       return
@@ -799,10 +825,29 @@ function ChatPage(_props: ChatPageProps) {
       s.summary.toLowerCase().includes(lower)
     )
     setFilteredSessions(filtered)
+
+    searchTimerRef.current = setTimeout(async () => {
+      searchTimerRef.current = null
+      try {
+        const result = await window.electronAPI.chat.searchSessions(keyword)
+        // 关键词已变化或搜索已关闭，丢弃过期结果
+        if (seq !== searchSeqRef.current) return
+        if (result.success && result.sessions) {
+          setFilteredSessions(result.sessions)
+        }
+      } catch (e) {
+        console.error('后端搜索会话失败:', e)
+      }
+    }, 250)
   }
 
   // 关闭搜索框
   const handleCloseSearch = () => {
+    searchSeqRef.current++
+    if (searchTimerRef.current) {
+      clearTimeout(searchTimerRef.current)
+      searchTimerRef.current = null
+    }
     setSearchKeyword('')
     setFilteredSessions(sessions)
   }
@@ -975,25 +1020,10 @@ function ChatPage(_props: ChatPageProps) {
         setLastIncrementalUpdateTime(Date.now())
 
         if (shouldRefreshSessions) {
-          const currentSessions = useChatStore.getState().sessions
-          const sessionLimit = Math.max(300, currentSessions.length || 0)
+          const sessionLimit = Math.min(1000, Math.max(SESSION_PAGE_SIZE, sessionRawOffsetRef.current))
           const result = await window.electronAPI.chat.getSessions(0, sessionLimit)
           if (result.success && result.sessions) {
-            setSessions((prevSessions: ChatSession[]) => {
-              if (prevSessions.length === 0) return result.sessions!
-              const oldSessionsMap = new Map(prevSessions.map(s => [s.username, s]))
-              return result.sessions!.map(newSession => {
-                const oldSession = oldSessionsMap.get(newSession.username)
-                if (!oldSession) return newSession
-                const hasChanges =
-                  oldSession.summary !== newSession.summary ||
-                  oldSession.lastTimestamp !== newSession.lastTimestamp ||
-                  oldSession.unreadCount !== newSession.unreadCount ||
-                  oldSession.displayName !== newSession.displayName ||
-                  oldSession.avatarUrl !== newSession.avatarUrl
-                return hasChanges ? newSession : oldSession
-              })
-            })
+            setSessions((prevSessions: ChatSession[]) => mergeRefreshedSessions(prevSessions, result.sessions!))
           }
         }
 
@@ -1667,6 +1697,7 @@ function ChatPage(_props: ChatPageProps) {
         filteredSessions={filteredSessions}
         currentSessionId={currentSessionId}
         onSelectSession={handleSelectSession}
+        onLoadMore={loadMoreSessions}
         formatTime={formatSessionTime}
       />
 
