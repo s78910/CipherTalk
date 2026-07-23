@@ -62,6 +62,9 @@ export async function getMessages(state: ChatServiceState,
     // 从所有数据库收集消息
     let allMessages: Message[] = []
     const minFetchPerDb = Math.max(offset + limit + 1, 100)
+    // 任一分库捞满 minFetchPerDb 行说明库里还有更早的行；
+    // 不能只看过滤后的条数——串会话过滤发生在 hasMore 判定前，会把 hasMore 误判成 false
+    let anyDbHitFetchLimit = false
 
     for (const { tableName, dbPath } of dbTablePairs) {
       try {
@@ -95,6 +98,7 @@ export async function getMessages(state: ChatServiceState,
         }
 
         const rows = await dbAdapter.all<any>('message', dbPath, sql, params)
+        if (rows.length >= minFetchPerDb) anyDbHitFetchLimit = true
 
         // 批量处理消息
         for (const row of rows) {
@@ -233,7 +237,8 @@ export async function getMessages(state: ChatServiceState,
     })
 
     // 应用 offset 和 limit
-    const hasMore = allMessages.length > offset + limit
+    // hasMore 多报安全（下一页拉空时前端会自行收口），少报会让用户永远翻不到更早的消息
+    const hasMore = allMessages.length > offset + limit || anyDbHitFetchLimit
     const messages = allMessages.slice(offset, offset + limit)
 
     // 反转使最新消息在最后（UI 显示顺序）
