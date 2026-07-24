@@ -24,6 +24,9 @@ function SecurityTab({ isMac, showMessage }: SecurityTabProps) {
   })
 
   const biometricLabel = isMac ? 'Touch ID' : 'Windows Hello'
+  // Windows Hello 依赖 WebAuthn，仅在安全源(localhost)可用；打包版是 file:// 会被浏览器拒绝。
+  // macOS 走原生 Touch ID，不受此限。ponytail: 原生 Windows Hello 落地后可移除本闸。
+  const biometricAvailable = isMac || window.location.hostname === 'localhost'
   const isBiometricActive = isAuthEnabled && authMethod === 'biometric'
   const isPasswordActive = isAuthEnabled && authMethod === 'password'
   const shouldShowPasswordSetup = showPasswordInput || isPasswordActive
@@ -105,6 +108,7 @@ function SecurityTab({ isMac, showMessage }: SecurityTabProps) {
       </section>
 
       <section className="grid gap-4 lg:grid-cols-2">
+        {biometricAvailable && (
         <Card className="h-fit">
           <Card.Header className="flex-row items-start justify-between gap-3">
             <div className="flex min-w-0 gap-3">
@@ -143,6 +147,7 @@ function SecurityTab({ isMac, showMessage }: SecurityTabProps) {
             </Button>
           </Card.Footer>
         </Card>
+        )}
 
         <Card className="h-fit">
           <Card.Header className="flex-row items-start justify-between gap-3">

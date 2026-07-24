@@ -53,6 +53,9 @@ function getFriendlyErrorMessage(error: any): string {
     if (msg.includes('The relying party ID is not allowed')) {
         return '当前环境不支持此认证方式 (Origin 不匹配)'
     }
+    if (msg.includes('Public-key credentials are only available')) {
+        return '当前版本不支持 Windows Hello，请改用自定义密码'
+    }
     if (msg.includes('Authenticator is not capable')) {
         return '当前设备不支持 Windows Hello 或未设置 PIN 码'
     }
