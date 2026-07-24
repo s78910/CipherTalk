@@ -26,7 +26,7 @@ import {
   useOverlayState,
   type Key
 } from '@heroui/react'
-import { ArrowUpRight, ArrowsRotateLeft, Bulb, CircleCheck, CircleQuestion, CurlyBrackets, Eye, EyeSlash, FileText, GearDot, Pencil, Picture, Plus, Sparkles, Speedometer, TrashBin, Wallet, Wrench } from '@gravity-ui/icons'
+import { ArrowUpRight, ArrowsRotateLeft, Bulb, CircleCheck, CircleQuestion, CurlyBrackets, Eye, EyeSlash, FileText, GearDot, Pencil, Picture, Plus, Rocket, Sparkles, Speedometer, TrashBin, Wallet, Wrench } from '@gravity-ui/icons'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { getAIProviders, type AIModelInfo, type AIProviderInfo } from '../../types/ai'
@@ -890,6 +890,27 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
         )}
 
         {configMode === 'llm' && (
+          <Alert status="accent">
+            <Alert.Indicator>
+              <Rocket width={20} height={20} />
+            </Alert.Indicator>
+            <Alert.Content>
+              <Alert.Title>还没有 API Key？</Alert.Title>
+              <Alert.Description>RelayOne 官方中转：一个 Key 直连全模型，国内可用，低于官方价，注册即用。</Alert.Description>
+            </Alert.Content>
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              className="shrink-0 self-center"
+              onPress={() => void window.electronAPI.shell.openExternal('https://hicccc.cc')}
+            >
+              注册获取 Key
+            </Button>
+          </Alert>
+        )}
+
+        {configMode === 'llm' && (
           <Card>
             <Card.Content>
               <ChatGPTSubscriptionAuth compact onAuthenticationChange={setCodexAuthenticated} />
@@ -1125,6 +1146,20 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
                   <dt className="shrink-0 text-muted">地址</dt>
                   <dd className="min-w-0 truncate text-right font-medium text-foreground">{currentBaseURLLabel}</dd>
                 </div>
+                {currentProvider?.website && (
+                  <div className="flex items-center justify-between gap-3">
+                    <dt className="text-muted">官网</dt>
+                    <dd className="min-w-0 truncate text-right">
+                      <button
+                        type="button"
+                        className="cursor-pointer font-medium text-accent hover:underline"
+                        onClick={() => void window.electronAPI.shell.openExternal(currentProvider.website!)}
+                      >
+                        注册 / 获取 Key
+                      </button>
+                    </dd>
+                  </div>
+                )}
               </dl>
               </Card.Content>
             </Card>

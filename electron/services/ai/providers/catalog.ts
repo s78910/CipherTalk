@@ -95,6 +95,20 @@ const CUSTOM_PROVIDER_DEFINITION: AIProviderMetadata = {
   protocolOptions: ['openai-responses', 'openai-compatible', 'anthropic', 'google']
 }
 
+const RELAYONE_PROVIDER_DEFINITION: AIProviderMetadata = {
+  id: 'relayone',
+  name: 'relayone',
+  displayName: 'RelayOne（官方推荐）',
+  description: '密语官方中转：一个 Key 直连全模型，国内可用，注册即用',
+  protocol: 'openai-compatible',
+  baseURL: 'https://aiapi.aiqji.cn/v1',
+  models: [],
+  modelDetails: [],
+  pricing: '低于官方价',
+  pricingDetail: { input: 0, output: 0 },
+  website: 'https://hicccc.cc'
+}
+
 export const CODEX_SUBSCRIPTION_PROVIDER_ID = 'openai-codex'
 
 const CODEX_SUBSCRIPTION_MODEL_DETAILS: AIModelInfo[] = [
@@ -508,9 +522,10 @@ function sortProviderDefinitions(providers: AIProviderMetadata[]): AIProviderMet
 
 function withCustomProvider(providers: AIProviderMetadata[]): AIProviderMetadata[] {
   return [
+    cloneMetadata(RELAYONE_PROVIDER_DEFINITION),
     cloneMetadata(CUSTOM_PROVIDER_DEFINITION),
     cloneMetadata(CODEX_SUBSCRIPTION_PROVIDER_DEFINITION),
-    ...providers.filter(provider => provider.id !== CUSTOM_PROVIDER_DEFINITION.id && provider.id !== CODEX_SUBSCRIPTION_PROVIDER_ID)
+    ...providers.filter(provider => provider.id !== RELAYONE_PROVIDER_DEFINITION.id && provider.id !== CUSTOM_PROVIDER_DEFINITION.id && provider.id !== CODEX_SUBSCRIPTION_PROVIDER_ID)
   ]
 }
 
@@ -546,6 +561,9 @@ export function getProviderDefinition(providerId: string): AIProviderMetadata | 
   if (resolvedProviderId === CUSTOM_PROVIDER_DEFINITION.id) {
     return cloneMetadata(CUSTOM_PROVIDER_DEFINITION)
   }
+  if (resolvedProviderId === RELAYONE_PROVIDER_DEFINITION.id) {
+    return cloneMetadata(RELAYONE_PROVIDER_DEFINITION)
+  }
 
   const data = readAvailableModelsDevData()
   if (data) {
@@ -563,6 +581,9 @@ export async function getProviderDefinitionOnline(providerId: string): Promise<A
   }
   if (resolvedProviderId === CUSTOM_PROVIDER_DEFINITION.id) {
     return cloneMetadata(CUSTOM_PROVIDER_DEFINITION)
+  }
+  if (resolvedProviderId === RELAYONE_PROVIDER_DEFINITION.id) {
+    return cloneMetadata(RELAYONE_PROVIDER_DEFINITION)
   }
 
   const data = await getModelsDevData()

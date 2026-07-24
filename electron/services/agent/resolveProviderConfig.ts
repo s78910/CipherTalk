@@ -15,7 +15,7 @@ import type { AgentProviderConfig, AgentProviderConfigOverride } from './types'
 export function resolveProviderConfig(override?: AgentProviderConfigOverride | null): AgentProviderConfig {
   const config = new ConfigService()
   try {
-    const name = normalizeProviderId(override?.provider || config.getAICurrentProvider() || 'deepseek')
+    const name = normalizeProviderId(override?.provider || config.getAICurrentProvider() || 'relayone')
     const def = getProviderDefinition(name)
     if (!def) throw new Error(`不支持的 AI 服务商: ${name}`)
 

@@ -345,7 +345,7 @@ const defaults: ConfigSchema = {
   diaryEnabled: true,
  hardwareAccelerationEnabled: true,
   // AI 默认配置
-  aiCurrentProvider: 'deepseek',
+  aiCurrentProvider: 'relayone',
   aiActiveConfigPresetId: '',
   aiProviderConfigs: {},  // 空对象，用户配置后填充
   aiProviderModelCache: {},

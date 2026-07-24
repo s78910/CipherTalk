@@ -27,7 +27,7 @@ class AIService {
   }
 
   private resolveProviderDefinition(providerName?: string, protocolOverride?: AIProviderProtocol) {
-    const rawName = providerName || this.configService.getAICurrentProvider() || 'deepseek'
+    const rawName = providerName || this.configService.getAICurrentProvider() || 'relayone'
     const name = normalizeProviderId(rawName)
     const definition = getProviderDefinition(name)
     if (!definition) {

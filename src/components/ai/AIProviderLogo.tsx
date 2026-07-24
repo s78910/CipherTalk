@@ -1,5 +1,5 @@
 import { Anthropic, DeepSeek, Doubao, Gemini, Kimi, Ollama, OpenAI, ProviderIcon, Qwen, SiliconCloud, XiaomiMiMo, XAI, Yuanbao, Zhipu } from '@lobehub/icons'
-import { Sparkles } from '@gravity-ui/icons'
+import { Rocket, Sparkles } from '@gravity-ui/icons'
 
 type AIProviderLogoProps = {
   providerId?: string
@@ -49,6 +49,10 @@ export default function AIProviderLogo({ providerId, logo, alt, className, size 
 
   if (normalizedProviderId === 'custom') {
     return <Sparkles width={size} height={size} className={unifiedClassName} />
+  }
+
+  if (normalizedProviderId === 'relayone') {
+    return <Rocket width={size} height={size} className={unifiedClassName} />
   }
 
   if (normalizedProviderId === 'gemini') {
