@@ -2,6 +2,7 @@ import { dirname, join } from 'path'
 import { existsSync } from 'fs'
 import { ConfigService } from '../config'
 import { getAppPath, getAppVersion, getDocumentsPath, getExePath, isElectronPackaged } from '../runtimePaths'
+import { findSessionDbPath } from '../dbStoragePaths'
 import type { McpHealthPayload, McpLaunchConfig, McpLauncherMode, McpStatusPayload } from './types'
 import { MCP_TOOL_NAMES } from './types'
 
@@ -172,8 +173,11 @@ export function getMcpConfigSnapshot() {
     let dbReady = false
     if (myWxid) {
       const accountDir = findAccountDir(decryptedBaseDir, myWxid)
-      if (accountDir) {
-        dbReady = existsSync(join(decryptedBaseDir, accountDir, 'session.db'))
+      if (accountDir && existsSync(join(decryptedBaseDir, accountDir, 'session.db'))) {
+        dbReady = true
+      } else {
+        // 当前版本可直接读取微信原始 db_storage，不一定存在解密缓存的 session.db
+        dbReady = Boolean(findSessionDbPath())
       }
     }
 
